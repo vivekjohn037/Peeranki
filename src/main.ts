@@ -8,6 +8,10 @@ import {
   joinRoom,
   findOrCreateRandomRoom,
   fetchGameRoom,
+  leaveRoom,
+  leaveRoomBestEffort,
+  touchPlayer,
+  cleanupStalePlayers,
   supabase,
 } from './supabase';
 
@@ -16,19 +20,29 @@ interface Player {
   name: string;
   stage: number;
   alive: boolean;
+  sessionId: string;
+  connected: boolean;
+  lastSeen: string;
 }
 
 const MIN_PLAYERS = 6;
-const MAX_PLAYERS = 10;
 const COUNT_TO = 10;
 const COUNTING_SPEED = 200;
 const NEXT_ROUND_DELAY = 900;
+const HEARTBEAT_INTERVAL = 5000;
+const STALE_PLAYER_SECONDS = 30;
 
 let roomCode = '';
 let myPlayerId = 0;
 let maxPlayers = MIN_PLAYERS;
 let isPublicRoom = false;
+let hostSessionId = '';
 let players: Player[] = [];
+
+const sessionId = getOrCreateSessionId();
+const previousRoomCleanup = cleanupPreviousSession();
+let heartbeatTimer: number | undefined;
+let cleanupTimer: number | undefined;
 
 const towerStages = ['🗼', '🗼🗼', '▰', '💥'];
 const stageNames = [
@@ -38,57 +52,152 @@ const stageNames = [
   'Eliminated',
 ];
 
-function resetPlayers(playerCount: number) {
-  const count = Math.max(
-    MIN_PLAYERS,
-    Math.min(MAX_PLAYERS, playerCount),
-  );
+function getOrCreateSessionId() {
+  const key = 'peeranki-session-id';
+  let id = sessionStorage.getItem(key);
 
-  players = [];
+  if (!id) {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      id = crypto.randomUUID();
+    } else {
+      id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
 
-  for (let index = 0; index < count; index += 1) {
-    players.push({
-      id: index + 1,
-      name: `Player ${index + 1}`,
-      stage: 0,
-      alive: true,
-    });
+    sessionStorage.setItem(key, id);
   }
+
+  return id;
 }
 
-function loadPlayersFromRoom(roomPlayers: unknown[]) {
-  const safePlayers: Player[] = [];
-
-  roomPlayers.slice(0, MAX_PLAYERS).forEach(
-    (rawPlayer: any, index: number) => {
-      safePlayers.push({
-        id: Number(rawPlayer?.id) || index + 1,
-        name:
-          typeof rawPlayer?.name === 'string' &&
-          rawPlayer.name.trim()
-            ? rawPlayer.name
-            : `Player ${index + 1}`,
-        stage:
-          Number.isInteger(rawPlayer?.stage) &&
-          rawPlayer.stage >= 0 &&
-          rawPlayer.stage <= 3
-            ? rawPlayer.stage
-            : 0,
-        alive:
-          typeof rawPlayer?.alive === 'boolean'
-            ? rawPlayer.alive
-            : true,
-      });
-    },
+async function cleanupPreviousSession() {
+  const oldRoomCode = sessionStorage.getItem(
+    'peeranki-room-code',
   );
 
-  players = safePlayers;
-  maxPlayers = Math.max(
-    MIN_PLAYERS,
-    Math.min(
-      MAX_PLAYERS,
-      players.length || maxPlayers,
-    ),
+  if (!oldRoomCode) {
+    return;
+  }
+
+  try {
+    await leaveRoom(oldRoomCode, sessionId);
+  } catch (error) {
+    console.error(
+      'Previous session cleanup failed:',
+      error,
+    );
+  }
+
+  sessionStorage.removeItem('peeranki-room-code');
+  sessionStorage.removeItem('peeranki-room-public');
+}
+
+function rememberRoom(code: string, publicRoom: boolean) {
+  sessionStorage.setItem('peeranki-room-code', code);
+  sessionStorage.setItem(
+    'peeranki-room-public',
+    publicRoom ? 'true' : 'false',
+  );
+}
+
+function forgetRoom() {
+  sessionStorage.removeItem('peeranki-room-code');
+  sessionStorage.removeItem('peeranki-room-public');
+  stopRoomHeartbeat();
+}
+
+function amHost() {
+  return hostSessionId === sessionId;
+}
+
+function findMyPlayerId() {
+  const me = players.find(
+    (player) =>
+      player.connected &&
+      player.sessionId === sessionId,
+  );
+
+  myPlayerId = me?.id ?? 0;
+}
+
+function createEmptyPlayer(id: number): Player {
+  return {
+    id,
+    name: `Player ${id}`,
+    stage: 0,
+    alive: false,
+    sessionId: '',
+    connected: false,
+    lastSeen: '',
+  };
+}
+
+
+function loadPlayersFromRoom(roomPlayers: unknown[]) {
+  const byId = new Map<number, Player>();
+
+  roomPlayers.forEach((rawPlayer: any) => {
+    const id = Number(rawPlayer?.id);
+
+    if (!Number.isInteger(id) || id < 1 || id > maxPlayers) {
+      return;
+    }
+
+    byId.set(id, {
+      id,
+      name:
+        typeof rawPlayer?.name === 'string' &&
+        rawPlayer.name.trim()
+          ? rawPlayer.name
+          : `Player ${id}`,
+      stage:
+        Number.isInteger(rawPlayer?.stage) &&
+        rawPlayer.stage >= 0 &&
+        rawPlayer.stage <= 3
+          ? rawPlayer.stage
+          : 0,
+      alive:
+        typeof rawPlayer?.alive === 'boolean'
+          ? rawPlayer.alive
+          : true,
+      sessionId:
+        typeof rawPlayer?.session_id === 'string'
+          ? rawPlayer.session_id
+          : typeof rawPlayer?.sessionId === 'string'
+            ? rawPlayer.sessionId
+            : '',
+      connected:
+        typeof rawPlayer?.connected === 'boolean'
+          ? rawPlayer.connected
+          : true,
+      lastSeen:
+        typeof rawPlayer?.last_seen === 'string'
+          ? rawPlayer.last_seen
+          : '',
+    });
+  });
+
+  const fixedPlayers: Player[] = [];
+
+  for (let index = 0; index < maxPlayers; index += 1) {
+    fixedPlayers.push(
+      byId.get(index + 1) ??
+        createEmptyPlayer(index + 1),
+    );
+  }
+
+  players = fixedPlayers;
+  findMyPlayerId();
+}
+
+function activePlayers() {
+  return players.filter(
+    (player) => player.connected && player.alive,
+  );
+}
+
+function connectedPlayers() {
+  return players.filter(
+    (player) => player.connected,
   );
 }
 
@@ -97,18 +206,121 @@ async function syncGameState(
   countNumber: number,
   gameStatus: string,
 ) {
-  if (!roomCode || players.length < MIN_PLAYERS) {
+  if (!roomCode || players.length === 0) {
     return;
   }
 
+  const connected = players
+    .filter((player) => player.connected)
+    .map((player) => ({
+      id: player.id,
+      name: player.name,
+      stage: player.stage,
+      alive: player.alive,
+      session_id: player.sessionId,
+      connected: true,
+      last_seen: player.lastSeen,
+    }));
+
   await saveGameState(
     roomCode,
-    players,
+    connected,
     maxPlayers,
     currentShooter,
     countNumber,
     gameStatus,
   );
+}
+
+function startRoomHeartbeat() {
+  stopRoomHeartbeat();
+
+  heartbeatTimer = window.setInterval(() => {
+    if (!roomCode) {
+      return;
+    }
+
+    void touchPlayer(
+      roomCode,
+      sessionId,
+    );
+
+    if (amHost()) {
+      void cleanupStalePlayers(
+        roomCode,
+        STALE_PLAYER_SECONDS,
+      );
+    }
+  }, HEARTBEAT_INTERVAL);
+
+  document.addEventListener(
+    'visibilitychange',
+    handleVisibilityChange,
+  );
+}
+
+function stopRoomHeartbeat() {
+  if (heartbeatTimer !== undefined) {
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = undefined;
+  }
+
+  if (cleanupTimer !== undefined) {
+    window.clearInterval(cleanupTimer);
+    cleanupTimer = undefined;
+  }
+
+  document.removeEventListener(
+    'visibilitychange',
+    handleVisibilityChange,
+  );
+}
+
+function handleVisibilityChange() {
+  if (
+    document.visibilityState === 'visible' &&
+    roomCode
+  ) {
+    void touchPlayer(
+      roomCode,
+      sessionId,
+    );
+  }
+}
+
+async function leaveCurrentRoom() {
+  const code = roomCode;
+
+  if (!code) {
+    return;
+  }
+
+  try {
+    await leaveRoom(code, sessionId);
+  } catch (error) {
+    console.error('Leave room failed:', error);
+  }
+
+  roomCode = '';
+  myPlayerId = 0;
+  hostSessionId = '';
+  forgetRoom();
+}
+
+window.addEventListener('pagehide', () => {
+  const code = sessionStorage.getItem(
+    'peeranki-room-code',
+  );
+
+  if (code) {
+    leaveRoomBestEffort(code, sessionId);
+  }
+});
+
+function removePeerankiInputs() {
+  document
+    .querySelectorAll('input[id^="peeranki-"]')
+    .forEach((element) => element.remove());
 }
 
 function positionHtmlInput(
@@ -120,19 +332,27 @@ function positionHtmlInput(
 ) {
   const canvas = scene.game.canvas;
   const rect = canvas.getBoundingClientRect();
-
   const scaleX = rect.width / scene.scale.width;
   const scaleY = rect.height / scene.scale.height;
-
-  const cssWidth = Math.min(width, rect.width * 0.72);
+  const cssWidth = Math.min(
+    width,
+    rect.width * 0.72,
+  );
 
   input.style.position = 'fixed';
-  input.style.left = `${rect.left + gameX * scaleX}px`;
-  input.style.top = `${rect.top + gameY * scaleY}px`;
+  input.style.left = `${
+    rect.left + gameX * scaleX
+  }px`;
+  input.style.top = `${
+    rect.top + gameY * scaleY
+  }px`;
   input.style.transform = 'translate(-50%, -50%)';
   input.style.width = `${cssWidth}px`;
   input.style.padding = '13px 16px';
-  input.style.fontSize = `${Math.max(16, Math.round(19 * scaleX))}px`;
+  input.style.fontSize = `${Math.max(
+    16,
+    Math.round(19 * scaleX),
+  )}px`;
   input.style.textAlign = 'center';
   input.style.boxSizing = 'border-box';
   input.style.border = '2px solid #444c55';
@@ -141,13 +361,6 @@ function positionHtmlInput(
   input.style.color = '#111111';
   input.style.outline = 'none';
   input.style.zIndex = '10000';
-}
-
-
-function removePeerankiInputs() {
-  document
-    .querySelectorAll('input[id^="peeranki-"]')
-    .forEach((element) => element.remove());
 }
 
 function makeButton(
@@ -193,11 +406,16 @@ class MenuScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.add
-      .text(width / 2, height * 0.33, 'Traditional Kerala Game', {
-        fontFamily: 'Arial',
-        fontSize: '20px',
-        color: '#bbbbbb',
-      })
+      .text(
+        width / 2,
+        height * 0.33,
+        'Traditional Kerala Game',
+        {
+          fontFamily: 'Arial',
+          fontSize: '20px',
+          color: '#bbbbbb',
+        },
+      )
       .setOrigin(0.5);
 
     const onlineButton = makeButton(
@@ -226,7 +444,7 @@ class OnlineModeScene extends Phaser.Scene {
     const { width, height } = this.scale;
 
     this.add
-      .text(width / 2, 100, 'ONLINE PLAY', {
+      .text(width / 2, 90, 'ONLINE PLAY', {
         fontFamily: 'Arial',
         fontSize: '42px',
         color: '#ffffff',
@@ -237,7 +455,7 @@ class OnlineModeScene extends Phaser.Scene {
     const friendsButton = makeButton(
       this,
       width / 2,
-      height * 0.42,
+      height * 0.40,
       'PLAY WITH FRIENDS',
       '#2878ff',
       22,
@@ -246,14 +464,14 @@ class OnlineModeScene extends Phaser.Scene {
     const randomButton = makeButton(
       this,
       width / 2,
-      height * 0.58,
+      height * 0.55,
       'RANDOM PLAYERS',
       '#444c55',
       22,
     );
 
     const backButton = this.add
-      .text(width / 2, height * 0.80, 'BACK', {
+      .text(width / 2, height * 0.76, 'BACK', {
         fontFamily: 'Arial',
         fontSize: '18px',
         color: '#bbbbbb',
@@ -266,7 +484,9 @@ class OnlineModeScene extends Phaser.Scene {
     });
 
     randomButton.on('pointerdown', () => {
-      this.scene.start('PlayerCountScene', { mode: 'random' });
+      this.scene.start('PlayerCountScene', {
+        mode: 'random',
+      });
     });
 
     backButton.on('pointerdown', () => {
@@ -286,7 +506,7 @@ class FriendsScene extends Phaser.Scene {
     const { width, height } = this.scale;
 
     this.add
-      .text(width / 2, 100, 'PLAY WITH FRIENDS', {
+      .text(width / 2, 90, 'PLAY WITH FRIENDS', {
         fontFamily: 'Arial',
         fontSize: '36px',
         color: '#ffffff',
@@ -297,15 +517,14 @@ class FriendsScene extends Phaser.Scene {
     const createButton = makeButton(
       this,
       width / 2,
-      height * 0.42,
+      height * 0.40,
       'CREATE GAME',
-      '#2878ff',
     );
 
     const joinButton = makeButton(
       this,
       width / 2,
-      height * 0.57,
+      height * 0.55,
       'JOIN GAME',
       '#444c55',
     );
@@ -340,7 +559,12 @@ class PlayerCountScene extends Phaser.Scene {
   private nameInput?: HTMLInputElement;
   private resizeHandler = () => {
     if (this.nameInput) {
-      positionHtmlInput(this, this.nameInput, 450, 360);
+      positionHtmlInput(
+        this,
+        this.nameInput,
+        450,
+        360,
+      );
     }
   };
 
@@ -349,14 +573,17 @@ class PlayerCountScene extends Phaser.Scene {
   }
 
   init(data: { mode?: 'private' | 'random' }) {
-    this.mode = data?.mode === 'random' ? 'random' : 'private';
+    this.mode =
+      data?.mode === 'random'
+        ? 'random'
+        : 'private';
   }
 
   create() {
     removePeerankiInputs();
 
     const { width } = this.scale;
-    let selectedCount = 6;
+    let selectedCount = MIN_PLAYERS;
 
     this.add
       .text(
@@ -379,7 +606,7 @@ class PlayerCountScene extends Phaser.Scene {
         width / 2,
         125,
         this.mode === 'private'
-          ? 'Choose the number of players for your private room.'
+          ? 'Choose the number of players for your room.'
           : 'Choose the number of players for random matchmaking.',
         {
           fontFamily: 'Arial',
@@ -410,7 +637,10 @@ class PlayerCountScene extends Phaser.Scene {
           fontFamily: 'Arial',
           fontSize: '24px',
           color: '#ffffff',
-          backgroundColor: count === 6 ? '#2878ff' : '#2a3037',
+          backgroundColor:
+            count === selectedCount
+              ? '#2878ff'
+              : '#2a3037',
           padding: {
             x: 20,
             y: 16,
@@ -423,21 +653,25 @@ class PlayerCountScene extends Phaser.Scene {
 
       button.on('pointerdown', () => {
         selectedCount = count;
-        selectedText.setText(`${selectedCount} PLAYERS`);
+        selectedText.setText(
+          `${selectedCount} PLAYERS`,
+        );
 
-        choiceButtons.forEach((choiceButton, choiceIndex) => {
-          choiceButton.setBackgroundColor(
-            choices[choiceIndex] === selectedCount
-              ? '#2878ff'
-              : '#2a3037',
-          );
-        });
+        choiceButtons.forEach(
+          (choiceButton, choiceIndex) => {
+            choiceButton.setBackgroundColor(
+              choices[choiceIndex] === selectedCount
+                ? '#2878ff'
+                : '#2a3037',
+            );
+          },
+        );
       });
     });
 
     if (this.mode === 'random') {
       this.add
-        .text(width / 2, 315, 'Your Name', {
+        .text(width / 2, 315, 'YOUR NAME', {
           fontFamily: 'Arial',
           fontSize: '18px',
           color: '#bbbbbb',
@@ -445,22 +679,34 @@ class PlayerCountScene extends Phaser.Scene {
         .setOrigin(0.5);
 
       this.nameInput = document.createElement('input');
-      this.nameInput.id = 'peeranki-random-player-name';
+      this.nameInput.id =
+        'peeranki-random-player-name';
       this.nameInput.type = 'text';
       this.nameInput.placeholder = 'Enter your name';
       this.nameInput.maxLength = 20;
       this.nameInput.autocomplete = 'name';
       document.body.appendChild(this.nameInput);
 
-      positionHtmlInput(this, this.nameInput, 450, 360);
-      window.addEventListener('resize', this.resizeHandler);
+      positionHtmlInput(
+        this,
+        this.nameInput,
+        450,
+        360,
+      );
+
+      window.addEventListener(
+        'resize',
+        this.resizeHandler,
+      );
     }
 
     const actionButton = makeButton(
       this,
       width / 2,
       this.mode === 'random' ? 470 : 400,
-      this.mode === 'private' ? 'CREATE ROOM' : 'FIND MATCH',
+      this.mode === 'private'
+        ? 'CREATE ROOM'
+        : 'FIND MATCH',
     );
 
     const backButton = this.add
@@ -481,53 +727,79 @@ class PlayerCountScene extends Phaser.Scene {
       actionButton.disableInteractive();
       backButton.disableInteractive();
       actionButton.setText(
-        this.mode === 'private' ? 'CREATING...' : 'FINDING...',
+        this.mode === 'private'
+          ? 'CREATING...'
+          : 'FINDING...',
       );
 
-      if (this.mode === 'private') {
-        resetPlayers(selectedCount);
+      await previousRoomCleanup;
 
-        const result = await createPrivateRoom(selectedCount);
+      if (this.mode === 'private') {
+        const result = await createPrivateRoom(
+          selectedCount,
+          sessionId,
+        );
 
         if (!result) {
           actionButton.setText('CREATE FAILED');
-          actionButton.setInteractive({ useHandCursor: true });
-          backButton.setInteractive({ useHandCursor: true });
+          actionButton.setInteractive({
+            useHandCursor: true,
+          });
+          backButton.setInteractive({
+            useHandCursor: true,
+          });
           return;
         }
 
         roomCode = String(result.room_code);
         maxPlayers = Number(result.max_players);
         isPublicRoom = false;
-        myPlayerId = 1;
-  
-        loadPlayersFromRoom(
-          Array.isArray(result.players) ? result.players : players,
+        hostSessionId = String(
+          result.host_session_id ?? sessionId,
         );
 
+        loadPlayersFromRoom(
+          Array.isArray(result.players)
+            ? result.players
+            : [],
+        );
+
+        rememberRoom(roomCode, false);
+        startRoomHeartbeat();
         this.scene.start('LobbyScene');
         return;
       }
 
-      const name = this.nameInput?.value.trim() ?? '';
+      const name =
+        this.nameInput?.value.trim() ?? '';
 
       if (!name) {
         actionButton.setText('ENTER NAME');
-        actionButton.setInteractive({ useHandCursor: true });
-        backButton.setInteractive({ useHandCursor: true });
+        actionButton.setInteractive({
+          useHandCursor: true,
+        });
+        backButton.setInteractive({
+          useHandCursor: true,
+        });
         this.nameInput?.focus();
         return;
       }
 
-      const result = await findOrCreateRandomRoom(
-        selectedCount,
-        name,
-      );
+      const result =
+        await findOrCreateRandomRoom(
+          selectedCount,
+          name,
+          sessionId,
+        );
 
       if (!result) {
         actionButton.setText('MATCH FAILED');
-        actionButton.setInteractive({ useHandCursor: true });
-        backButton.setInteractive({ useHandCursor: true });
+        actionButton.setInteractive({
+          useHandCursor: true,
+        });
+        backButton.setInteractive({
+          useHandCursor: true,
+        });
         return;
       }
 
@@ -536,20 +808,20 @@ class PlayerCountScene extends Phaser.Scene {
       roomCode = String(result.room_code);
       maxPlayers = Number(result.max_players);
       isPublicRoom = true;
-
-      const roomPlayers = Array.isArray(result.players)
-        ? result.players
-        : [];
-
-      loadPlayersFromRoom(roomPlayers);
-
-      const me = players.find(
-        (player) =>
-          player.name.toLowerCase() === name.toLowerCase(),
+      hostSessionId = String(
+        result.host_session_id ?? '',
       );
 
-      myPlayerId = me?.id ?? 1;
-  
+      loadPlayersFromRoom(
+        Array.isArray(result.players)
+          ? result.players
+          : [],
+      );
+
+      findMyPlayerId();
+      rememberRoom(roomCode, true);
+      startRoomHeartbeat();
+
       this.scene.start('LobbyScene');
     });
 
@@ -564,7 +836,10 @@ class PlayerCountScene extends Phaser.Scene {
   }
 
   shutdown() {
-    window.removeEventListener('resize', this.resizeHandler);
+    window.removeEventListener(
+      'resize',
+      this.resizeHandler,
+    );
     this.nameInput?.remove();
     this.nameInput = undefined;
   }
@@ -575,11 +850,21 @@ class JoinScene extends Phaser.Scene {
   private nameInput?: HTMLInputElement;
   private resizeHandler = () => {
     if (this.roomInput) {
-      positionHtmlInput(this, this.roomInput, 450, 225);
+      positionHtmlInput(
+        this,
+        this.roomInput,
+        450,
+        225,
+      );
     }
 
     if (this.nameInput) {
-      positionHtmlInput(this, this.nameInput, 450, 350);
+      positionHtmlInput(
+        this,
+        this.nameInput,
+        450,
+        350,
+      );
     }
   };
 
@@ -632,7 +917,10 @@ class JoinScene extends Phaser.Scene {
     );
 
     this.resizeHandler();
-    window.addEventListener('resize', this.resizeHandler);
+    window.addEventListener(
+      'resize',
+      this.resizeHandler,
+    );
 
     const joinButton = makeButton(
       this,
@@ -652,8 +940,10 @@ class JoinScene extends Phaser.Scene {
 
     joinButton.on('pointerdown', async () => {
       const code =
-        this.roomInput?.value.trim().toUpperCase() ?? '';
-      const name = this.nameInput?.value.trim() ?? '';
+        this.roomInput?.value.trim().toUpperCase() ??
+        '';
+      const name =
+        this.nameInput?.value.trim() ?? '';
 
       if (code.length !== 6) {
         joinButton.setText('ENTER 6-CHAR CODE');
@@ -671,12 +961,22 @@ class JoinScene extends Phaser.Scene {
       backButton.disableInteractive();
       joinButton.setText('JOINING...');
 
-      const result = await joinRoom(code, name);
+      await previousRoomCleanup;
+
+      const result = await joinRoom(
+        code,
+        name,
+        sessionId,
+      );
 
       if (!result) {
         joinButton.setText('JOIN FAILED');
-        joinButton.setInteractive({ useHandCursor: true });
-        backButton.setInteractive({ useHandCursor: true });
+        joinButton.setInteractive({
+          useHandCursor: true,
+        });
+        backButton.setInteractive({
+          useHandCursor: true,
+        });
         return;
       }
 
@@ -684,21 +984,21 @@ class JoinScene extends Phaser.Scene {
 
       roomCode = String(result.room_code);
       maxPlayers = Number(result.max_players);
-      isPublicRoom = false;
-
-      const roomPlayers = Array.isArray(result.players)
-        ? result.players
-        : [];
-
-      loadPlayersFromRoom(roomPlayers);
-
-      const me = players.find(
-        (player) =>
-          player.name.toLowerCase() === name.toLowerCase(),
+      isPublicRoom = Boolean(result.is_public);
+      hostSessionId = String(
+        result.host_session_id ?? '',
       );
 
-      myPlayerId = me?.id ?? 0;
-  
+      loadPlayersFromRoom(
+        Array.isArray(result.players)
+          ? result.players
+          : [],
+      );
+
+      findMyPlayerId();
+      rememberRoom(roomCode, isPublicRoom);
+      startRoomHeartbeat();
+
       this.scene.start('LobbyScene');
     });
 
@@ -721,7 +1021,8 @@ class JoinScene extends Phaser.Scene {
     input.maxLength = uppercase ? 6 : 20;
     input.autocomplete = uppercase ? 'off' : 'name';
     input.spellcheck = false;
-    input.style.textTransform = uppercase ? 'uppercase' : 'none';
+    input.style.textTransform =
+      uppercase ? 'uppercase' : 'none';
 
     if (uppercase) {
       input.addEventListener('input', () => {
@@ -736,7 +1037,10 @@ class JoinScene extends Phaser.Scene {
   }
 
   shutdown() {
-    window.removeEventListener('resize', this.resizeHandler);
+    window.removeEventListener(
+      'resize',
+      this.resizeHandler,
+    );
     this.roomInput?.remove();
     this.nameInput?.remove();
     this.roomInput = undefined;
@@ -748,6 +1052,7 @@ class LobbyScene extends Phaser.Scene {
   private playerText?: Phaser.GameObjects.Text;
   private statusText?: Phaser.GameObjects.Text;
   private startButton?: Phaser.GameObjects.Text;
+  private leaveButton?: Phaser.GameObjects.Text;
   private realtimeChannel: any;
   private refreshTimer?: Phaser.Time.TimerEvent;
   private starting = false;
@@ -787,7 +1092,9 @@ class LobbyScene extends Phaser.Scene {
         width / 2,
         140,
         `${maxPlayers} PLAYER MATCH${
-          isPublicRoom ? ' • RANDOM' : ' • PRIVATE'
+          isPublicRoom
+            ? ' • RANDOM'
+            : ' • PRIVATE'
         }`,
         {
           fontFamily: 'Arial',
@@ -798,7 +1105,7 @@ class LobbyScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.playerText = this.add
-      .text(width / 2, 250, 'Loading players...', {
+      .text(width / 2, 255, 'Loading players...', {
         fontFamily: 'Arial',
         fontSize: '21px',
         color: '#ffffff',
@@ -815,20 +1122,42 @@ class LobbyScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    if (myPlayerId === 1) {
+    if (amHost() && !isPublicRoom) {
       this.startButton = makeButton(
         this,
         width / 2,
-        height * 0.88,
+        height * 0.82,
         'START GAME',
         '#2878ff',
         22,
       );
 
-      this.startButton.on('pointerdown', () => {
-        void this.startGame();
-      });
+      this.startButton.on(
+        'pointerdown',
+        () => {
+          void this.startGame();
+        },
+      );
     }
+
+    this.leaveButton = this.add
+      .text(width / 2, height * 0.94, 'LEAVE ROOM', {
+        fontFamily: 'Arial',
+        fontSize: '16px',
+        color: '#ff7777',
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+
+    this.leaveButton.on(
+      'pointerdown',
+      async () => {
+        this.leaveButton?.disableInteractive();
+        this.statusText?.setText('Leaving room...');
+        await leaveCurrentRoom();
+        this.scene.start('OnlineModeScene');
+      },
+    );
 
     this.realtimeChannel = subscribeToGameState(
       roomCode,
@@ -840,7 +1169,7 @@ class LobbyScene extends Phaser.Scene {
     void this.refreshLobby();
 
     this.refreshTimer = this.time.addEvent({
-      delay: 1200,
+      delay: 1500,
       loop: true,
       callback: () => {
         void this.refreshLobby();
@@ -853,9 +1182,17 @@ class LobbyScene extends Phaser.Scene {
       return;
     }
 
-    if (Number.isFinite(Number(gameState.max_players))) {
-      maxPlayers = Number(gameState.max_players);
+    if (
+      Number.isFinite(Number(gameState.max_players))
+    ) {
+      maxPlayers = Number(
+        gameState.max_players,
+      );
     }
+
+    hostSessionId = String(
+      gameState.host_session_id ?? hostSessionId,
+    );
 
     if (Array.isArray(gameState.players)) {
       loadPlayersFromRoom(gameState.players);
@@ -876,56 +1213,80 @@ class LobbyScene extends Phaser.Scene {
 
     if (!result) {
       this.statusText?.setText(
-        'Room not found or connection failed.',
+        'Room closed or connection failed.',
       );
       return;
     }
 
     this.applyRoomState(result);
+
+    if (isPublicRoom && amHost()) {
+      const count = connectedPlayers().length;
+
+      if (
+        count === maxPlayers &&
+        result.game_status === 'waiting'
+      ) {
+        void this.startGame();
+      }
+    }
   }
 
   private updateLobbyText() {
-    let text = `PLAYERS ${players.length}/${maxPlayers}\n\n`;
+    const connected = connectedPlayers();
 
-    players.forEach((player, index) => {
+    let text =
+      `PLAYERS ${connected.length}/${maxPlayers}\n\n`;
+
+    connected.forEach((player, index) => {
       const hostMark =
-        player.id === 1 ? ' 👑' : '';
+        player.sessionId === hostSessionId
+          ? ' 👑'
+          : '';
       const youMark =
-        player.id === myPlayerId ? ' • YOU' : '';
+        player.sessionId === sessionId
+          ? ' • YOU'
+          : '';
 
-      text += `${index + 1}. ${player.name}${hostMark}${youMark}\n`;
+      text +=
+        `${index + 1}. ${player.name}` +
+        `${hostMark}${youMark}\n`;
     });
 
     this.playerText?.setText(text);
 
-    if (players.length < maxPlayers) {
+    if (connected.length < maxPlayers) {
       this.statusText?.setText(
         isPublicRoom
-          ? 'Finding players...'
-          : myPlayerId === 1
-            ? `Waiting for ${maxPlayers - players.length} more player(s)...`
+          ? `Finding players... ${connected.length}/${maxPlayers}`
+          : amHost()
+            ? `Waiting for ${maxPlayers - connected.length} more player(s)...`
             : 'Waiting for the host to start...',
       );
 
       this.startButton?.setVisible(false);
     } else {
       this.statusText?.setText(
-        myPlayerId === 1
-          ? 'All players are ready!'
-          : 'All players are ready. Waiting for host...',
+        isPublicRoom
+          ? 'Match full — starting...'
+          : amHost()
+            ? 'All players are ready!'
+            : 'All players are ready. Waiting for host...',
       );
 
-      if (myPlayerId === 1) {
+      if (amHost() && !isPublicRoom) {
         this.startButton?.setVisible(true);
       }
     }
   }
 
   private async startGame() {
+    const connected = connectedPlayers();
+
     if (
       this.starting ||
-      myPlayerId !== 1 ||
-      players.length !== maxPlayers
+      !amHost() ||
+      connected.length !== maxPlayers
     ) {
       return;
     }
@@ -934,12 +1295,15 @@ class LobbyScene extends Phaser.Scene {
     this.startButton?.disableInteractive();
     this.startButton?.setText('STARTING...');
 
-    const cleanPlayers = players.map(
-      (player, index) => ({
-        id: index + 1,
+    const cleanPlayers = connected.map(
+      (player) => ({
+        id: player.id,
         name: player.name,
         stage: 0,
         alive: true,
+        session_id: player.sessionId,
+        connected: true,
+        last_seen: player.lastSeen,
       }),
     );
 
@@ -968,12 +1332,12 @@ class LobbyScene extends Phaser.Scene {
       return;
     }
 
-    players = cleanPlayers;
+    loadPlayersFromRoom(cleanPlayers);
     this.openGame();
   }
 
   private openGame() {
-    if (this.starting && this.scene.isActive('GameScene')) {
+    if (this.scene.isActive('GameScene')) {
       return;
     }
 
@@ -995,10 +1359,10 @@ class LobbyScene extends Phaser.Scene {
 
 class GameScene extends Phaser.Scene {
   private playerObjects: Phaser.GameObjects.Container[] = [];
-
   private statusText?: Phaser.GameObjects.Text;
   private countText?: Phaser.GameObjects.Text;
   private shooterText?: Phaser.GameObjects.Text;
+  private leaveButton?: Phaser.GameObjects.Text;
 
   private currentShooter = -1;
   private startIndex = -1;
@@ -1006,10 +1370,10 @@ class GameScene extends Phaser.Scene {
 
   private countingTimer?: Phaser.Time.TimerEvent;
   private nextRoundTimer?: Phaser.Time.TimerEvent;
-
   private realtimeChannel: any;
   private applyingRemoteState = false;
   private initialized = false;
+  private gameFinished = false;
 
   constructor() {
     super('GameScene');
@@ -1053,6 +1417,25 @@ class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    this.leaveButton = this.add
+      .text(width - 75, 28, 'LEAVE', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        color: '#ff7777',
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+
+    this.leaveButton.on(
+      'pointerdown',
+      async () => {
+        this.leaveButton?.disableInteractive();
+        this.statusText?.setText('Leaving game...');
+        await leaveCurrentRoom();
+        this.scene.start('OnlineModeScene');
+      },
+    );
+
     this.startRealtimeSync();
     void this.initializeGame();
   }
@@ -1067,9 +1450,15 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (Number.isFinite(Number(room.max_players))) {
+    if (
+      Number.isFinite(Number(room.max_players))
+    ) {
       maxPlayers = Number(room.max_players);
     }
+
+    hostSessionId = String(
+      room.host_session_id ?? hostSessionId,
+    );
 
     if (Array.isArray(room.players)) {
       loadPlayersFromRoom(room.players);
@@ -1084,8 +1473,9 @@ class GameScene extends Phaser.Scene {
     }
 
     if (
+      room.game_status === 'counting' ||
       room.game_status === 'shooting' ||
-      room.game_status === 'counting'
+      room.game_status === 'shot'
     ) {
       this.applyRemoteGameState(room);
       return;
@@ -1093,7 +1483,7 @@ class GameScene extends Phaser.Scene {
 
     if (
       room.game_status === 'playing' &&
-      myPlayerId === 1
+      amHost()
     ) {
       this.startCounting();
     }
@@ -1106,25 +1496,20 @@ class GameScene extends Phaser.Scene {
 
     this.playerObjects = [];
 
-    const activePlayers = players.slice(
-      0,
-      maxPlayers,
-    );
-
-    const columns: number = 5;
-    const rows = Math.ceil(
-      activePlayers.length / columns,
-    );
-
-    const startX = 100;
-    const endX = 800;
+    const columns = maxPlayers <= 6 ? 3 : 5;
+    const rows = Math.ceil(maxPlayers / columns);
+    const startX = 170;
+    const endX = 730;
     const xStep =
-      (endX - startX) / (columns - 1);
+  (endX - startX) / (columns - 1);
+    const startY = rows <= 2 ? 225 : 175;
+    const yStep = rows <= 2 ? 220 : 170;
 
-    const startY = rows === 1 ? 295 : 235;
-    const yStep = rows <= 2 ? 215 : 150;
+    players.forEach((_, index) => {
+      if (index >= maxPlayers) {
+        return;
+      }
 
-    activePlayers.forEach((player, index) => {
       const row = Math.floor(index / columns);
       const column = index % columns;
 
@@ -1141,8 +1526,8 @@ class GameScene extends Phaser.Scene {
       const background = this.add.rectangle(
         0,
         0,
-        165,
-        150,
+        180,
+        135,
         0x1b2229,
       );
 
@@ -1152,57 +1537,36 @@ class GameScene extends Phaser.Scene {
       );
 
       const name = this.add
-        .text(
-          0,
-          -54,
-          player.name,
-          {
-            fontFamily: 'Arial',
-            fontSize: '16px',
-            color: '#ffffff',
-            fontStyle: 'bold',
-            align: 'center',
-          },
-        )
+        .text(0, -48, '', {
+          fontFamily: 'Arial',
+          fontSize: '16px',
+          color: '#ffffff',
+          fontStyle: 'bold',
+          align: 'center',
+        })
         .setOrigin(0.5);
 
       const tower = this.add
-        .text(
-          0,
-          -4,
-          towerStages[player.stage],
-          {
-            fontFamily: 'Arial',
-            fontSize: '35px',
-          },
-        )
+        .text(0, -3, '', {
+          fontFamily: 'Arial',
+          fontSize: '34px',
+        })
         .setOrigin(0.5);
 
       const stage = this.add
-        .text(
-          0,
-          38,
-          stageNames[player.stage],
-          {
-            fontFamily: 'Arial',
-            fontSize: '12px',
-            color: '#aaaaaa',
-            align: 'center',
-          },
-        )
+        .text(0, 38, '', {
+          fontFamily: 'Arial',
+          fontSize: '12px',
+          color: '#aaaaaa',
+        })
         .setOrigin(0.5);
 
-      const idText = this.add
-        .text(
-          0,
-          62,
-          `Player ${player.id}`,
-          {
-            fontFamily: 'Arial',
-            fontSize: '11px',
-            color: '#777777',
-          },
-        )
+      const slot = this.add
+        .text(0, 60, '', {
+          fontFamily: 'Arial',
+          fontSize: '11px',
+          color: '#777777',
+        })
         .setOrigin(0.5);
 
       container.add([
@@ -1210,17 +1574,16 @@ class GameScene extends Phaser.Scene {
         name,
         tower,
         stage,
-        idText,
+        slot,
       ]);
 
-      container.setSize(165, 150);
-
+      container.setSize(180, 135);
       container.setInteractive(
         new Phaser.Geom.Rectangle(
-          -82,
-          -75,
-          164,
-          150,
+          -90,
+          -67,
+          180,
+          134,
         ),
         Phaser.Geom.Rectangle.Contains,
       );
@@ -1233,60 +1596,94 @@ class GameScene extends Phaser.Scene {
         },
       );
 
-      container.on(
-        'pointerup',
-        () => container.setScale(1),
-      );
+      container.on('pointerup', () => {
+        container.setScale(1);
+      });
 
-      container.on(
-        'pointerout',
-        () => container.setScale(1),
-      );
+      container.on('pointerout', () => {
+        container.setScale(1);
+      });
 
       this.playerObjects.push(container);
+      this.updatePlayerVisual(index);
     });
-
-    this.playerObjects.forEach(
-      (_, index) => this.updatePlayerVisual(index),
-    );
   }
 
   private updatePlayerVisual(index: number) {
     const player = players[index];
-    const container = this.playerObjects[index];
+    const container =
+      this.playerObjects[index];
 
     if (!player || !container) {
       return;
     }
 
-    const name = container.list[1] as Phaser.GameObjects.Text;
-    const tower = container.list[2] as Phaser.GameObjects.Text;
-    const stage = container.list[3] as Phaser.GameObjects.Text;
+    const background =
+      container.list[0] as Phaser.GameObjects.Rectangle;
+    const name =
+      container.list[1] as Phaser.GameObjects.Text;
+    const tower =
+      container.list[2] as Phaser.GameObjects.Text;
+    const stage =
+      container.list[3] as Phaser.GameObjects.Text;
+    const slot =
+      container.list[4] as Phaser.GameObjects.Text;
 
-    name.setText(player.name);
-    tower.setText(towerStages[player.stage]);
-    stage.setText(stageNames[player.stage]);
-
-    container.setAlpha(
-      player.alive ? 1 : 0.35,
+    name.setText(
+      player.connected
+        ? player.name
+        : `Player ${player.id}`,
     );
 
-    if (index === this.currentShooter) {
-      const background =
-        container.list[0] as Phaser.GameObjects.Rectangle;
+    tower.setText(
+      player.connected
+        ? towerStages[player.stage]
+        : '—',
+    );
 
-      background.setStrokeStyle(
-        3,
-        0x4da3ff,
-      );
-    } else {
-      const background =
-        container.list[0] as Phaser.GameObjects.Rectangle;
+    stage.setText(
+      player.connected
+        ? stageNames[player.stage]
+        : 'Empty',
+    );
 
-      background.setStrokeStyle(
-        2,
-        0x444c55,
-      );
+    slot.setText(
+      player.connected
+        ? `Player ${player.id}`
+        : 'Available slot',
+    );
+
+    container.setAlpha(
+      player.connected
+        ? player.alive
+          ? 1
+          : 0.35
+        : 0.28,
+    );
+
+    background.setStrokeStyle(
+      index === this.currentShooter &&
+        player.connected
+        ? 3
+        : 2,
+      index === this.currentShooter &&
+        player.connected
+        ? 0x4da3ff
+        : 0x444c55,
+    );
+
+    container.setInteractive(
+      player.connected && player.alive,
+    );
+  }
+
+  private markShooter() {
+    for (
+      let index = 0;
+      index < this.playerObjects.length;
+      index += 1
+    ) {
+      this.updatePlayerVisual(index);
     }
   }
 
@@ -1304,16 +1701,6 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (Array.isArray(gameState.players)) {
-      loadPlayersFromRoom(
-        gameState.players,
-      );
-
-      if (this.initialized) {
-        this.renderPlayers();
-      }
-    }
-
     if (
       Number.isFinite(Number(gameState.max_players))
     ) {
@@ -1322,11 +1709,24 @@ class GameScene extends Phaser.Scene {
       );
     }
 
+    hostSessionId = String(
+      gameState.host_session_id ?? hostSessionId,
+    );
+
+    if (Array.isArray(gameState.players)) {
+      loadPlayersFromRoom(gameState.players);
+
+      if (this.initialized) {
+        this.renderPlayers();
+      }
+    }
+
     if (
       typeof gameState.current_shooter === 'number'
     ) {
-      this.currentShooter =
-        Number(gameState.current_shooter);
+      this.currentShooter = Number(
+        gameState.current_shooter,
+      );
     }
 
     const remoteCount = Number(
@@ -1343,15 +1743,12 @@ class GameScene extends Phaser.Scene {
       this.countText?.setText(
         `Count ${this.countNumber} / ${COUNT_TO}`,
       );
-
       this.shooterText?.setText(
         '🎲 Counting to select the shooter',
       );
-
       this.statusText?.setText(
         'The 10th player will become the shooter.',
       );
-
       this.markShooter();
       return;
     }
@@ -1365,19 +1762,16 @@ class GameScene extends Phaser.Scene {
       this.countText?.setText(
         `Count ${COUNT_TO} / ${COUNT_TO}`,
       );
-
       this.shooterText?.setText(
         shooter
           ? `🎯 Shooter: ${shooter.name}`
           : '🎯 Shooter selected',
       );
-
       this.statusText?.setText(
         myPlayerId === this.currentShooter + 1
           ? 'You are the shooter — choose a player.'
           : 'Waiting for the shooter...',
       );
-
       this.markShooter();
       return;
     }
@@ -1388,11 +1782,10 @@ class GameScene extends Phaser.Scene {
       this.statusText?.setText(
         'Shot recorded. Next round...',
       );
-
       this.markShooter();
 
       if (
-        myPlayerId === 1 &&
+        amHost() &&
         !this.nextRoundTimer &&
         !this.countingTimer
       ) {
@@ -1417,40 +1810,27 @@ class GameScene extends Phaser.Scene {
     ) {
       this.countingTimer?.remove(false);
       this.countingTimer = undefined;
-
       this.nextRoundTimer?.remove(false);
       this.nextRoundTimer = undefined;
-
       this.showFinishedState();
-    }
-  }
-
-  private markShooter() {
-    for (
-      let index = 0;
-      index < this.playerObjects.length;
-      index += 1
-    ) {
-      this.updatePlayerVisual(index);
     }
   }
 
   private startCounting() {
     if (
-      myPlayerId !== 1 ||
+      !amHost() ||
       this.countingTimer ||
-      this.nextRoundTimer
+      this.nextRoundTimer ||
+      this.gameFinished
     ) {
       return;
     }
 
-    const aliveIndexes = players
-      .map(
-        (player, index) =>
-          player.alive ? index : -1,
-      )
+    const aliveIndexes = activePlayers()
+      .map((player) => player.id - 1)
       .filter(
-        (index) => index !== -1,
+        (index) =>
+          players[index]?.alive === true,
       );
 
     if (aliveIndexes.length <= 1) {
@@ -1469,11 +1849,9 @@ class GameScene extends Phaser.Scene {
     this.shooterText?.setText(
       `🎲 Start: ${players[this.startIndex].name}`,
     );
-
     this.statusText?.setText(
       `Counting ${COUNT_TO} players...`,
     );
-
     this.countText?.setText(
       `Count 0 / ${COUNT_TO}`,
     );
@@ -1518,16 +1896,17 @@ class GameScene extends Phaser.Scene {
             this.shooterText?.setText(
               `🎯 Shooter: ${players[countedIndex].name}`,
             );
-
             this.statusText?.setText(
               `${players[countedIndex].name} is the 10th player — choose a target.`,
             );
 
             void syncGameState(
               countedIndex,
-              this.countNumber,
+              COUNT_TO,
               'shooting',
             );
+
+            this.countingTimer = undefined;
           } else {
             void syncGameState(
               countedIndex,
@@ -1540,20 +1919,17 @@ class GameScene extends Phaser.Scene {
         },
         callbackScope: this,
       });
-
   }
 
   private getCountedPlayerIndex(
     startIndex: number,
     count: number,
   ) {
-    const aliveIndexes = players
-      .map(
-        (player, index) =>
-          player.alive ? index : -1,
-      )
+    const aliveIndexes = activePlayers()
+      .map((player) => player.id - 1)
       .filter(
-        (index) => index !== -1,
+        (index) =>
+          players[index]?.alive === true,
       );
 
     if (aliveIndexes.length === 0) {
@@ -1562,7 +1938,6 @@ class GameScene extends Phaser.Scene {
 
     const startPosition =
       aliveIndexes.indexOf(startIndex);
-
     const safeStartPosition =
       startPosition >= 0
         ? startPosition
@@ -1578,6 +1953,7 @@ class GameScene extends Phaser.Scene {
   private shootPlayer(index: number) {
     if (
       this.applyingRemoteState ||
+      this.gameFinished ||
       this.currentShooter < 0
     ) {
       return;
@@ -1602,13 +1978,16 @@ class GameScene extends Phaser.Scene {
 
     const target = players[index];
 
-    if (!target) {
+    if (
+      !target ||
+      !target.connected
+    ) {
       return;
     }
 
     if (!target.alive) {
       this.statusText?.setText(
-        'That player is eliminated.',
+        'That player is already eliminated.',
       );
       return;
     }
@@ -1621,23 +2000,20 @@ class GameScene extends Phaser.Scene {
     }
 
     this.updatePlayerVisual(index);
-
     void this.recordShot();
   }
 
   private async recordShot() {
-    const alivePlayers =
-      players.filter(
-        (player) => player.alive,
-      );
+    const alive = activePlayers().filter(
+      (player) => player.alive,
+    );
 
-    if (alivePlayers.length <= 1) {
+    if (alive.length <= 1) {
       await syncGameState(
         this.currentShooter,
         COUNT_TO,
         'finished',
       );
-
       this.showFinishedState();
       return;
     }
@@ -1651,13 +2027,19 @@ class GameScene extends Phaser.Scene {
 
   private isGameFinished() {
     return (
-      players.filter(
+      activePlayers().filter(
         (player) => player.alive,
       ).length <= 1
     );
   }
 
   private async finishGame() {
+    if (this.gameFinished) {
+      return;
+    }
+
+    this.gameFinished = true;
+
     await syncGameState(
       this.currentShooter >= 0
         ? this.currentShooter
@@ -1670,24 +2052,23 @@ class GameScene extends Phaser.Scene {
   }
 
   private showFinishedState() {
-    const winner = players.find(
+    this.gameFinished = true;
+
+    const winner = activePlayers().find(
       (player) => player.alive,
     );
 
     this.countText?.setText(
       '🏆 GAME OVER',
     );
-
     this.shooterText?.setText(
       winner
         ? `${winner.name} wins!`
         : 'Game finished',
     );
-
     this.statusText?.setText(
       'The game has ended.',
     );
-
     this.markShooter();
   }
 
