@@ -26,7 +26,6 @@ const NEXT_ROUND_DELAY = 900;
 
 let roomCode = '';
 let myPlayerId = 0;
-let myPlayerName = '';
 let maxPlayers = MIN_PLAYERS;
 let isPublicRoom = false;
 let players: Player[] = [];
@@ -356,7 +355,7 @@ class PlayerCountScene extends Phaser.Scene {
   create() {
     removePeerankiInputs();
 
-    const { width, height } = this.scale;
+    const { width } = this.scale;
     let selectedCount = 6;
 
     this.add
@@ -501,8 +500,7 @@ class PlayerCountScene extends Phaser.Scene {
         maxPlayers = Number(result.max_players);
         isPublicRoom = false;
         myPlayerId = 1;
-        myPlayerName = 'Player 1';
-
+  
         loadPlayersFromRoom(
           Array.isArray(result.players) ? result.players : players,
         );
@@ -551,8 +549,7 @@ class PlayerCountScene extends Phaser.Scene {
       );
 
       myPlayerId = me?.id ?? 1;
-      myPlayerName = name;
-
+  
       this.scene.start('LobbyScene');
     });
 
@@ -593,7 +590,7 @@ class JoinScene extends Phaser.Scene {
   create() {
     removePeerankiInputs();
 
-    const { width, height } = this.scale;
+    const { width } = this.scale;
 
     this.add
       .text(width / 2, 75, 'JOIN PRIVATE GAME', {
@@ -701,8 +698,7 @@ class JoinScene extends Phaser.Scene {
       );
 
       myPlayerId = me?.id ?? 0;
-      myPlayerName = name;
-
+  
       this.scene.start('LobbyScene');
     });
 
@@ -751,7 +747,6 @@ class JoinScene extends Phaser.Scene {
 class LobbyScene extends Phaser.Scene {
   private playerText?: Phaser.GameObjects.Text;
   private statusText?: Phaser.GameObjects.Text;
-  private roomText?: Phaser.GameObjects.Text;
   private startButton?: Phaser.GameObjects.Text;
   private realtimeChannel: any;
   private refreshTimer?: Phaser.Time.TimerEvent;
@@ -773,7 +768,7 @@ class LobbyScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.roomText = this.add
+    this.add
       .text(
         width / 2,
         105,
@@ -1116,7 +1111,7 @@ class GameScene extends Phaser.Scene {
       maxPlayers,
     );
 
-    const columns = 5;
+    const columns: number = 5;
     const rows = Math.ceil(
       activePlayers.length / columns,
     );
@@ -1124,9 +1119,7 @@ class GameScene extends Phaser.Scene {
     const startX = 100;
     const endX = 800;
     const xStep =
-      columns === 1
-        ? 0
-        : (endX - startX) / (columns - 1);
+      (endX - startX) / (columns - 1);
 
     const startY = rows === 1 ? 295 : 235;
     const yStep = rows <= 2 ? 215 : 150;
@@ -1548,7 +1541,6 @@ class GameScene extends Phaser.Scene {
         callbackScope: this,
       });
 
-    this.countingTimer.remove(false);
   }
 
   private getCountedPlayerIndex(
