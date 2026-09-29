@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Peeranki</string>
+    <string name="title_activity_main">Peeranki</string>
+    <string name="package_name">com.peeranki.kerala</string>
+    <string name="custom_url_scheme">com.peeranki.kerala</string>
+</resources>

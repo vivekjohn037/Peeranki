@@ -1,11 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const supabaseKey =
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
   throw new Error(
-    'Supabase environment variables are missing. Check your .env file.'
+    'Supabase environment variables are missing. Check your .env file.',
   );
 }
 
@@ -14,8 +15,9 @@ export const supabase = createClient(
   supabaseKey,
 );
 
-function generateRoomCode(): string {
-  const characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function generateRoomCode() {
+  const characters =
+    'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
   let code = '';
 
@@ -30,62 +32,66 @@ function generateRoomCode(): string {
   return code;
 }
 
-export async function createRoom() {
-  let roomCode = '';
+export async function createPrivateRoom(
+  maxPlayers: number,
+) {
+  if (
+    maxPlayers < 6 ||
+    maxPlayers > 10
+  ) {
+    return null;
+  }
 
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const candidate = generateRoomCode();
+    const roomCode = generateRoomCode();
+
+    const initialPlayers = [
+      {
+        id: 1,
+        name: 'Player 1',
+        stage: 0,
+        alive: true,
+      },
+    ];
 
     const { data, error } = await supabase
       .from('game_states')
-      .select('room_code')
-      .eq('room_code', candidate)
-      .maybeSingle();
+      .insert({
+        room_code: roomCode,
+        players: initialPlayers,
+        max_players: maxPlayers,
+        is_public: false,
+        current_shooter: null,
+        countdown: 0,
+        game_status: 'waiting',
+        updated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
 
-    if (error) {
-      console.error('Room check failed:', error);
+    if (!error && data) {
+      return data;
+    }
+
+    if (
+      error &&
+      !String(error.message)
+        .toLowerCase()
+        .includes('duplicate')
+    ) {
+      console.error(
+        'Private room creation failed:',
+        error,
+      );
       return null;
     }
-
-    if (!data) {
-      roomCode = candidate;
-      break;
-    }
   }
 
-  if (!roomCode) {
-    console.error('Could not generate a unique room code.');
-    return null;
-  }
+  console.error(
+    'Could not generate a unique private room code.',
+  );
 
-  const initialPlayers = [
-    {
-      id: 1,
-      name: 'Player 1',
-      stage: 0,
-      alive: true,
-    },
-  ];
-
-  const { data, error } = await supabase
-    .from('game_states')
-    .insert({
-      room_code: roomCode,
-      players: initialPlayers,
-      current_shooter: null,
-      countdown: 0,
-      game_status: 'waiting',
-      updated_at: new Date().toISOString(),
-    })
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Room creation failed:', error);
-    return null;
-  }
-
-  return data;
+  return null;
 }
 
 export async function joinRoom(
@@ -99,76 +105,57 @@ export async function joinRoom(
   const cleanName = playerName.trim();
 
   if (!cleanCode || !cleanName) {
-    console.error('Room code and player name are required.');
     return null;
   }
 
-  const { data: room, error: roomError } = await supabase
-    .from('game_states')
-    .select('*')
-    .eq('room_code', cleanCode)
-    .maybeSingle();
-
-  if (roomError) {
-    console.error('Room lookup failed:', roomError);
-    return null;
-  }
-
-  if (!room) {
-    console.error('Room does not exist.');
-    return null;
-  }
-
-  if (room.game_status !== 'waiting') {
-    console.error('This game has already started.');
-    return null;
-  }
-
-  const currentPlayers = Array.isArray(room.players)
-    ? room.players
-    : [];
-
-  if (currentPlayers.length >= 6) {
-    console.error('Room is full.');
-    return null;
-  }
-
-  const existingPlayer = currentPlayers.find(
-    (player: any) =>
-      String(player.name ?? '').trim().toLowerCase() ===
-      cleanName.toLowerCase(),
-  );
-
-  if (existingPlayer) {
-    console.error('That player name is already in use.');
-    return null;
-  }
-
-  const newPlayer = {
-    id: currentPlayers.length + 1,
-    name: cleanName,
-    stage: 0,
-    alive: true,
-  };
-
-  const updatedPlayers = [
-    ...currentPlayers,
-    newPlayer,
-  ];
-
-  const { data, error } = await supabase
-    .from('game_states')
-    .update({
-      players: updatedPlayers,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('room_code', cleanCode)
-    .eq('game_status', 'waiting')
-    .select()
-    .single();
+  const { data, error } =
+    await supabase.rpc(
+      'join_private_room',
+      {
+        p_room_code: cleanCode,
+        p_player_name: cleanName,
+      },
+    );
 
   if (error) {
-    console.error('Joining room failed:', error);
+    console.error(
+      'Join room failed:',
+      error,
+    );
+    return null;
+  }
+
+  return data;
+}
+
+export async function findOrCreateRandomRoom(
+  maxPlayers: number,
+  playerName: string,
+) {
+  const cleanName = playerName.trim();
+
+  if (
+    maxPlayers < 6 ||
+    maxPlayers > 10 ||
+    !cleanName
+  ) {
+    return null;
+  }
+
+  const { data, error } =
+    await supabase.rpc(
+      'find_or_create_public_room',
+      {
+        p_max_players: maxPlayers,
+        p_player_name: cleanName,
+      },
+    );
+
+  if (error) {
+    console.error(
+      'Random matchmaking failed:',
+      error,
+    );
     return null;
   }
 
@@ -182,6 +169,10 @@ export async function fetchGameRoom(
     .trim()
     .toUpperCase();
 
+  if (!cleanCode) {
+    return null;
+  }
+
   const { data, error } = await supabase
     .from('game_states')
     .select('*')
@@ -189,7 +180,10 @@ export async function fetchGameRoom(
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to fetch room:', error);
+    console.error(
+      'Failed to fetch room:',
+      error,
+    );
     return null;
   }
 
@@ -205,6 +199,7 @@ export async function getGameState(
 export async function saveGameState(
   roomCode: string,
   players: unknown[],
+  maxPlayers: number,
   currentShooter: number | null,
   countNumber: number,
   gameStatus: string,
@@ -213,7 +208,11 @@ export async function saveGameState(
     .trim()
     .toUpperCase();
 
-  if (!cleanCode) {
+  if (
+    !cleanCode ||
+    maxPlayers < 6 ||
+    maxPlayers > 10
+  ) {
     return;
   }
 
@@ -221,6 +220,7 @@ export async function saveGameState(
     .from('game_states')
     .update({
       players,
+      max_players: maxPlayers,
       current_shooter: currentShooter,
       countdown: countNumber,
       game_status: gameStatus,
@@ -229,7 +229,10 @@ export async function saveGameState(
     .eq('room_code', cleanCode);
 
   if (error) {
-    console.error('Failed to save game state:', error);
+    console.error(
+      'Failed to save game state:',
+      error,
+    );
   }
 }
 
@@ -242,7 +245,7 @@ export function subscribeToGameState(
     .toUpperCase();
 
   const channel = supabase
-    .channel(`game-state-${cleanCode}`)
+    .channel(`peeranki-room-${cleanCode}`)
     .on(
       'postgres_changes',
       {
@@ -253,7 +256,7 @@ export function subscribeToGameState(
       },
       (payload) => {
         console.log(
-          '📡 Game state received:',
+          '📡 Peeranki room update:',
           payload.new,
         );
 
@@ -263,10 +266,16 @@ export function subscribeToGameState(
       },
     )
     .subscribe((status, error) => {
-      console.log('Realtime status:', status);
+      console.log(
+        'Realtime status:',
+        status,
+      );
 
       if (error) {
-        console.error('Realtime error:', error);
+        console.error(
+          'Realtime error:',
+          error,
+        );
       }
     });
 
