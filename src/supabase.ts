@@ -34,10 +34,12 @@ function generateRoomCode() {
 
 export async function createPrivateRoom(
   maxPlayers: number,
+  sessionId: string,
 ) {
   if (
     maxPlayers < 6 ||
-    maxPlayers > 10
+    maxPlayers > 10 ||
+    !sessionId
   ) {
     return null;
   }
@@ -51,6 +53,9 @@ export async function createPrivateRoom(
         name: 'Player 1',
         stage: 0,
         alive: true,
+        session_id: sessionId,
+        connected: true,
+        last_seen: new Date().toISOString(),
       },
     ];
 
@@ -61,6 +66,7 @@ export async function createPrivateRoom(
         players: initialPlayers,
         max_players: maxPlayers,
         is_public: false,
+        host_session_id: sessionId,
         current_shooter: null,
         countdown: 0,
         game_status: 'waiting',
@@ -97,25 +103,25 @@ export async function createPrivateRoom(
 export async function joinRoom(
   roomCode: string,
   playerName: string,
+  sessionId: string,
 ) {
   const cleanCode = roomCode
     .trim()
     .toUpperCase();
-
   const cleanName = playerName.trim();
 
-  if (!cleanCode || !cleanName) {
+  if (!cleanCode || !cleanName || !sessionId) {
     return null;
   }
 
-  const { data, error } =
-    await supabase.rpc(
-      'join_private_room',
-      {
-        p_room_code: cleanCode,
-        p_player_name: cleanName,
-      },
-    );
+  const { data, error } = await supabase.rpc(
+    'join_private_room',
+    {
+      p_room_code: cleanCode,
+      p_player_name: cleanName,
+      p_session_id: sessionId,
+    },
+  );
 
   if (error) {
     console.error(
@@ -131,25 +137,27 @@ export async function joinRoom(
 export async function findOrCreateRandomRoom(
   maxPlayers: number,
   playerName: string,
+  sessionId: string,
 ) {
   const cleanName = playerName.trim();
 
   if (
     maxPlayers < 6 ||
     maxPlayers > 10 ||
-    !cleanName
+    !cleanName ||
+    !sessionId
   ) {
     return null;
   }
 
-  const { data, error } =
-    await supabase.rpc(
-      'find_or_create_public_room',
-      {
-        p_max_players: maxPlayers,
-        p_player_name: cleanName,
-      },
-    );
+  const { data, error } = await supabase.rpc(
+    'find_or_create_public_room',
+    {
+      p_max_players: maxPlayers,
+      p_player_name: cleanName,
+      p_session_id: sessionId,
+    },
+  );
 
   if (error) {
     console.error(
@@ -236,6 +244,133 @@ export async function saveGameState(
   }
 }
 
+export async function touchPlayer(
+  roomCode: string,
+  sessionId: string,
+) {
+  const cleanCode = roomCode
+    .trim()
+    .toUpperCase();
+
+  if (!cleanCode || !sessionId) {
+    return null;
+  }
+
+  const { data, error } = await supabase.rpc(
+    'touch_player',
+    {
+      p_room_code: cleanCode,
+      p_session_id: sessionId,
+    },
+  );
+
+  if (error) {
+    console.error(
+      'Heartbeat failed:',
+      error,
+    );
+    return null;
+  }
+
+  return data;
+}
+
+export async function cleanupStalePlayers(
+  roomCode: string,
+  staleSeconds = 30,
+) {
+  const cleanCode = roomCode
+    .trim()
+    .toUpperCase();
+
+  if (!cleanCode) {
+    return null;
+  }
+
+  const { data, error } = await supabase.rpc(
+    'cleanup_stale_players',
+    {
+      p_room_code: cleanCode,
+      p_stale_seconds: staleSeconds,
+    },
+  );
+
+  if (error) {
+    console.error(
+      'Stale-player cleanup failed:',
+      error,
+    );
+    return null;
+  }
+
+  return data;
+}
+
+export async function leaveRoom(
+  roomCode: string,
+  sessionId: string,
+) {
+  const cleanCode = roomCode
+    .trim()
+    .toUpperCase();
+
+  if (!cleanCode || !sessionId) {
+    return null;
+  }
+
+  const { data, error } = await supabase.rpc(
+    'leave_room',
+    {
+      p_room_code: cleanCode,
+      p_session_id: sessionId,
+    },
+  );
+
+  if (error) {
+    console.error(
+      'Leave room failed:',
+      error,
+    );
+    return null;
+  }
+
+  return data;
+}
+
+export function leaveRoomBestEffort(
+  roomCode: string,
+  sessionId: string,
+) {
+  const cleanCode = roomCode
+    .trim()
+    .toUpperCase();
+
+  if (!cleanCode || !sessionId) {
+    return;
+  }
+
+  const url = `${supabaseUrl}/rest/v1/rpc/leave_room`;
+
+  try {
+    void fetch(url, {
+      method: 'POST',
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        p_room_code: cleanCode,
+        p_session_id: sessionId,
+      }),
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    // Best-effort only during page shutdown.
+  }
+}
+
 export function subscribeToGameState(
   roomCode: string,
   callback: (gameState: any) => void,
@@ -260,9 +395,7 @@ export function subscribeToGameState(
           payload.new,
         );
 
-        if (payload.new) {
-          callback(payload.new);
-        }
+        callback(payload.new ?? null);
       },
     )
     .subscribe((status, error) => {
