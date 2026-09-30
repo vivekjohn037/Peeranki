@@ -1583,9 +1583,10 @@ class GameScene extends Phaser.Scene {
   private shooterText?: Phaser.GameObjects.Text;
   private leaveButton?: Phaser.GameObjects.Text;
 
-  private currentShooter = -1;
-  private startIndex = -1;
-  private countNumber = 0;
+ private currentShooter = -1;
+private startIndex = -1;
+private countNumber = 0;
+private nextStartIndex = -1;
 
   private countingTimer?: Phaser.Time.TimerEvent;
   private nextRoundTimer?: Phaser.Time.TimerEvent;
@@ -2032,22 +2033,31 @@ if (offlineMode) {
       this.markShooter();
 
       if (
-        amHost() &&
-        !this.nextRoundTimer &&
-        !this.countingTimer
-      ) {
-        this.nextRoundTimer =
-          this.time.delayedCall(
-            NEXT_ROUND_DELAY,
-            () => {
-              this.nextRoundTimer = undefined;
+  amHost() &&
+  !this.nextRoundTimer &&
+  !this.countingTimer
+) {
+  this.nextRoundTimer =
+    this.time.delayedCall(
+      NEXT_ROUND_DELAY,
+      () => {
+        this.nextRoundTimer = undefined;
 
-              if (!this.isGameFinished()) {
-                this.startCounting();
-              }
-            },
+        const nextStartIndex =
+          this.nextStartIndex;
+
+        this.nextStartIndex = -1;
+
+        if (!this.isGameFinished()) {
+          this.startCounting(
+            nextStartIndex >= 0
+              ? nextStartIndex
+              : undefined,
           );
-      }
+        }
+      },
+    );
+}
 
       return;
     }
@@ -2062,7 +2072,7 @@ if (offlineMode) {
       this.showFinishedState();
     }
   }
-private startCounting() {
+private startCounting(forcedStartIndex?: number) {
   if (
     (!offlineMode && !amHost()) ||
     this.countingTimer ||
@@ -2084,8 +2094,13 @@ private startCounting() {
     return;
   }
 
-  this.startIndex =
-    Phaser.Utils.Array.GetRandom(
+  const forcedStartIsAlive =
+  typeof forcedStartIndex === 'number' &&
+  aliveIndexes.includes(forcedStartIndex);
+
+this.startIndex = forcedStartIsAlive
+  ? forcedStartIndex
+  : Phaser.Utils.Array.GetRandom(
       aliveIndexes,
     );
 
@@ -2299,9 +2314,18 @@ if (!target.alive) {
   }
 
   // Start the next counting cycle
-  this.time.delayedCall(1200, () => {
-    this.startCounting();
-  });
+  const nextStartIndex =
+  this.getNextCountingStartIndex(
+    targetIndex,
+  );
+
+this.time.delayedCall(1200, () => {
+  this.startCounting(
+    nextStartIndex >= 0
+      ? nextStartIndex
+      : undefined,
+  );
+});
 }
 
   private getCountedPlayerIndex(
@@ -2376,6 +2400,37 @@ if (!target.alive) {
 
   return countingSequence[sequencePosition];
 }
+
+private getNextCountingStartIndex(
+  targetIndex: number,
+) {
+  if (players[targetIndex]?.alive) {
+    return targetIndex;
+  }
+
+  for (
+    let offset = 1;
+    offset < players.length;
+    offset += 1
+  ) {
+    const candidateIndex =
+      (targetIndex + offset) %
+      players.length;
+
+    const candidate =
+      players[candidateIndex];
+
+    if (
+      candidate?.alive &&
+      candidate.connected
+    ) {
+      return candidateIndex;
+    }
+  }
+
+  return -1;
+}
+
 private shootPlayer(index: number) {
   if (
     this.applyingRemoteState ||
@@ -2468,15 +2523,25 @@ if (offlineMode) {
       return;
     }
 
-    this.time.delayedCall(1200, () => {
-      this.startCounting();
-    });
+    const nextStartIndex =
+  this.getNextCountingStartIndex(index);
+
+this.time.delayedCall(1200, () => {
+  this.startCounting(
+    nextStartIndex >= 0
+      ? nextStartIndex
+      : undefined,
+  );
+});
 
     return;
   }
 
-  // Online mode
-  void this.recordShot();
+// Online mode
+this.nextStartIndex =
+  this.getNextCountingStartIndex(index);
+
+void this.recordShot();
 }
 
   private async recordShot() {
