@@ -24,8 +24,43 @@ interface Player {
   connected: boolean;
   lastSeen: string;
 }
+// Offline game state
+let offlineMode = false;
+let offlinePlayers: Player[] = [];
+let offlineMaxPlayers = 6;
 
-const MIN_PLAYERS = 6;
+function createOfflinePlayers(
+  playerName: string,
+  totalPlayers: number,
+): Player[] {
+  const offlinePlayers: Player[] = [];
+
+  offlinePlayers.push({
+    id: 1,
+    name: playerName || 'Player',
+    stage: 0,
+    alive: true,
+    sessionId: 'offline-human',
+    connected: true,
+    lastSeen: new Date().toISOString(),
+  });
+
+  for (let i = 2; i <= totalPlayers; i++) {
+    offlinePlayers.push({
+      id: i,
+      name: `Bot ${i - 1}`,
+      stage: 0,
+      alive: true,
+      sessionId: `offline-bot-${i}`,
+      connected: true,
+      lastSeen: new Date().toISOString(),
+    });
+  }
+
+  return offlinePlayers;
+}
+
+const MIN_PLAYERS = 5;
 const COUNT_TO = 10;
 const COUNTING_SPEED = 200;
 const NEXT_ROUND_DELAY = 900;
@@ -418,21 +453,205 @@ class MenuScene extends Phaser.Scene {
       )
       .setOrigin(0.5);
 
-    const onlineButton = makeButton(
+    const offlineButton = makeButton(
+  this,
+  width / 2,
+  height * 0.45,
+  'OFFLINE PLAY',
+  '#20a060',
+  28,
+);
+
+const onlineButton = makeButton(
+  this,
+  width / 2,
+  height * 0.60,
+  'ONLINE PLAY',
+  '#2878ff',
+  28,
+);
+
+offlineButton.on('pointerdown', () => {
+  this.scene.start('OfflineSetupScene');
+});
+
+onlineButton.on('pointerdown', () => {
+  this.scene.start('OnlineModeScene');
+});
+  }
+}
+class OfflineSetupScene extends Phaser.Scene {
+  private selectedPlayers = 6;
+  
+
+  constructor() {
+    super('OfflineSetupScene');
+  }
+
+  create() {
+    removePeerankiInputs();
+
+    const { width, height } = this.scale;
+
+    this.add
+      .text(width / 2, 90, 'OFFLINE PLAY', {
+        fontFamily: 'Arial',
+        fontSize: '42px',
+        color: '#ffffff',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5);
+
+    this.add
+      .text(width / 2, 155, 'Play against Bots', {
+        fontFamily: 'Arial',
+        fontSize: '20px',
+        color: '#bbbbbb',
+      })
+      .setOrigin(0.5);
+
+    // Player name
+    this.add
+      .text(width / 2, height * 0.30, 'YOUR NAME', {
+        fontFamily: 'Arial',
+        fontSize: '20px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+
+    const nameInput = document.createElement('input');
+
+    nameInput.id = 'peeranki-offline-name';
+    nameInput.type = 'text';
+    nameInput.placeholder = 'Enter your name';
+    nameInput.maxLength = 16;
+    nameInput.value = 'Player';
+
+    document.body.appendChild(nameInput);
+
+    const rect = this.game.canvas.getBoundingClientRect();
+
+nameInput.style.position = 'fixed';
+nameInput.style.left = `${rect.left + rect.width / 2}px`;
+nameInput.style.top = `${rect.top + rect.height * 0.37}px`;
+nameInput.style.transform = 'translate(-50%, -50%)';
+nameInput.style.width = `${Math.min(320, rect.width * 0.65)}px`;
+nameInput.style.padding = '13px 16px';
+nameInput.style.fontSize = '18px';
+nameInput.style.textAlign = 'center';
+nameInput.style.boxSizing = 'border-box';
+nameInput.style.border = '2px solid #444c55';
+nameInput.style.borderRadius = '8px';
+nameInput.style.backgroundColor = '#ffffff';
+nameInput.style.color = '#111111';
+nameInput.style.outline = 'none';
+nameInput.style.zIndex = '10000';
+
+    this.add
+      .text(width / 2, height * 0.49, 'NUMBER OF PLAYERS', {
+        fontFamily: 'Arial',
+        fontSize: '20px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+
+    const playerCounts = [6, 7, 8, 9, 10];
+
+    playerCounts.forEach((count, index) => {
+      const row = index < 3 ? 0 : 1;
+      const column = row === 0 ? index : index - 3;
+
+      const x =
+        width / 2 +
+        (column - (row === 0 ? 1 : 0.5)) * 100;
+
+      const y =
+        height * 0.58 +
+        row * 75;
+
+      const button = makeButton(
+        this,
+        x,
+        y,
+        String(count),
+        count === this.selectedPlayers ? '#20a060' : '#444c55',
+        22,
+      );
+
+      button.setData('playerCount', count);
+
+      button.on('pointerdown', () => {
+        this.selectedPlayers = count;
+
+        this.children.list.forEach((child) => {
+          if (
+            child instanceof Phaser.GameObjects.Text &&
+            child.getData('playerCount')
+          ) {
+            const childCount = child.getData('playerCount');
+
+            child.setStyle({
+              backgroundColor:
+                childCount === this.selectedPlayers
+                  ? '#20a060'
+                  : '#444c55',
+            });
+          }
+        });
+      });
+
+      
+    });
+
+    const startButton = makeButton(
       this,
       width / 2,
-      height * 0.54,
-      'ONLINE PLAY',
-      '#2878ff',
-      28,
+      height * 0.79,
+      'START GAME',
+      '#20a060',
+      22,
     );
 
-    onlineButton.on('pointerdown', () => {
-      this.scene.start('OnlineModeScene');
+   startButton.on('pointerdown', () => {
+  const playerName =
+    nameInput.value.trim() || 'Player';
+
+  offlineMode = true;
+  offlineMaxPlayers = this.selectedPlayers;
+
+  offlinePlayers = createOfflinePlayers(
+    playerName,
+    offlineMaxPlayers,
+  );
+
+  console.log('Offline players created:', offlinePlayers);
+
+  nameInput.remove();
+
+  this.scene.start('GameScene', {
+    offline: true,
+  });
+});
+
+    const backButton = this.add
+      .text(width / 2, height * 0.91, 'BACK', {
+        fontFamily: 'Arial',
+        fontSize: '18px',
+        color: '#bbbbbb',
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+
+    backButton.on('pointerdown', () => {
+      nameInput.remove();
+      this.scene.start('MenuScene');
+    });
+
+    this.events.once('shutdown', () => {
+      nameInput.remove();
     });
   }
 }
-
 class OnlineModeScene extends Phaser.Scene {
   constructor() {
     super('OnlineModeScene');
@@ -1380,7 +1599,27 @@ class GameScene extends Phaser.Scene {
   }
 
   create() {
+    if (offlineMode) {
+  console.log('Offline mode active');
+}
     const { width, height } = this.scale;
+
+if (offlineMode) {
+  maxPlayers = offlineMaxPlayers;
+
+  players.splice(
+    0,
+    players.length,
+    ...offlinePlayers,
+  );
+
+  console.log(
+    'Offline players loaded into GameScene:',
+    players,
+  );
+
+  this.renderPlayers();
+}
 
     this.add
       .text(width / 2, 35, 'പീരങ്കി', {
@@ -1436,8 +1675,16 @@ class GameScene extends Phaser.Scene {
       },
     );
 
-    this.startRealtimeSync();
-    void this.initializeGame();
+    if (offlineMode) {
+  this.statusText?.setText('Offline game ready!');
+
+  this.time.delayedCall(500, () => {
+    this.startCounting();
+  });
+} else {
+  this.startRealtimeSync();
+  void this.initializeGame();
+}
   }
 
   private async initializeGame() {
@@ -1747,7 +1994,7 @@ class GameScene extends Phaser.Scene {
         '🎲 Counting to select the shooter',
       );
       this.statusText?.setText(
-        'The 10th player will become the shooter.',
+        'The 10th tower will select the shooter.',
       );
       this.markShooter();
       return;
@@ -1815,193 +2062,422 @@ class GameScene extends Phaser.Scene {
       this.showFinishedState();
     }
   }
+private startCounting() {
+  if (
+    (!offlineMode && !amHost()) ||
+    this.countingTimer ||
+    this.nextRoundTimer ||
+    this.gameFinished
+  ) {
+    return;
+  }
 
-  private startCounting() {
-    if (
-      !amHost() ||
-      this.countingTimer ||
-      this.nextRoundTimer ||
-      this.gameFinished
-    ) {
-      return;
-    }
-
-    const aliveIndexes = activePlayers()
-      .map((player) => player.id - 1)
-      .filter(
-        (index) =>
-          players[index]?.alive === true,
-      );
-
-    if (aliveIndexes.length <= 1) {
-      void this.finishGame();
-      return;
-    }
-
-    this.startIndex =
-      Phaser.Utils.Array.GetRandom(
-        aliveIndexes,
-      );
-
-    this.currentShooter = -1;
-    this.countNumber = 0;
-
-    this.shooterText?.setText(
-      `🎲 Start: ${players[this.startIndex].name}`,
-    );
-    this.statusText?.setText(
-      `Counting ${COUNT_TO} players...`,
-    );
-    this.countText?.setText(
-      `Count 0 / ${COUNT_TO}`,
+  const aliveIndexes = activePlayers()
+    .map((player) => player.id - 1)
+    .filter(
+      (index) =>
+        players[index]?.alive === true,
     );
 
+  if (aliveIndexes.length <= 1) {
+    void this.finishGame();
+    return;
+  }
+
+  this.startIndex =
+    Phaser.Utils.Array.GetRandom(
+      aliveIndexes,
+    );
+
+  this.currentShooter = -1;
+  this.countNumber = 0;
+
+  this.shooterText?.setText(
+    `🎲 Start: ${players[this.startIndex].name}`,
+  );
+
+  this.statusText?.setText(
+    `Counting ${COUNT_TO} towers...`,
+  );
+
+  this.countText?.setText(
+    `Count 0 / ${COUNT_TO}`,
+  );
+
+  if (!offlineMode) {
     void syncGameState(
       null,
       0,
       'counting',
     );
+  }
 
-    this.countingTimer =
-      this.time.addEvent({
-        delay: COUNTING_SPEED,
-        repeat: COUNT_TO - 1,
-        callback: () => {
-          this.countNumber += 1;
+  this.countingTimer =
+    this.time.addEvent({
+      delay: COUNTING_SPEED,
+      repeat: COUNT_TO - 1,
 
-          const countedIndex =
-            this.getCountedPlayerIndex(
-              this.startIndex,
-              this.countNumber,
-            );
+      callback: () => {
+        this.countNumber += 1;
 
-          if (countedIndex === -1) {
-            return;
-          }
+        const countedIndex =
+          this.getCountedPlayerIndex(
+            this.startIndex,
+            this.countNumber,
+          );
 
-          this.currentShooter =
-            countedIndex;
+        if (countedIndex === -1) {
+          return;
+        }
 
-          this.countText?.setText(
-            `Count ${this.countNumber} / ${COUNT_TO}`,
+        this.currentShooter =
+          countedIndex;
+
+        this.countText?.setText(
+          `Count ${this.countNumber} / ${COUNT_TO}`,
+        );
+
+        this.statusText?.setText(
+          `${this.countNumber}. ${players[countedIndex].name}`,
+        );
+
+        if (
+          this.countNumber === COUNT_TO
+        ) {
+          this.shooterText?.setText(
+            `🎯 Shooter: ${players[countedIndex].name}`,
           );
 
           this.statusText?.setText(
-            `${this.countNumber}. ${players[countedIndex].name}`,
+           `${players[countedIndex].name} has the 10th tower.`,
           );
 
-          if (
-            this.countNumber === COUNT_TO
-          ) {
-            this.shooterText?.setText(
-              `🎯 Shooter: ${players[countedIndex].name}`,
-            );
-            this.statusText?.setText(
-              `${players[countedIndex].name} is the 10th player — choose a target.`,
-            );
-
+          if (!offlineMode) {
             void syncGameState(
               countedIndex,
               COUNT_TO,
               'shooting',
             );
+          }
 
-            this.countingTimer = undefined;
-          } else {
+          this.countingTimer = undefined;
+
+          // 🤖 Offline bot automatically shoots
+          if (
+            offlineMode &&
+            players[countedIndex].id !== 1
+          ) {
+            this.time.delayedCall(
+              700,
+              () => {
+                this.botShoot(countedIndex);
+              },
+            );
+          } else if (offlineMode) {
+            this.statusText?.setText(
+              'You are the shooter — choose a target.',
+            );
+          }
+        } else {
+          if (!offlineMode) {
             void syncGameState(
               countedIndex,
               this.countNumber,
               'counting',
             );
           }
+        }
 
-          this.markShooter();
-        },
-        callbackScope: this,
-      });
+        this.markShooter();
+      },
+
+      callbackScope: this,
+    });
+}
+
+private botShoot(shooterIndex: number) {
+  if (!offlineMode) {
+    return;
   }
+
+  const possibleTargets = players
+    .map((player, index) => ({
+      player,
+      index,
+    }))
+    .filter(
+      ({ player, index }) =>
+        player.alive &&
+        index !== shooterIndex,
+    );
+
+  if (possibleTargets.length === 0) {
+    void this.finishGame();
+    return;
+  }
+
+  // Easy bot: randomly choose an alive player
+  const selectedTarget =
+    Phaser.Utils.Array.GetRandom(
+      possibleTargets,
+    );
+
+  this.statusText?.setText(
+    `${players[shooterIndex].name} is shooting ${selectedTarget.player.name}...`,
+  );
+
+  this.time.delayedCall(500, () => {
+    this.applyOfflineShot(
+      shooterIndex,
+      selectedTarget.index,
+    );
+  });
+}
+
+private applyOfflineShot(
+  _shooterIndex: number,
+  targetIndex: number,
+) {
+  if (!offlineMode) {
+    return;
+  }
+
+  const target = players[targetIndex];
+
+  if (!target || !target.alive) {
+    return;
+  }
+
+  target.stage += 1;
+
+  if (target.stage >= 3) {
+    target.stage = 3;
+    target.alive = false;
+  }
+
+  this.updatePlayerVisual(targetIndex);
+
+const targetContainer =
+  this.playerObjects[targetIndex];
+
+if (targetContainer) {
+  targetContainer.setScale(1.12);
+
+  this.time.delayedCall(180, () => {
+    targetContainer.setScale(1);
+  });
+}
+
+this.shooterText?.setText(
+  `💥 ${target.name} was shot!`,
+);
+
+if (!target.alive) {
+    this.statusText?.setText(
+      `${target.name} has been eliminated! 💥`,
+    );
+  } else if (target.stage === 1) {
+    this.statusText?.setText(
+      `${target.name} split into two small towers!`,
+    );
+  } else if (target.stage === 2) {
+    this.statusText?.setText(
+      `${target.name} has one tower remaining!`,
+    );
+  }
+
+  const alivePlayers = players.filter(
+    (player) => player.alive,
+  );
+
+  if (alivePlayers.length <= 1) {
+    this.time.delayedCall(1000, () => {
+      void this.finishGame();
+    });
+
+    return;
+  }
+
+  // Start the next counting cycle
+  this.time.delayedCall(1200, () => {
+    this.startCounting();
+  });
+}
 
   private getCountedPlayerIndex(
-    startIndex: number,
-    count: number,
+  startIndex: number,
+  count: number,
+) {
+  const aliveIndexes = activePlayers()
+    .map((player) => player.id - 1)
+    .filter(
+      (index) =>
+        players[index]?.alive === true,
+    );
+
+  if (aliveIndexes.length === 0) {
+    return -1;
+  }
+
+  // Build the counting sequence using towers.
+  // Stage 0 = 1 tower
+  // Stage 1 = 2 towers
+  // Stage 2 = 1 tower
+  const countingSequence: number[] = [];
+
+  const startPosition =
+    aliveIndexes.indexOf(startIndex);
+
+  const safeStartPosition =
+    startPosition >= 0
+      ? startPosition
+      : 0;
+
+  for (
+    let offset = 0;
+    offset < aliveIndexes.length;
+    offset += 1
   ) {
-    const aliveIndexes = activePlayers()
-      .map((player) => player.id - 1)
-      .filter(
-        (index) =>
-          players[index]?.alive === true,
-      );
-
-    if (aliveIndexes.length === 0) {
-      return -1;
-    }
-
-    const startPosition =
-      aliveIndexes.indexOf(startIndex);
-    const safeStartPosition =
-      startPosition >= 0
-        ? startPosition
-        : 0;
-
     const position =
-      (safeStartPosition + count - 1) %
+      (safeStartPosition + offset) %
       aliveIndexes.length;
 
-    return aliveIndexes[position];
+    const playerIndex =
+      aliveIndexes[position];
+
+    const player =
+      players[playerIndex];
+
+    if (!player) {
+      continue;
+    }
+
+    const towerCount =
+      player.stage === 1
+        ? 2
+        : 1;
+
+    for (
+      let tower = 0;
+      tower < towerCount;
+      tower += 1
+    ) {
+      countingSequence.push(playerIndex);
+    }
   }
 
-  private shootPlayer(index: number) {
-    if (
-      this.applyingRemoteState ||
-      this.gameFinished ||
-      this.currentShooter < 0
-    ) {
-      return;
-    }
+  if (countingSequence.length === 0) {
+    return -1;
+  }
 
-    if (
-      myPlayerId !==
-      this.currentShooter + 1
-    ) {
-      this.statusText?.setText(
-        'Only the selected shooter can shoot.',
-      );
-      return;
-    }
+  const sequencePosition =
+    (count - 1) %
+    countingSequence.length;
 
-    if (index === this.currentShooter) {
-      this.statusText?.setText(
-        'You cannot shoot yourself.',
-      );
-      return;
-    }
+  return countingSequence[sequencePosition];
+}
+private shootPlayer(index: number) {
+  if (
+    this.applyingRemoteState ||
+    this.gameFinished ||
+    this.currentShooter < 0
+  ) {
+    return;
+  }
 
-    const target = players[index];
+  if (
+    !offlineMode &&
+    myPlayerId !== this.currentShooter + 1
+  ) {
+    this.statusText?.setText(
+      'Only the selected shooter can shoot.',
+    );
+    return;
+  }
 
-    if (
-      !target ||
-      !target.connected
-    ) {
-      return;
-    }
+  if (index === this.currentShooter) {
+    this.statusText?.setText(
+      'You cannot shoot yourself.',
+    );
+    return;
+  }
 
+  const target = players[index];
+
+  if (
+    !target ||
+    !target.connected
+  ) {
+    return;
+  }
+
+  if (!target.alive) {
+    this.statusText?.setText(
+      'That player is already eliminated.',
+    );
+    return;
+  }
+
+  target.stage += 1;
+
+  if (target.stage >= 3) {
+    target.stage = 3;
+    target.alive = false;
+  }
+
+ this.updatePlayerVisual(index);
+
+if (offlineMode) {
+  const targetContainer =
+    this.playerObjects[index];
+
+  if (targetContainer) {
+    targetContainer.setScale(1.12);
+
+    this.time.delayedCall(180, () => {
+      targetContainer.setScale(1);
+    });
+  }
+
+  this.shooterText?.setText(
+    `💥 ${target.name} was shot!`,
+  );
     if (!target.alive) {
       this.statusText?.setText(
-        'That player is already eliminated.',
+        `${target.name} has been eliminated! 💥`,
       );
+    } else if (target.stage === 1) {
+      this.statusText?.setText(
+        `${target.name} split into two small towers!`,
+      );
+    } else if (target.stage === 2) {
+      this.statusText?.setText(
+        `${target.name} has one tower remaining!`,
+      );
+    }
+
+    const alivePlayers = players.filter(
+      (player) => player.alive,
+    );
+
+    if (alivePlayers.length <= 1) {
+      this.time.delayedCall(1000, () => {
+        void this.finishGame();
+      });
+
       return;
     }
 
-    target.stage += 1;
+    this.time.delayedCall(1200, () => {
+      this.startCounting();
+    });
 
-    if (target.stage >= 3) {
-      target.stage = 3;
-      target.alive = false;
-    }
-
-    this.updatePlayerVisual(index);
-    void this.recordShot();
+    return;
   }
+
+  // Online mode
+  void this.recordShot();
+}
 
   private async recordShot() {
     const alive = activePlayers().filter(
@@ -2100,6 +2576,7 @@ const config: Phaser.Types.Core.GameConfig = {
   scene: [
     MenuScene,
     OnlineModeScene,
+    OfflineSetupScene,
     FriendsScene,
     PlayerCountScene,
     JoinScene,
