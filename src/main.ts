@@ -1,4 +1,6 @@
 import Phaser from 'phaser';
+import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
 import './style.css';
 
 import {
@@ -843,12 +845,20 @@ onlineButton.on('pointerdown', () => {
       this.scene.start('SettingsScene');
     });
 
-    this.add.text(width / 2, height * 0.88, 'EXIT', {
-      fontFamily: 'Arial', fontSize: '18px', color: '#aab4c0', backgroundColor: '#252d36', padding: { x: 28, y: 12 },
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).on('pointerdown', () => {
-      PeerankiAudio.effect('click');
-      if (window.peerankiDesktop) window.peerankiDesktop.quit();
-      else window.close();
+    const exitButton = makeButton(this, width - 68, 42, 'EXIT', '#9b3030', 16)
+      .setPadding(18, 11)
+      .setDepth(1000);
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      exitButton.setPosition(gameSize.width - 68, 42);
+    });
+    exitButton.on('pointerdown', async () => {
+      if (window.peerankiDesktop) {
+        window.peerankiDesktop.quit();
+      } else if (Capacitor.getPlatform() === 'android') {
+        await App.exitApp();
+      } else {
+        window.close();
+      }
     });
   }
 }
@@ -926,6 +936,7 @@ class OfflineSetupScene extends Phaser.Scene {
     removePeerankiInputs();
 
     const { width, height } = this.scale;
+    const isAndroid = Capacitor.getPlatform() === 'android';
 
     this.add
       .text(width / 2, 90, 'OFFLINE PLAY', {
@@ -1042,7 +1053,7 @@ nameInput.style.zIndex = '10000';
     const startButton = makeButton(
       this,
       width / 2,
-      height * 0.88,
+      height * (isAndroid ? 0.82 : 0.88),
       'START GAME',
       '#20a060',
       22,
@@ -1070,7 +1081,7 @@ nameInput.style.zIndex = '10000';
 });
 
     const backButton = this.add
-      .text(width / 2, height * 0.96, 'BACK', {
+      .text(width / 2, height * (isAndroid ? 0.90 : 0.96), 'BACK', {
         fontFamily: 'Arial',
         fontSize: '18px',
         color: '#bbbbbb',
@@ -1219,7 +1230,7 @@ class PlayerCountScene extends Phaser.Scene {
       positionHtmlInput(
         this,
         this.nameInput,
-        450,
+        this.scale.width / 2,
         350,
       );
     }
@@ -1287,7 +1298,7 @@ class PlayerCountScene extends Phaser.Scene {
     const choiceButtons: Phaser.GameObjects.Text[] = [];
 
     choices.forEach((count, index) => {
-      const x = 230 + (index % 4) * 145;
+      const x = width / 2 + ((index % 4) - 1.5) * 145;
       const y = this.mode === 'random'
         ? 195 + Math.floor(index / 4) * 52
         : 245 + Math.floor(index / 4) * 65;
@@ -1350,7 +1361,7 @@ class PlayerCountScene extends Phaser.Scene {
       positionHtmlInput(
         this,
         this.nameInput,
-        450,
+        this.scale.width / 2,
         350,
       );
 
@@ -1513,7 +1524,7 @@ class JoinScene extends Phaser.Scene {
       positionHtmlInput(
         this,
         this.roomInput,
-        450,
+        this.scale.width / 2,
         225,
       );
     }
@@ -1522,7 +1533,7 @@ class JoinScene extends Phaser.Scene {
       positionHtmlInput(
         this,
         this.nameInput,
-        450,
+        this.scale.width / 2,
         350,
       );
     }
@@ -1801,7 +1812,7 @@ class LobbyScene extends Phaser.Scene {
     }
 
     this.leaveButton = this.add
-      .text(width / 2, height * 0.94, 'LEAVE ROOM', {
+      .text(width / 2, height - 58, 'LEAVE ROOM', {
         fontFamily: 'Arial',
         fontSize: '16px',
         color: '#ff7777',
@@ -2184,18 +2195,19 @@ if (offlineMode) {
     this.previousRoundText = this.add.text(width / 2, 169, '', {
       fontFamily: 'Arial', fontSize: '14px', color: '#f2cf66', fontStyle: 'bold',
     }).setOrigin(0.5);
-    const previousWeapon = makeButton(this, width / 2 - 155, height - 92, '‹', '#444c55', 15);
-    this.weaponImage = this.add.image(width / 2 - 94, height - 92, 'weapon-gun').setDisplaySize(46, 46);
-    this.weaponText = this.add.text(width / 2 + 22, height - 92, '', {
+    const controlsY = height - 104;
+    const previousWeapon = makeButton(this, width / 2 - 155, controlsY, '‹', '#444c55', 15);
+    this.weaponImage = this.add.image(width / 2 - 94, controlsY, 'weapon-gun').setDisplaySize(46, 46);
+    this.weaponText = this.add.text(width / 2 + 22, controlsY, '', {
       fontFamily: 'Arial', fontSize: '14px', color: '#ffffff', fontStyle: 'bold',
     }).setOrigin(0.5);
-    const nextWeapon = makeButton(this, width / 2 + 155, height - 92, '›', '#444c55', 15);
+    const nextWeapon = makeButton(this, width / 2 + 155, controlsY, '›', '#444c55', 15);
     previousWeapon.on('pointerdown', () => this.cycleWeapon(-1));
     nextWeapon.on('pointerdown', () => this.cycleWeapon(1));
     this.refreshWeaponPicker();
 
     this.countText = this.add
-      .text(width / 2, height - 35, '', {
+      .text(width / 2, height - 44, '', {
         fontFamily: 'Arial',
         fontSize: '26px',
         color: '#ffffff',
@@ -2204,13 +2216,21 @@ if (offlineMode) {
       .setOrigin(0.5);
 
     this.leaveButton = this.add
-      .text(width - 75, 28, 'LEAVE', {
+      .text(width - 54, 32, 'LEAVE', {
         fontFamily: 'Arial',
-        fontSize: '14px',
-        color: '#ff7777',
+        fontSize: '15px',
+        color: '#ffffff',
+        backgroundColor: '#9b3030',
+        padding: { left: 12, right: 12, top: 9, bottom: 9 },
       })
       .setOrigin(0.5)
+      .setDepth(1000)
       .setInteractive({ useHandCursor: true });
+
+    // Keep the touch target inside the visible game area as Phaser FIT resizes.
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      this.leaveButton?.setPosition(gameSize.width - 54, 32);
+    });
 
     this.leaveButton.on(
       'pointerdown',
@@ -2227,7 +2247,7 @@ if (offlineMode) {
     );
 
     if (loadSettings().keyboardControls) {
-      this.add.text(width / 2, height - 12, 'Keyboard: press 1–9 (0 = player 10) to choose a target', {
+      this.add.text(width / 2, height - 24, 'Keyboard: press 1–9 (0 = player 10) to choose a target', {
         fontFamily: 'Arial', fontSize: '12px', color: '#777777',
       }).setOrigin(0.5, 1);
       this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
@@ -2315,6 +2335,8 @@ if (offlineMode) {
   }
 
   private renderPlayers() {
+    const { width } = this.scale;
+
     this.playerObjects.forEach(
       (container) => container.destroy(),
     );
@@ -2323,9 +2345,11 @@ if (offlineMode) {
 
     const columns = maxPlayers <= 6 ? 3 : 5;
     const rows = Math.ceil(maxPlayers / columns);
-    const startX = columns <= 3 ? 170 : 70;
-    const endX = columns <= 3 ? 730 : 830;
     const cardWidth = columns <= 3 ? 180 : 140;
+    const baseSpan = columns <= 3 ? 560 : 760;
+    const span = Math.min(width - cardWidth - 48, baseSpan + Math.max(0, width - 900) * 0.55);
+    const startX = (width - span) / 2;
+    const endX = startX + span;
     const xStep =
   (endX - startX) / (columns - 1);
     const startY = rows <= 2 ? 270 : 245;
@@ -3809,58 +3833,313 @@ void this.recordShot();
     );
   }
 
-  private showFinishedState(finalists = connectedPlayers(), weaponCount?: number) {
-    this.duelActive = false;
-    this.duelBotTimer?.remove(false);
-    this.duelBotTimer = undefined;
-    this.clearDuelControls();
-    this.stopActionClock();
-    shootingDeadlineAt = '';
-    if (!this.victoryPlayed) {
-      this.victoryPlayed = true;
-      PeerankiAudio.effect('victory');
-    }
-    this.gameFinished = true;
+ private showFinishedState(
+  finalists = connectedPlayers(),
+  weaponCount?: number,
+) {
+  this.duelActive = false;
+  this.duelBotTimer?.remove(false);
+  this.duelBotTimer = undefined;
+  this.clearDuelControls();
+  this.stopActionClock();
+  shootingDeadlineAt = '';
 
-    const topCount = weaponCount ?? Math.max(0, ...connectedPlayers().map((player) => player.weapons.length));
-    const weaponLeaders = finalists.filter((player) => player.weapons.length === topCount);
-    const topEliminationPoints = Math.max(0, ...weaponLeaders.map((player) => player.eliminationPoints));
-    const winners = weaponLeaders.filter((player) => player.eliminationPoints === topEliminationPoints);
-    const winnerLabel = winners.length === 1 ? `${winners[0].name} wins!` : `Tie: ${winners.map((player) => player.name).join(', ')}`;
-
-    const { width, height } = this.scale;
-    this.matchTimer?.remove(false);
-    this.matchTimer = undefined;
-    this.countText?.setText(`🏆 ${matchDurationMinutes}-MINUTE MATCH OVER`);
-    this.shooterText?.setText(winnerLabel);
-    this.statusText?.setText('');
-    if (this.children.getByName('game-over-panel')) return;
-    const panel = this.add.container(width / 2, height * 0.53).setName('game-over-panel').setDepth(100);
-    const panelHeight = Math.min(height * 0.82, 210 + connectedPlayers().length * 23);
-    const shade = this.add.rectangle(0, 0, width * 0.76, panelHeight, 0x17212b, 0.97).setStrokeStyle(2, 0x4da3ff);
-    const results = connectedPlayers().map((player) => `${player.name}: ${player.weapons.length} weapon${player.weapons.length === 1 ? '' : 's'} • ${player.eliminationPoints} elimination point${player.eliminationPoints === 1 ? '' : 's'}`).join('\n');
-    const title = this.add.text(0, -panelHeight / 2 + 32, `${winnerLabel}\nMost weapons: ${topCount} • Elimination points break ties (earned after all five weapons)\n\n${results}`, {
-      fontFamily: 'Arial', fontSize: '20px', color: '#ffffff', fontStyle: 'bold', align: 'center',
-    }).setOrigin(0.5);
-    const actionY = panelHeight / 2 - 34;
-    const replay = makeButton(this, -100, actionY, 'PLAY AGAIN', '#20a060', 17);
-    const menu = makeButton(this, 105, actionY, 'MAIN MENU', '#2878ff', 17);
-    panel.add([shade, title, replay, menu]);
-    replay.on('pointerdown', () => {
-      this.shutdown();
-      if (offlineMode) this.scene.start('OfflineSetupScene');
-      else { void leaveCurrentRoom(); this.scene.start('OnlineModeScene'); }
-    });
-    menu.on('pointerdown', () => {
-      this.shutdown();
-      if (offlineMode) { offlineMode = false; players = []; }
-      else void leaveCurrentRoom();
-      this.scene.start('MenuScene');
-    });
-    this.tweens.add({ targets: panel, alpha: { from: 0, to: 1 }, scale: { from: 0.9, to: 1 }, duration: 220, ease: 'Back.Out' });
-    this.markShooter();
+  if (!this.victoryPlayed) {
+    this.victoryPlayed = true;
+    PeerankiAudio.effect('victory');
   }
 
+  this.gameFinished = true;
+
+  const connected = connectedPlayers();
+
+  const topCount =
+    weaponCount ??
+    Math.max(
+      0,
+      ...connected.map(
+        (player) => player.weapons.length,
+      ),
+    );
+
+  const winners = finalists.filter(
+    (player) => player.weapons.length === topCount,
+  );
+
+  const { width, height } = this.scale;
+
+  this.matchTimer?.remove(false);
+  this.matchTimer = undefined;
+
+  this.countText?.setText(
+    `🏆 ${matchDurationMinutes}-MINUTE MATCH OVER`,
+  );
+
+  this.shooterText?.setText('');
+  this.statusText?.setText('');
+
+  if (this.children.getByName('game-over-panel')) {
+    return;
+  }
+
+  /*
+   * WINNER OVERLAY
+   * Designed to remain readable on desktop and Android.
+   */
+
+  const panel = this.add
+    .container(
+      width / 2,
+      height / 2,
+    )
+    .setName('game-over-panel')
+    .setDepth(1000);
+
+  const panelWidth = Math.min(
+    width * 0.88,
+    700,
+  );
+
+  const panelHeight = Math.min(
+    height * 0.82,
+    540,
+  );
+
+  // Dark background covering the game.
+  const overlay = this.add.rectangle(
+    0,
+    0,
+    width,
+    height,
+    0x000000,
+    0.58,
+  );
+
+  // Main winner card.
+  const card = this.add.rectangle(
+    0,
+    0,
+    panelWidth,
+    panelHeight,
+    0x17212b,
+    0.98,
+  ).setStrokeStyle(
+    4,
+    0xf2cf66,
+  );
+
+  // Trophy.
+  const trophy = this.add.text(
+    0,
+    -panelHeight / 2 + 58,
+    '🏆',
+    {
+      fontFamily: 'Arial',
+      fontSize: '56px',
+    },
+  ).setOrigin(0.5);
+
+  // WINNER heading.
+  const winnerHeading = this.add.text(
+    0,
+    -panelHeight / 2 + 118,
+    winners.length === 1
+      ? 'WINNER'
+      : 'MATCH TIE',
+    {
+      fontFamily: 'Arial',
+      fontSize: '34px',
+      color: '#f2cf66',
+      fontStyle: 'bold',
+      align: 'center',
+    },
+  ).setOrigin(0.5);
+
+  // Winner name.
+  const winnerName = this.add.text(
+    0,
+    -panelHeight / 2 + 168,
+    winners.length === 1
+      ? winners[0].name
+      : winners.map(
+          (player) => player.name,
+        ).join('  •  '),
+    {
+      fontFamily: 'Arial',
+      fontSize: winners.length === 1
+        ? '38px'
+        : '26px',
+      color: '#ffffff',
+      fontStyle: 'bold',
+      align: 'center',
+      wordWrap: {
+        width: panelWidth - 60,
+      },
+    },
+  ).setOrigin(0.5);
+
+  // Main score.
+  const weaponScore = this.add.text(
+    0,
+    -panelHeight / 2 + 235,
+    `⭐ ${topCount}/5 WEAPONS`,
+    {
+      fontFamily: 'Arial',
+      fontSize: '25px',
+      color: '#ffffff',
+      fontStyle: 'bold',
+      align: 'center',
+    },
+  ).setOrigin(0.5);
+
+  // Winner details.
+  const winnerDetails = winners.length === 1
+    ? `${winners[0].weapons.length}/5 weapons collected`
+    : `${winners.length} players finished with ${topCount}/5 weapons`;
+
+  const details = this.add.text(
+    0,
+    -panelHeight / 2 + 278,
+    winnerDetails,
+    {
+      fontFamily: 'Arial',
+      fontSize: '18px',
+      color: '#cfd8dc',
+      align: 'center',
+    },
+  ).setOrigin(0.5);
+
+  // Player results.
+  const results = connected
+    .map(
+      (player) =>
+        `${player.name}   •   ${player.weapons.length}/5 weapons`,
+    )
+    .join('\n');
+
+  const resultsText = this.add.text(
+    0,
+    -panelHeight / 2 + 335,
+    results,
+    {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#ffffff',
+      align: 'center',
+      lineSpacing: 6,
+      wordWrap: {
+        width: panelWidth - 70,
+      },
+    },
+  ).setOrigin(0.5, 0);
+
+  // Buttons.
+  const buttonY = panelHeight / 2 - 48;
+
+  const replay = makeButton(
+    this,
+    -105,
+    buttonY,
+    'PLAY AGAIN',
+    '#20a060',
+    17,
+  );
+
+  const menu = makeButton(
+    this,
+    105,
+    buttonY,
+    'MAIN MENU',
+    '#2878ff',
+    17,
+  );
+
+  panel.add([
+    overlay,
+    card,
+    trophy,
+    winnerHeading,
+    winnerName,
+    weaponScore,
+    details,
+    resultsText,
+    replay,
+    menu,
+  ]);
+
+  /*
+   * Winner entrance animation.
+   */
+  panel.setAlpha(0);
+  panel.setScale(0.82);
+
+  this.tweens.add({
+    targets: panel,
+    alpha: 1,
+    scale: 1,
+    duration: 500,
+    ease: 'Back.Out',
+  });
+
+  /*
+   * Trophy animation.
+   */
+  this.tweens.add({
+    targets: trophy,
+    scale: {
+      from: 0.85,
+      to: 1.15,
+    },
+    duration: 700,
+    yoyo: true,
+    repeat: -1,
+    ease: 'Sine.InOut',
+  });
+
+  /*
+   * Play Again.
+   */
+  replay.on(
+    'pointerdown',
+    () => {
+      this.shutdown();
+
+      if (offlineMode) {
+        this.scene.start(
+          'OfflineSetupScene',
+        );
+      } else {
+        void leaveCurrentRoom();
+        this.scene.start(
+          'OnlineModeScene',
+        );
+      }
+    },
+  );
+
+  /*
+   * Main Menu.
+   */
+  menu.on(
+    'pointerdown',
+    () => {
+      this.shutdown();
+
+      if (offlineMode) {
+        offlineMode = false;
+        players = [];
+      } else {
+        void leaveCurrentRoom();
+      }
+
+      this.scene.start(
+        'MenuScene',
+      );
+    },
+  );
+
+  this.markShooter();
+}
   shutdown() {
     this.countingTimer?.remove(false);
     this.countingTimer = undefined;
@@ -3905,7 +4184,10 @@ const config: Phaser.Types.Core.GameConfig = {
   ],
 
   scale: {
-    mode: Phaser.Scale.FIT,
+    mode: Capacitor.getPlatform() === 'android'
+      ? Phaser.Scale.EXPAND
+      : Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
   },
 };
 
