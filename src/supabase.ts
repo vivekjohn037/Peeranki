@@ -1,5 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 
+const MIN_PLAYERS = 3;
+const MAX_PLAYERS = 10;
+
+function validPlayerCount(value: number) {
+  return Number.isInteger(value) && value >= MIN_PLAYERS && value <= MAX_PLAYERS;
+}
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey =
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -37,8 +44,7 @@ export async function createPrivateRoom(
   sessionId: string,
 ) {
   if (
-    maxPlayers < 6 ||
-    maxPlayers > 10 ||
+    !validPlayerCount(maxPlayers) ||
     !sessionId
   ) {
     return null;
@@ -142,8 +148,7 @@ export async function findOrCreateRandomRoom(
   const cleanName = playerName.trim();
 
   if (
-    maxPlayers < 6 ||
-    maxPlayers > 10 ||
+    !validPlayerCount(maxPlayers) ||
     !cleanName ||
     !sessionId
   ) {
@@ -218,8 +223,7 @@ export async function saveGameState(
 
   if (
     !cleanCode ||
-    maxPlayers < 6 ||
-    maxPlayers > 10
+    !validPlayerCount(maxPlayers)
   ) {
     return;
   }

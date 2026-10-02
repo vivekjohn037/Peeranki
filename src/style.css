@@ -7,6 +7,7 @@ body {
   background: #101418;
   overflow: hidden;
   touch-action: manipulation;
+  overscroll-behavior: none;
 }
 
 body {
@@ -21,6 +22,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  box-sizing: border-box;
 }
 
 canvas {
@@ -28,6 +31,9 @@ canvas {
   max-width: 100vw;
   max-height: 100vh;
   touch-action: manipulation;
+  outline: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 input {
@@ -50,9 +56,14 @@ input {
   #game {
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
   }
 
   input {
     font-size: 18px !important;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; }
 }

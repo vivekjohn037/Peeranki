@@ -23,11 +23,241 @@ interface Player {
   sessionId: string;
   connected: boolean;
   lastSeen: string;
+  weapons: WeaponType[];
+  hasCollectedAllWeapons: boolean;
+  eliminationPoints: number;
+  shieldDisabledRound: number;
+  matchStartedAt: string;
+  matchRound: number;
+  countingStartIndex: number;
+  roundWinnerId: number;
+  matchOver: boolean;
+  actionRequest: OnlineAction | null;
+  duelChoice: RpsChoice | null;
+  duelChoiceRequest: OnlineDuelChoiceRequest | null;
 }
+
+type WeaponType = 'gun' | 'peeranki' | 'shield' | 'hook' | 'doublePeeranki';
+type RpsChoice = 'rock' | 'paper' | 'scissors';
+type OnlineAction = { nonce: string; shooterId: number; weapon: WeaponType; targetIds: number[] };
+type OnlineDuelChoiceRequest = { nonce: string; playerId: number; round: number; choice: RpsChoice };
+
+function normalizeOnlineAction(value: unknown): OnlineAction | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.nonce !== 'string' || !raw.nonce || !Number.isInteger(raw.shooterId) ||
+      typeof raw.weapon !== 'string' || !ACTIVE_WEAPONS.includes(raw.weapon as WeaponType) ||
+      !Array.isArray(raw.targetIds) || raw.targetIds.length < 1 || raw.targetIds.length > 2 ||
+      !raw.targetIds.every((id) => Number.isInteger(id))) return null;
+  return { nonce: raw.nonce, shooterId: raw.shooterId as number, weapon: raw.weapon as WeaponType, targetIds: raw.targetIds as number[] };
+}
+
+const WEAPON_ORDER: WeaponType[] = ['gun', 'peeranki', 'shield', 'hook', 'doublePeeranki'];
+const ACTIVE_WEAPONS: WeaponType[] = ['gun', 'peeranki', 'hook', 'doublePeeranki'];
+const WEAPON_LABELS: Record<WeaponType, string> = {
+  gun: '🔫 Gun', peeranki: '⚡ Peeranki', shield: '🛡️ Shield',
+  hook: '🪝 Hook', doublePeeranki: '💥 Double Peeranki',
+};
+const WEAPON_NAMES: Record<WeaponType, string> = {
+  gun: 'Gun', peeranki: 'Peeranki', shield: 'Shield', hook: 'Hook', doublePeeranki: 'Double Peeranki',
+};
+const RPS_CHOICES: RpsChoice[] = ['rock', 'paper', 'scissors'];
+const RPS_LABELS: Record<RpsChoice, string> = {
+  rock: '🪨 Rock', paper: '📄 Paper', scissors: '✂️ Scissors',
+};
+const MATCH_DURATIONS = [3, 5, 10, 15] as const;
+let matchDurationMinutes: (typeof MATCH_DURATIONS)[number] = 5;
+const matchDurationMs = () => matchDurationMinutes * 60 * 1000;
+
+function normalizeWeapons(value: unknown): WeaponType[] {
+  if (!Array.isArray(value)) return ['gun'];
+  const valid = value.filter((weapon): weapon is WeaponType =>
+    typeof weapon === 'string' && WEAPON_ORDER.includes(weapon as WeaponType));
+  const available = new Set<WeaponType>(valid);
+  const normalized: WeaponType[] = ['gun'];
+  WEAPON_ORDER.slice(1).forEach((weapon, index) => {
+    const prerequisites = WEAPON_ORDER.slice(1, index + 1);
+    if (available.has(weapon) && prerequisites.every((prerequisite) => normalized.includes(prerequisite))) {
+      normalized.push(weapon);
+    }
+  });
+  return normalized;
+}
+
+function nextWeaponUpgrade(weapons: WeaponType[], round: number): WeaponType | undefined {
+  const eligible = WEAPON_ORDER.slice(1, Math.min(round, WEAPON_ORDER.length - 1) + 1);
+  return eligible.find((weapon) => {
+    const index = WEAPON_ORDER.indexOf(weapon);
+    const prerequisites = WEAPON_ORDER.slice(1, index);
+    return !weapons.includes(weapon) && prerequisites.every((prerequisite) => weapons.includes(prerequisite));
+  });
+}
+
+function normalizeRpsChoice(value: unknown): RpsChoice | null {
+  return typeof value === 'string' && RPS_CHOICES.includes(value as RpsChoice)
+    ? value as RpsChoice
+    : null;
+}
+
+function normalizeDuelChoiceRequest(value: unknown): OnlineDuelChoiceRequest | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const choice = normalizeRpsChoice(raw.choice);
+  if (typeof raw.nonce !== 'string' || !raw.nonce ||
+      !Number.isInteger(raw.playerId) || !Number.isInteger(raw.round) || !choice) return null;
+  return { nonce: raw.nonce, playerId: raw.playerId as number, round: raw.round as number, choice };
+}
+
+type PeerankiSettings = {
+  musicVolume: number;
+  soundEffectsVolume: number;
+  fullscreen: boolean;
+  keyboardControls: boolean;
+};
+
+const SETTINGS_KEY = 'peeranki-settings';
+const DEFAULT_SETTINGS: PeerankiSettings = {
+  musicVolume: 70,
+  soundEffectsVolume: 80,
+  fullscreen: false,
+  keyboardControls: true,
+};
+
+function loadSettings(): PeerankiSettings {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}');
+    return {
+      musicVolume: clampSetting(stored.musicVolume, DEFAULT_SETTINGS.musicVolume),
+      soundEffectsVolume: clampSetting(stored.soundEffectsVolume, DEFAULT_SETTINGS.soundEffectsVolume),
+      fullscreen: typeof stored.fullscreen === 'boolean' ? stored.fullscreen : DEFAULT_SETTINGS.fullscreen,
+      keyboardControls: typeof stored.keyboardControls === 'boolean' ? stored.keyboardControls : DEFAULT_SETTINGS.keyboardControls,
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function clampSetting(value: unknown, fallback: number) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.min(100, Math.round(value)))
+    : fallback;
+}
+
+function saveSettings(settings: PeerankiSettings) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  PeerankiAudio.applySettings();
+}
+
+// All sounds are synthesized locally, so no network or bundled audio is required.
+class PeerankiAudioSystem {
+  private context?: AudioContext;
+  private musicGain?: GainNode;
+  private effectsGain?: GainNode;
+  private musicTimer?: number;
+  private musicStep = 0;
+
+  private getContext() {
+    if (!this.context) {
+      this.context = new AudioContext();
+      this.musicGain = this.context.createGain();
+      this.effectsGain = this.context.createGain();
+      this.musicGain.connect(this.context.destination);
+      this.effectsGain.connect(this.context.destination);
+      this.applySettings();
+    }
+    return this.context;
+  }
+
+  applySettings() {
+    const settings = loadSettings();
+    const now = this.context?.currentTime ?? 0;
+    this.musicGain?.gain.setTargetAtTime(settings.musicVolume / 100 * 0.16, now, 0.04);
+    this.effectsGain?.gain.setTargetAtTime(settings.soundEffectsVolume / 100 * 0.22, now, 0.04);
+  }
+
+  startMusic() {
+    const context = this.getContext();
+    if (context.state === 'suspended') void context.resume().catch(() => undefined);
+    if (this.musicTimer !== undefined) return;
+    const notes = [220, 261.63, 329.63, 392, 329.63, 261.63, 196, 246.94, 293.66, 369.99, 440, 369.99, 196, 246.94, 293.66, 392];
+    const playNext = () => {
+      this.applySettings();
+      const frequency = notes[this.musicStep % notes.length];
+      this.musicStep += 1;
+      this.tone(frequency, 0.42, 0.065, this.musicGain, 'sine');
+      if (this.musicStep % 4 === 0) this.tone(frequency / 2, 0.75, 0.035, this.musicGain, 'triangle');
+    };
+    playNext();
+    this.musicTimer = window.setInterval(playNext, 480);
+  }
+
+  effect(name: 'click' | 'select' | 'shoot' | 'hit' | 'elimination' | 'victory') {
+    const context = this.getContext();
+    if (context.state === 'suspended') void context.resume().catch(() => undefined);
+    this.startMusic();
+    this.applySettings();
+    const patterns: Record<typeof name, number[]> = {
+      click: [620], select: [440, 660], shoot: [180, 110], hit: [520, 390],
+      elimination: [330, 220, 110], victory: [523.25, 659.25, 783.99, 1046.5],
+    };
+    const durations: Record<typeof name, number> = {
+      click: 0.07, select: 0.11, shoot: 0.13, hit: 0.14, elimination: 0.2, victory: 0.28,
+    };
+    patterns[name].forEach((frequency, index) => {
+      window.setTimeout(() => this.tone(frequency, durations[name], 0.65, this.effectsGain, name === 'shoot' ? 'sawtooth' : 'sine'), index * (name === 'victory' ? 120 : 75));
+    });
+  }
+
+  private tone(frequency: number, duration: number, volume: number, destination?: GainNode, type: OscillatorType = 'sine') {
+    const context = this.context;
+    if (!context || !destination || context.state !== 'running') return;
+    const oscillator = context.createOscillator();
+    const envelope = context.createGain();
+    const start = context.currentTime;
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, start);
+    envelope.gain.setValueAtTime(0.0001, start);
+    envelope.gain.exponentialRampToValueAtTime(volume, start + 0.015);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+    oscillator.connect(envelope);
+    envelope.connect(destination);
+    oscillator.start(start);
+    oscillator.stop(start + duration + 0.02);
+  }
+}
+
+const PeerankiAudio = new PeerankiAudioSystem();
+
+declare global {
+  interface Window {
+    peerankiDesktop?: {
+      setFullscreen: (fullscreen: boolean) => Promise<boolean>;
+      onFullscreenChange: (callback: (fullscreen: boolean) => void) => () => void;
+      quit: () => void;
+    };
+  }
+}
+
+const MIN_PLAYERS = 3;
+const MAX_PLAYERS = 10;
+const PLAYER_COUNTS = Array.from(
+  { length: MAX_PLAYERS - MIN_PLAYERS + 1 },
+  (_, index) => MIN_PLAYERS + index,
+);
+
 // Offline game state
 let offlineMode = false;
 let offlinePlayers: Player[] = [];
-let offlineMaxPlayers = 6;
+let offlineMaxPlayers = MIN_PLAYERS;
+let shootingDeadlineAt = '';
+let matchStartedAt = '';
+let matchRound = 1;
+let lastRoundMessage = '';
+let countingStartIndex = -1;
+let roundWinnerId = 0;
+let matchOver = false;
+let duelRound = 1;
+const processedOnlineActionNonces = new Set<string>();
 
 function createOfflinePlayers(
   playerName: string,
@@ -43,6 +273,18 @@ function createOfflinePlayers(
     sessionId: 'offline-human',
     connected: true,
     lastSeen: new Date().toISOString(),
+    weapons: ['gun'],
+    hasCollectedAllWeapons: false,
+    eliminationPoints: 0,
+    shieldDisabledRound: -1,
+    matchStartedAt: '',
+    matchRound: 1,
+    countingStartIndex: -1,
+    roundWinnerId: 0,
+    matchOver: false,
+    actionRequest: null,
+    duelChoice: null,
+    duelChoiceRequest: null,
   });
 
   for (let i = 2; i <= totalPlayers; i++) {
@@ -54,14 +296,26 @@ function createOfflinePlayers(
       sessionId: `offline-bot-${i}`,
       connected: true,
       lastSeen: new Date().toISOString(),
+      weapons: ['gun'],
+      hasCollectedAllWeapons: false,
+      eliminationPoints: 0,
+      shieldDisabledRound: -1,
+      matchStartedAt: '',
+      matchRound: 1,
+      countingStartIndex: -1,
+      roundWinnerId: 0,
+      matchOver: false,
+      actionRequest: null,
+      duelChoice: null,
+      duelChoiceRequest: null,
     });
   }
 
   return offlinePlayers;
 }
 
-const MIN_PLAYERS = 5;
 const COUNT_TO = 10;
+const ACTION_LIMIT_MS = 10_000;
 const COUNTING_SPEED = 200;
 const NEXT_ROUND_DELAY = 900;
 const HEARTBEAT_INTERVAL = 5000;
@@ -79,7 +333,6 @@ const previousRoomCleanup = cleanupPreviousSession();
 let heartbeatTimer: number | undefined;
 let cleanupTimer: number | undefined;
 
-const towerStages = ['🗼', '🗼🗼', '▰', '💥'];
 const stageNames = [
   'Big Tower',
   'Two Small Towers',
@@ -163,18 +416,47 @@ function createEmptyPlayer(id: number): Player {
     sessionId: '',
     connected: false,
     lastSeen: '',
+    weapons: ['gun'],
+    hasCollectedAllWeapons: false,
+    eliminationPoints: 0,
+    shieldDisabledRound: -1,
+    matchStartedAt,
+    matchRound,
+    countingStartIndex: -1,
+    roundWinnerId: 0,
+    matchOver: false,
+    actionRequest: null,
+    duelChoice: null,
+    duelChoiceRequest: null,
   };
 }
 
 
 function loadPlayersFromRoom(roomPlayers: unknown[]) {
   const byId = new Map<number, Player>();
+  const sharedDeadline = roomPlayers.find((player: any) =>
+    typeof player?.shooting_deadline_at === 'string' && player.shooting_deadline_at,
+  ) as Record<string, unknown> | undefined;
+  shootingDeadlineAt = typeof sharedDeadline?.shooting_deadline_at === 'string'
+    ? sharedDeadline.shooting_deadline_at
+    : '';
+  const sharedDuelRound = roomPlayers.find((player: any) =>
+    Number.isInteger(player?.duel_round) && player.duel_round > 0,
+  ) as Record<string, unknown> | undefined;
+  duelRound = typeof sharedDuelRound?.duel_round === 'number' ? sharedDuelRound.duel_round : 1;
 
   roomPlayers.forEach((rawPlayer: any) => {
     const id = Number(rawPlayer?.id);
 
     if (!Number.isInteger(id) || id < 1 || id > maxPlayers) {
       return;
+    }
+
+    if (typeof rawPlayer?.round_message === 'string' && rawPlayer.round_message) {
+      lastRoundMessage = rawPlayer.round_message;
+    }
+    if (MATCH_DURATIONS.includes(Number(rawPlayer?.match_duration_minutes) as (typeof MATCH_DURATIONS)[number])) {
+      matchDurationMinutes = Number(rawPlayer.match_duration_minutes) as (typeof MATCH_DURATIONS)[number];
     }
 
     byId.set(id, {
@@ -208,6 +490,23 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
         typeof rawPlayer?.last_seen === 'string'
           ? rawPlayer.last_seen
           : '',
+      weapons: normalizeWeapons(rawPlayer?.weapons),
+      hasCollectedAllWeapons: rawPlayer?.all_weapons_collected === true ||
+        WEAPON_ORDER.every((weapon) => normalizeWeapons(rawPlayer?.weapons).includes(weapon)),
+      eliminationPoints: Number.isInteger(rawPlayer?.elimination_points) && Number(rawPlayer.elimination_points) >= 0
+        ? Number(rawPlayer.elimination_points) : 0,
+      shieldDisabledRound: Number.isInteger(rawPlayer?.shield_disabled_round)
+        ? rawPlayer.shield_disabled_round : -1,
+      matchStartedAt: typeof rawPlayer?.match_started_at === 'string'
+        ? rawPlayer.match_started_at : '',
+      matchRound: Number.isInteger(rawPlayer?.match_round) && rawPlayer.match_round > 0
+        ? rawPlayer.match_round : 1,
+      countingStartIndex: Number.isInteger(rawPlayer?.counting_start_index) ? rawPlayer.counting_start_index : -1,
+      roundWinnerId: Number.isInteger(rawPlayer?.round_winner_id) ? rawPlayer.round_winner_id : 0,
+      matchOver: rawPlayer?.match_over === true,
+      actionRequest: normalizeOnlineAction(rawPlayer?.action_request),
+      duelChoice: normalizeRpsChoice(rawPlayer?.duel_choice),
+      duelChoiceRequest: normalizeDuelChoiceRequest(rawPlayer?.duel_choice_request),
     });
   });
 
@@ -221,6 +520,17 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
   }
 
   players = fixedPlayers;
+  const matchData = players.find((player) => player.matchStartedAt);
+  if (matchData) {
+    matchStartedAt = matchData.matchStartedAt;
+    matchRound = matchData.matchRound;
+  }
+  const sharedMatchData = players.find((player) => player.matchStartedAt);
+  if (sharedMatchData) {
+    countingStartIndex = sharedMatchData.countingStartIndex;
+    roundWinnerId = sharedMatchData.roundWinnerId;
+    matchOver = sharedMatchData.matchOver;
+  }
   findMyPlayerId();
 }
 
@@ -255,6 +565,22 @@ async function syncGameState(
       session_id: player.sessionId,
       connected: true,
       last_seen: player.lastSeen,
+      weapons: player.weapons,
+      all_weapons_collected: player.hasCollectedAllWeapons,
+      elimination_points: player.eliminationPoints,
+      shield_disabled_round: player.shieldDisabledRound,
+      match_started_at: matchStartedAt,
+      match_round: matchRound,
+      counting_start_index: countingStartIndex,
+      round_winner_id: roundWinnerId,
+      match_over: matchOver,
+      action_request: player.actionRequest,
+      duel_choice: player.duelChoice,
+      duel_choice_request: player.duelChoiceRequest,
+      duel_round: duelRound,
+      round_message: lastRoundMessage,
+      match_duration_minutes: matchDurationMinutes,
+      shooting_deadline_at: shootingDeadlineAt,
     }));
 
   await saveGameState(
@@ -406,7 +732,7 @@ function makeButton(
   backgroundColor = '#2878ff',
   fontSize = 24,
 ) {
-  return scene.add
+  const button = scene.add
     .text(x, y, label, {
       fontFamily: 'Arial',
       fontSize: `${fontSize}px`,
@@ -418,7 +744,32 @@ function makeButton(
       },
     })
     .setOrigin(0.5)
-    .setInteractive({ useHandCursor: true });
+    .setInteractive({ useHandCursor: true })
+    .on('pointerdown', () => PeerankiAudio.effect('click'));
+  button.on('pointerover', () => scene.tweens.add({ targets: button, scale: 1.06, duration: 100, ease: 'Quad.Out' }));
+  button.on('pointerout', () => scene.tweens.add({ targets: button, scale: 1, duration: 100, ease: 'Quad.Out' }));
+  button.on('pointerdown', () => scene.tweens.add({ targets: button, scale: 0.96, duration: 70, yoyo: true }));
+  return button;
+}
+
+function addMatchDurationPicker(scene: Phaser.Scene, x: number, y: number) {
+  scene.add.text(x, y - 27, 'MATCH TIME', {
+    fontFamily: 'Arial', fontSize: '16px', color: '#ffffff', fontStyle: 'bold',
+  }).setOrigin(0.5);
+  MATCH_DURATIONS.forEach((minutes, index) => {
+    const button = makeButton(scene, x + (index - 1.5) * 112, y + 12,
+      `${minutes} MIN`, minutes === matchDurationMinutes ? '#20a060' : '#444c55', 15);
+    button.setPadding(16, 9, 16, 9);
+    button.on('pointerdown', () => {
+      matchDurationMinutes = minutes;
+      scene.children.list.forEach((child) => {
+        if (child instanceof Phaser.GameObjects.Text && child.getData('matchDuration') !== undefined) {
+          child.setStyle({ backgroundColor: Number(child.getData('matchDuration')) === minutes ? '#20a060' : '#444c55' });
+        }
+      });
+    });
+    button.setData('matchDuration', minutes);
+  });
 }
 
 class MenuScene extends Phaser.Scene {
@@ -426,24 +777,24 @@ class MenuScene extends Phaser.Scene {
     super('MenuScene');
   }
 
+  preload() {
+    this.load.image('peeranki-logo', 'assets/peeranki-logo.png');
+  }
+
   create() {
     removePeerankiInputs();
+    PeerankiAudio.startMusic();
 
     const { width, height } = this.scale;
 
-    this.add
-      .text(width / 2, height * 0.23, 'പീരങ്കി', {
-        fontFamily: 'Arial',
-        fontSize: '64px',
-        color: '#ffffff',
-        fontStyle: 'bold',
-      })
-      .setOrigin(0.5);
+    const glow = this.add.circle(width / 2, height * 0.23, 112, 0x2878ff, 0.12);
+    this.tweens.add({ targets: glow, alpha: 0.24, scale: 1.12, duration: 1500, yoyo: true, repeat: -1 });
+    this.add.image(width / 2, height * 0.23, 'peeranki-logo').setDisplaySize(190, 190);
 
     this.add
       .text(
         width / 2,
-        height * 0.33,
+        height * 0.385,
         'Traditional Kerala Game',
         {
           fontFamily: 'Arial',
@@ -478,10 +829,93 @@ offlineButton.on('pointerdown', () => {
 onlineButton.on('pointerdown', () => {
   this.scene.start('OnlineModeScene');
 });
+
+    const settingsButton = makeButton(
+      this,
+      width / 2,
+      height * 0.75,
+      'SETTINGS',
+      '#444c55',
+      22,
+    );
+
+    settingsButton.on('pointerdown', () => {
+      this.scene.start('SettingsScene');
+    });
+
+    this.add.text(width / 2, height * 0.88, 'EXIT', {
+      fontFamily: 'Arial', fontSize: '18px', color: '#aab4c0', backgroundColor: '#252d36', padding: { x: 28, y: 12 },
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).on('pointerdown', () => {
+      PeerankiAudio.effect('click');
+      if (window.peerankiDesktop) window.peerankiDesktop.quit();
+      else window.close();
+    });
+  }
+}
+
+class SettingsScene extends Phaser.Scene {
+  constructor() {
+    super('SettingsScene');
+  }
+
+  create() {
+    removePeerankiInputs();
+    const { width, height } = this.scale;
+    const settings = loadSettings();
+
+    this.add.text(width / 2, 75, 'SETTINGS', {
+      fontFamily: 'Arial', fontSize: '42px', color: '#ffffff', fontStyle: 'bold',
+    }).setOrigin(0.5);
+
+    const redraw = () => this.scene.restart();
+    const addVolumeSetting = (label: string, key: 'musicVolume' | 'soundEffectsVolume', y: number) => {
+      this.add.text(width / 2, y - 34, label, {
+        fontFamily: 'Arial', fontSize: '20px', color: '#ffffff',
+      }).setOrigin(0.5);
+      const minus = makeButton(this, width / 2 - 130, y, '−', '#444c55', 20);
+      const value = this.add.text(width / 2, y, `${settings[key]}%`, {
+        fontFamily: 'Arial', fontSize: '22px', color: '#ffffff',
+      }).setOrigin(0.5);
+      const plus = makeButton(this, width / 2 + 130, y, '+', '#444c55', 20);
+      minus.on('pointerdown', () => { settings[key] = Math.max(0, settings[key] - 10); saveSettings(settings); redraw(); });
+      plus.on('pointerdown', () => { settings[key] = Math.min(100, settings[key] + 10); saveSettings(settings); redraw(); });
+      void value;
+    };
+
+    addVolumeSetting('MUSIC VOLUME', 'musicVolume', height * 0.25);
+    addVolumeSetting('SOUND EFFECTS VOLUME', 'soundEffectsVolume', height * 0.40);
+
+    const fullscreen = makeButton(this, width / 2, height * 0.55,
+      `FULLSCREEN: ${settings.fullscreen ? 'ON' : 'OFF'}`, '#444c55', 18);
+    fullscreen.on('pointerdown', async () => {
+      settings.fullscreen = !settings.fullscreen;
+      saveSettings(settings);
+      if (window.peerankiDesktop) {
+        await window.peerankiDesktop.setFullscreen(settings.fullscreen);
+      } else if (settings.fullscreen) {
+        await document.documentElement.requestFullscreen?.();
+      } else if (document.fullscreenElement) {
+        await document.exitFullscreen?.();
+      }
+      redraw();
+    });
+
+    const keyboard = makeButton(this, width / 2, height * 0.68,
+      `KEYBOARD CONTROLS: ${settings.keyboardControls ? 'ON' : 'OFF'}`, '#444c55', 18);
+    keyboard.on('pointerdown', () => {
+      settings.keyboardControls = !settings.keyboardControls;
+      saveSettings(settings);
+      redraw();
+    });
+
+    const back = this.add.text(width / 2, height * 0.84, 'BACK', {
+      fontFamily: 'Arial', fontSize: '18px', color: '#bbbbbb',
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    back.on('pointerdown', () => this.scene.start('MenuScene'));
   }
 }
 class OfflineSetupScene extends Phaser.Scene {
-  private selectedPlayers = 6;
+  private selectedPlayers = MIN_PLAYERS;
   
 
   constructor() {
@@ -555,19 +989,19 @@ nameInput.style.zIndex = '10000';
       })
       .setOrigin(0.5);
 
-    const playerCounts = [6, 7, 8, 9, 10];
+    const playerCounts = PLAYER_COUNTS;
 
     playerCounts.forEach((count, index) => {
-      const row = index < 3 ? 0 : 1;
-      const column = row === 0 ? index : index - 3;
+      const columns = 4;
+      const row = Math.floor(index / columns);
+      const column = index % columns;
 
       const x =
         width / 2 +
-        (column - (row === 0 ? 1 : 0.5)) * 100;
+        (column - (columns - 1) / 2) * 90;
 
       const y =
-        height * 0.58 +
-        row * 75;
+        height * 0.55 + row * 58;
 
       const button = makeButton(
         this,
@@ -603,10 +1037,12 @@ nameInput.style.zIndex = '10000';
       
     });
 
+    addMatchDurationPicker(this, width / 2, height * 0.73);
+
     const startButton = makeButton(
       this,
       width / 2,
-      height * 0.79,
+      height * 0.88,
       'START GAME',
       '#20a060',
       22,
@@ -634,7 +1070,7 @@ nameInput.style.zIndex = '10000';
 });
 
     const backButton = this.add
-      .text(width / 2, height * 0.91, 'BACK', {
+      .text(width / 2, height * 0.96, 'BACK', {
         fontFamily: 'Arial',
         fontSize: '18px',
         color: '#bbbbbb',
@@ -662,6 +1098,8 @@ class OnlineModeScene extends Phaser.Scene {
 
     const { width, height } = this.scale;
 
+    addMatchDurationPicker(this, width / 2, height * 0.30);
+
     this.add
       .text(width / 2, 90, 'ONLINE PLAY', {
         fontFamily: 'Arial',
@@ -674,7 +1112,7 @@ class OnlineModeScene extends Phaser.Scene {
     const friendsButton = makeButton(
       this,
       width / 2,
-      height * 0.40,
+      height * 0.48,
       'PLAY WITH FRIENDS',
       '#2878ff',
       22,
@@ -683,14 +1121,14 @@ class OnlineModeScene extends Phaser.Scene {
     const randomButton = makeButton(
       this,
       width / 2,
-      height * 0.55,
+      height * 0.63,
       'RANDOM PLAYERS',
       '#444c55',
       22,
     );
 
     const backButton = this.add
-      .text(width / 2, height * 0.76, 'BACK', {
+      .text(width / 2, height * 0.82, 'BACK', {
         fontFamily: 'Arial',
         fontSize: '18px',
         color: '#bbbbbb',
@@ -782,7 +1220,7 @@ class PlayerCountScene extends Phaser.Scene {
         this,
         this.nameInput,
         450,
-        360,
+        350,
       );
     }
   };
@@ -807,7 +1245,7 @@ class PlayerCountScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        75,
+        this.mode === 'random' ? 52 : 75,
         this.mode === 'private'
           ? 'CHOOSE PLAYERS'
           : 'RANDOM MATCH',
@@ -823,7 +1261,7 @@ class PlayerCountScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        125,
+        this.mode === 'random' ? 91 : 125,
         this.mode === 'private'
           ? 'Choose the number of players for your room.'
           : 'Choose the number of players for random matchmaking.',
@@ -837,7 +1275,7 @@ class PlayerCountScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     const selectedText = this.add
-      .text(width / 2, 185, '6 PLAYERS', {
+      .text(width / 2, this.mode === 'random' ? 135 : 185, `${MIN_PLAYERS} PLAYERS`, {
         fontFamily: 'Arial',
         fontSize: '26px',
         color: '#4da3ff',
@@ -845,14 +1283,17 @@ class PlayerCountScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    const choices = [6, 7, 8, 9, 10];
+    const choices = PLAYER_COUNTS;
     const choiceButtons: Phaser.GameObjects.Text[] = [];
 
     choices.forEach((count, index) => {
-      const x = 210 + index * 120;
+      const x = 230 + (index % 4) * 145;
+      const y = this.mode === 'random'
+        ? 195 + Math.floor(index / 4) * 52
+        : 245 + Math.floor(index / 4) * 65;
 
       const button = this.add
-        .text(x, 250, String(count), {
+        .text(x, y, String(count), {
           fontFamily: 'Arial',
           fontSize: '24px',
           color: '#ffffff',
@@ -910,7 +1351,7 @@ class PlayerCountScene extends Phaser.Scene {
         this,
         this.nameInput,
         450,
-        360,
+        350,
       );
 
       window.addEventListener(
@@ -922,7 +1363,7 @@ class PlayerCountScene extends Phaser.Scene {
     const actionButton = makeButton(
       this,
       width / 2,
-      this.mode === 'random' ? 470 : 400,
+      this.mode === 'random' ? 430 : 400,
       this.mode === 'private'
         ? 'CREATE ROOM'
         : 'FIND MATCH',
@@ -931,7 +1372,7 @@ class PlayerCountScene extends Phaser.Scene {
     const backButton = this.add
       .text(
         width / 2,
-        this.mode === 'random' ? 555 : 500,
+        this.mode === 'random' ? 495 : 500,
         'BACK',
         {
           fontFamily: 'Arial',
@@ -1511,9 +1952,17 @@ class LobbyScene extends Phaser.Scene {
     }
 
     this.starting = true;
+    processedOnlineActionNonces.clear();
     this.startButton?.disableInteractive();
     this.startButton?.setText('STARTING...');
 
+    matchStartedAt = new Date().toISOString();
+    matchRound = 1;
+    duelRound = 1;
+    countingStartIndex = -1;
+    roundWinnerId = 0;
+    matchOver = false;
+    lastRoundMessage = '';
     const cleanPlayers = connected.map(
       (player) => ({
         id: player.id,
@@ -1523,6 +1972,21 @@ class LobbyScene extends Phaser.Scene {
         session_id: player.sessionId,
         connected: true,
         last_seen: player.lastSeen,
+        weapons: ['gun'],
+        all_weapons_collected: false,
+        elimination_points: 0,
+        shield_disabled_round: -1,
+        match_started_at: matchStartedAt,
+        match_round: 1,
+        counting_start_index: -1,
+        round_winner_id: 0,
+        match_over: false,
+        action_request: null,
+        duel_choice: null,
+        duel_choice_request: null,
+        duel_round: 1,
+        round_message: '',
+        match_duration_minutes: matchDurationMinutes,
       }),
     );
 
@@ -1582,6 +2046,14 @@ class GameScene extends Phaser.Scene {
   private countText?: Phaser.GameObjects.Text;
   private shooterText?: Phaser.GameObjects.Text;
   private leaveButton?: Phaser.GameObjects.Text;
+  private matchText?: Phaser.GameObjects.Text;
+  private weaponText?: Phaser.GameObjects.Text;
+  private weaponImage?: Phaser.GameObjects.Image;
+  private previousRoundText?: Phaser.GameObjects.Text;
+  private matchTimer?: Phaser.Time.TimerEvent;
+  private actionTimer?: Phaser.Time.TimerEvent;
+  private selectedWeapon: WeaponType = 'gun';
+  private pendingDoubleTarget = -1;
 
  private currentShooter = -1;
 private startIndex = -1;
@@ -1594,12 +2066,42 @@ private nextStartIndex = -1;
   private applyingRemoteState = false;
   private initialized = false;
   private gameFinished = false;
+  private victoryPlayed = false;
+  private roundPhase: 'counting' | 'shooting' | 'duel' | 'waiting' | 'finished' = 'waiting';
+  private duelActive = false;
+  private resolvingDuel = false;
+  private processingDuelChoices = false;
+  private duelUi: Phaser.GameObjects.GameObject[] = [];
+  private duelPrompt?: Phaser.GameObjects.Text;
+  private duelBotTimer?: Phaser.Time.TimerEvent;
 
   constructor() {
     super('GameScene');
   }
 
+  preload() {
+    this.load.image('tower_big', 'assets/towers/tower_big.png');
+    this.load.image('tower_small', 'assets/towers/tower_small.png');
+    this.load.image('tower_one', 'assets/towers/tower_one.png');
+    this.load.image('tower_destroyed', 'assets/towers/tower_destroyed.png');
+    WEAPON_ORDER.forEach((weapon) => this.load.image(`weapon-${weapon}`, `assets/weapons/${weapon === 'doublePeeranki' ? 'double_peeranki' : weapon}.png`));
+  }
+
   create() {
+    this.gameFinished = false;
+    this.victoryPlayed = false;
+    this.duelActive = false;
+    this.resolvingDuel = false;
+    this.processingDuelChoices = false;
+    this.clearDuelControls();
+    this.roundPhase = 'waiting';
+    this.currentShooter = -1;
+    this.startIndex = -1;
+    this.countNumber = 0;
+    this.nextStartIndex = -1;
+    this.pendingDoubleTarget = -1;
+    this.selectedWeapon = 'gun';
+    shootingDeadlineAt = '';
     if (offlineMode) {
   console.log('Offline mode active');
 }
@@ -1622,14 +2124,7 @@ if (offlineMode) {
   this.renderPlayers();
 }
 
-    this.add
-      .text(width / 2, 35, 'പീരങ്കി', {
-        fontFamily: 'Arial',
-        fontSize: '40px',
-        color: '#ffffff',
-        fontStyle: 'bold',
-      })
-      .setOrigin(0.5);
+    this.add.image(width / 2, 35, 'peeranki-logo').setDisplaySize(52, 52);
 
     this.shooterText = this.add
       .text(width / 2, 76, '', {
@@ -1647,6 +2142,23 @@ if (offlineMode) {
         color: '#bbbbbb',
       })
       .setOrigin(0.5);
+
+    this.matchText = this.add.text(width / 2, 135, `MATCH ${String(matchDurationMinutes).padStart(2, '0')}:00 • ROUND 1`, {
+      fontFamily: 'Arial', fontSize: '23px', color: '#f2cf66', fontStyle: 'bold',
+    }).setOrigin(0.5);
+
+    this.previousRoundText = this.add.text(width / 2, 169, '', {
+      fontFamily: 'Arial', fontSize: '14px', color: '#f2cf66', fontStyle: 'bold',
+    }).setOrigin(0.5);
+    const previousWeapon = makeButton(this, width / 2 - 155, height - 92, '‹', '#444c55', 15);
+    this.weaponImage = this.add.image(width / 2 - 94, height - 92, 'weapon-gun').setDisplaySize(46, 46);
+    this.weaponText = this.add.text(width / 2 + 22, height - 92, '', {
+      fontFamily: 'Arial', fontSize: '14px', color: '#ffffff', fontStyle: 'bold',
+    }).setOrigin(0.5);
+    const nextWeapon = makeButton(this, width / 2 + 155, height - 92, '›', '#444c55', 15);
+    previousWeapon.on('pointerdown', () => this.cycleWeapon(-1));
+    nextWeapon.on('pointerdown', () => this.cycleWeapon(1));
+    this.refreshWeaponPicker();
 
     this.countText = this.add
       .text(width / 2, height - 35, '', {
@@ -1671,17 +2183,44 @@ if (offlineMode) {
       async () => {
         this.leaveButton?.disableInteractive();
         this.statusText?.setText('Leaving game...');
-        await leaveCurrentRoom();
-        this.scene.start('OnlineModeScene');
+        if (offlineMode) {
+          this.scene.start('OfflineSetupScene');
+        } else {
+          await leaveCurrentRoom();
+          this.scene.start('OnlineModeScene');
+        }
       },
     );
 
-    if (offlineMode) {
-  this.statusText?.setText('Offline game ready!');
+    if (loadSettings().keyboardControls) {
+      this.add.text(width / 2, height - 12, 'Keyboard: press 1–9 (0 = player 10) to choose a target', {
+        fontFamily: 'Arial', fontSize: '12px', color: '#777777',
+      }).setOrigin(0.5, 1);
+      this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
+        const index = event.key === '0' ? 9 : Number(event.key) - 1;
+        if (Number.isInteger(index) && index >= 0 && index < maxPlayers) {
+          this.shootPlayer(index);
+        }
+      });
+    }
 
-  this.time.delayedCall(500, () => {
-    this.startCounting();
+    if (offlineMode) {
+  matchStartedAt = new Date().toISOString();
+  matchRound = 1;
+  duelRound = 1;
+  lastRoundMessage = '';
+  matchOver = false;
+  players.forEach((player) => {
+    player.weapons = ['gun']; player.shieldDisabledRound = -1;
+    player.hasCollectedAllWeapons = false;
+    player.eliminationPoints = 0;
+    player.duelChoice = null; player.duelChoiceRequest = null;
+    player.matchStartedAt = matchStartedAt; player.matchRound = matchRound;
   });
+  this.statusText?.setText('Offline game ready!');
+  this.refreshPreviousRoundText();
+  this.startMatchClock();
+  this.time.delayedCall(500, () => this.startCounting());
 } else {
   this.startRealtimeSync();
   void this.initializeGame();
@@ -1714,6 +2253,9 @@ if (offlineMode) {
 
     this.renderPlayers();
     this.initialized = true;
+    this.startMatchClock();
+    this.refreshWeaponPicker();
+    this.refreshPreviousRoundText();
 
     if (room.game_status === 'finished') {
       this.showFinishedState();
@@ -1723,7 +2265,8 @@ if (offlineMode) {
     if (
       room.game_status === 'counting' ||
       room.game_status === 'shooting' ||
-      room.game_status === 'shot'
+      room.game_status === 'shot' ||
+      room.game_status === 'duel'
     ) {
       this.applyRemoteGameState(room);
       return;
@@ -1746,11 +2289,12 @@ if (offlineMode) {
 
     const columns = maxPlayers <= 6 ? 3 : 5;
     const rows = Math.ceil(maxPlayers / columns);
-    const startX = 170;
-    const endX = 730;
+    const startX = columns <= 3 ? 170 : 70;
+    const endX = columns <= 3 ? 730 : 830;
+    const cardWidth = columns <= 3 ? 180 : 140;
     const xStep =
   (endX - startX) / (columns - 1);
-    const startY = rows <= 2 ? 225 : 175;
+    const startY = rows <= 2 ? 270 : 245;
     const yStep = rows <= 2 ? 220 : 170;
 
     players.forEach((_, index) => {
@@ -1774,8 +2318,8 @@ if (offlineMode) {
       const background = this.add.rectangle(
         0,
         0,
-        180,
-        135,
+        cardWidth,
+        160,
         0x1b2229,
       );
 
@@ -1794,15 +2338,10 @@ if (offlineMode) {
         })
         .setOrigin(0.5);
 
-      const tower = this.add
-        .text(0, -3, '', {
-          fontFamily: 'Arial',
-          fontSize: '34px',
-        })
-        .setOrigin(0.5);
+      const tower = this.add.container(0, -3);
 
       const stage = this.add
-        .text(0, 38, '', {
+        .text(0, 36, '', {
           fontFamily: 'Arial',
           fontSize: '12px',
           color: '#aaaaaa',
@@ -1810,12 +2349,13 @@ if (offlineMode) {
         .setOrigin(0.5);
 
       const slot = this.add
-        .text(0, 60, '', {
+        .text(0, 74, '', {
           fontFamily: 'Arial',
-          fontSize: '11px',
-          color: '#777777',
+          fontSize: '10px',
+          color: '#f2cf66',
         })
         .setOrigin(0.5);
+      const inventory = this.add.container(0, 55);
 
       container.add([
         background,
@@ -1823,15 +2363,16 @@ if (offlineMode) {
         tower,
         stage,
         slot,
+        inventory,
       ]);
 
-      container.setSize(180, 135);
+      container.setSize(cardWidth, 160);
       container.setInteractive(
         new Phaser.Geom.Rectangle(
-          -90,
-          -67,
-          180,
-          134,
+          -cardWidth / 2,
+          -78,
+          cardWidth,
+          156,
         ),
         Phaser.Geom.Rectangle.Contains,
       );
@@ -1840,6 +2381,7 @@ if (offlineMode) {
         'pointerdown',
         () => {
           container.setScale(0.96);
+          PeerankiAudio.effect('select');
           this.shootPlayer(index);
         },
       );
@@ -1871,11 +2413,13 @@ if (offlineMode) {
     const name =
       container.list[1] as Phaser.GameObjects.Text;
     const tower =
-      container.list[2] as Phaser.GameObjects.Text;
+      container.list[2] as Phaser.GameObjects.Container;
     const stage =
       container.list[3] as Phaser.GameObjects.Text;
     const slot =
       container.list[4] as Phaser.GameObjects.Text;
+    const inventory =
+      container.list[5] as Phaser.GameObjects.Container;
 
     name.setText(
       player.connected
@@ -1883,11 +2427,79 @@ if (offlineMode) {
         : `Player ${player.id}`,
     );
 
-    tower.setText(
-      player.connected
-        ? towerStages[player.stage]
-        : '—',
-    );
+    const previousStage = tower.getData('renderedStage') as number | undefined;
+    const previousConnected = tower.getData('renderedConnected') as boolean | undefined;
+    const stageChanged = previousStage !== undefined && previousConnected === true &&
+      player.connected && previousStage !== player.stage;
+    if (previousStage !== player.stage || previousConnected !== player.connected) {
+      const oldVisuals = [...tower.list];
+      if (!stageChanged) {
+        tower.removeAll(true);
+      }
+
+      const newVisuals: (Phaser.GameObjects.Image | Phaser.GameObjects.Text)[] = [];
+      if (!player.connected) {
+        newVisuals.push(this.add.text(0, 0, '—', {
+          fontFamily: 'Arial', fontSize: '28px', color: '#aaaaaa',
+        }).setOrigin(0.5));
+      } else if (player.stage === 0) {
+        newVisuals.push(this.add.image(0, 0, 'tower_big').setDisplaySize(64, 64));
+      } else if (player.stage === 1) {
+        newVisuals.push(this.add.image(0, 0, 'tower_small').setDisplaySize(58, 58));
+      } else if (player.stage === 2) {
+        newVisuals.push(this.add.image(0, 0, 'tower_one').setDisplaySize(58, 58));
+      } else {
+        newVisuals.push(this.add.image(0, 0, 'tower_destroyed').setDisplaySize(58, 58));
+      }
+      tower.add(newVisuals);
+      tower.setData('renderedStage', player.stage);
+      tower.setData('renderedConnected', player.connected);
+
+      if (stageChanged) {
+        const eliminated = player.stage >= 3;
+        const targetScaleX = newVisuals[0]?.scaleX ?? 1;
+        const targetScaleY = newVisuals[0]?.scaleY ?? 1;
+        newVisuals.forEach((visual) => {
+          visual.setAlpha(0);
+          visual.setScale(targetScaleX * 0.72, targetScaleY * 0.72);
+        });
+        const impact = this.add.circle(0, 0, eliminated ? 23 : 16,
+          eliminated ? 0xff5b35 : 0xffd166, eliminated ? 0.55 : 0.4)
+          .setStrokeStyle(eliminated ? 3 : 2, eliminated ? 0xffd166 : 0xffffff)
+          .setDepth(-1);
+        tower.addAt(impact, 0);
+        this.tweens.killTweensOf(tower);
+        this.tweens.add({
+          targets: tower,
+          x: { from: - (eliminated ? 9 : 5), to: eliminated ? 9 : 5 },
+          scale: eliminated ? 1.2 : 1.1,
+          duration: eliminated ? 65 : 55,
+          yoyo: true,
+          repeat: eliminated ? 3 : 2,
+          onComplete: () => {
+            tower.setX(0);
+            tower.setScale(1);
+            oldVisuals.forEach((visual) => visual.destroy());
+            this.tweens.add({
+              targets: newVisuals,
+              alpha: 1,
+              scaleX: targetScaleX,
+              scaleY: targetScaleY,
+              duration: eliminated ? 240 : 180,
+              ease: 'Back.Out',
+              onComplete: () => newVisuals.forEach((visual) => visual.setScale(targetScaleX, targetScaleY)),
+            });
+          },
+        });
+        this.tweens.add({
+          targets: impact,
+          scale: eliminated ? 2.2 : 1.7,
+          alpha: 0,
+          duration: eliminated ? 330 : 220,
+          onComplete: () => impact.destroy(),
+        });
+      }
+    }
 
     stage.setText(
       player.connected
@@ -1895,11 +2507,16 @@ if (offlineMode) {
         : 'Empty',
     );
 
-    slot.setText(
-      player.connected
-        ? `Player ${player.id}`
-        : 'Available slot',
-    );
+    const visibleWeapons = player.weapons.filter((weapon) => weapon !== 'shield' || player.shieldDisabledRound !== matchRound);
+    inventory.removeAll(true);
+    if (player.connected) {
+      const iconStep = 25;
+      visibleWeapons.forEach((weapon, iconIndex) => {
+        inventory.add(this.add.image((iconIndex - (visibleWeapons.length - 1) / 2) * iconStep, 0, `weapon-${weapon}`).setDisplaySize(23, 23));
+      });
+    }
+    slot.setText(player.connected ? `⭐ ${player.eliminationPoints} elimination point${player.eliminationPoints === 1 ? '' : 's'}` : 'Available slot');
+    slot.setStyle({ fontSize: '10px', color: '#f2cf66', align: 'center' });
 
     container.setAlpha(
       player.connected
@@ -1919,6 +2536,12 @@ if (offlineMode) {
         ? 0x4da3ff
         : 0x444c55,
     );
+    this.tweens.killTweensOf(container);
+    if (index === this.currentShooter && player.connected && player.alive) {
+      this.tweens.add({ targets: container, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
+    } else {
+      container.setScale(1);
+    }
 
     container.setInteractive(
       player.connected && player.alive,
@@ -1963,18 +2586,35 @@ if (offlineMode) {
 
     if (Array.isArray(gameState.players)) {
       loadPlayersFromRoom(gameState.players);
+      this.refreshWeaponPicker();
 
       if (this.initialized) {
         this.renderPlayers();
       }
     }
 
+    if (gameState.game_status === 'finished' || matchOver) {
+      this.roundPhase = 'finished';
+      this.countingTimer?.remove(false);
+      this.countingTimer = undefined;
+      this.nextRoundTimer?.remove(false);
+      this.nextRoundTimer = undefined;
+      this.showFinishedState();
+      return;
+    }
+
     if (
       typeof gameState.current_shooter === 'number'
     ) {
-      this.currentShooter = Number(
+      const nextShooter = Number(
         gameState.current_shooter,
       );
+      if (nextShooter !== this.currentShooter && gameState.game_status === 'shooting') {
+        PeerankiAudio.effect('select');
+      }
+      this.currentShooter = nextShooter;
+    } else if (gameState.current_shooter === null) {
+      this.currentShooter = -1;
     }
 
     const remoteCount = Number(
@@ -1985,9 +2625,36 @@ if (offlineMode) {
       this.countNumber = remoteCount;
     }
 
+    if (gameState.game_status === 'duel') {
+      this.countingTimer?.remove(false);
+      this.countingTimer = undefined;
+      this.nextRoundTimer?.remove(false);
+      this.nextRoundTimer = undefined;
+      this.stopActionClock();
+      shootingDeadlineAt = '';
+      this.duelActive = true;
+      this.roundPhase = 'duel';
+      this.shooterText?.setText('⚔️ Rock–Paper–Scissors duel');
+      this.statusText?.setText('Both players choose at the same time.');
+      this.renderDuelControls();
+      if (amHost()) void this.processPendingDuelChoices();
+      return;
+    }
+
+    if (this.duelActive) {
+      this.duelActive = false;
+      this.duelBotTimer?.remove(false);
+      this.duelBotTimer = undefined;
+      this.clearDuelControls();
+    }
+
+    if (amHost()) void this.processPendingAction();
+
     if (
       gameState.game_status === 'counting'
     ) {
+      this.stopActionClock();
+      this.roundPhase = 'counting';
       this.countText?.setText(
         `Count ${this.countNumber} / ${COUNT_TO}`,
       );
@@ -2004,11 +2671,19 @@ if (offlineMode) {
     if (
       gameState.game_status === 'shooting'
     ) {
+      this.roundPhase = 'shooting';
+      if (!shootingDeadlineAt && amHost()) {
+        shootingDeadlineAt = new Date(Date.now() + ACTION_LIMIT_MS).toISOString();
+        void syncGameState(this.currentShooter, COUNT_TO, 'shooting');
+      }
+      this.startActionClock();
       const shooter =
         players[this.currentShooter];
 
       this.countText?.setText(
-        `Count ${COUNT_TO} / ${COUNT_TO}`,
+        shootingDeadlineAt
+          ? `ACTION ${Math.ceil(Math.max(0, Date.parse(shootingDeadlineAt) - Date.now()) / 1000)}s • choose weapon + target(s)`
+          : `Count ${COUNT_TO} / ${COUNT_TO}`,
       );
       this.shooterText?.setText(
         shooter
@@ -2017,7 +2692,7 @@ if (offlineMode) {
       );
       this.statusText?.setText(
         myPlayerId === this.currentShooter + 1
-          ? 'You are the shooter — choose a player.'
+          ? 'Choose a weapon and target(s) before time runs out.'
           : 'Waiting for the shooter...',
       );
       this.markShooter();
@@ -2027,6 +2702,8 @@ if (offlineMode) {
     if (
       gameState.game_status === 'shot'
     ) {
+      this.stopActionClock();
+      this.roundPhase = 'waiting';
       this.statusText?.setText(
         'Shot recorded. Next round...',
       );
@@ -2048,17 +2725,33 @@ if (offlineMode) {
 
         this.nextStartIndex = -1;
 
-        if (!this.isGameFinished()) {
-          this.startCounting(
-            nextStartIndex >= 0
-              ? nextStartIndex
-              : undefined,
-          );
+        if (this.isGameFinished()) {
+          void this.finishRound();
+        } else {
+          this.startCounting(nextStartIndex >= 0 ? nextStartIndex : undefined);
         }
       },
     );
 }
 
+      return;
+    }
+
+    if (gameState.game_status === 'round_won') {
+      this.stopActionClock();
+      this.duelActive = false;
+      this.clearDuelControls();
+      this.roundPhase = 'waiting';
+      this.refreshPreviousRoundText();
+      this.statusText?.setText(lastRoundMessage || 'Round winner advances!');
+      this.shooterText?.setText(lastRoundMessage || 'Round winner advances!');
+      this.markShooter();
+      if (amHost() && !this.nextRoundTimer) {
+        this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
+          this.nextRoundTimer = undefined;
+          this.startCounting();
+        });
+      }
       return;
     }
 
@@ -2072,13 +2765,178 @@ if (offlineMode) {
       this.showFinishedState();
     }
   }
-private startCounting(forcedStartIndex?: number) {
+  private beginDuel() {
+    if (this.duelActive || this.gameFinished) return;
+    this.duelActive = true;
+    this.resolvingDuel = false;
+    duelRound = 1;
+    this.currentShooter = -1;
+    this.roundPhase = 'duel';
+    this.countingTimer?.remove(false);
+    this.countingTimer = undefined;
+    this.stopActionClock();
+    shootingDeadlineAt = '';
+    players.forEach((player) => {
+      player.duelChoice = null;
+      player.duelChoiceRequest = null;
+    });
+    this.shooterText?.setText('⚔️ Rock–Paper–Scissors duel');
+    this.statusText?.setText('Both remaining players choose at the same time.');
+    this.countText?.setText(`DUEL ${duelRound}`);
+    this.renderDuelControls();
+    if (!offlineMode) void syncGameState(null, 0, 'duel');
+    else this.scheduleOfflineBotChoices();
+  }
+
+  private clearDuelControls() {
+    this.duelUi.forEach((object) => object.destroy());
+    this.duelUi = [];
+    this.duelPrompt = undefined;
+  }
+
+  private renderDuelControls() {
+    this.clearDuelControls();
+    if (!this.duelActive || this.gameFinished) return;
+    const { width, height } = this.scale;
+    const contestants = activePlayers().filter((player) => player.alive);
+    const localId = offlineMode ? 1 : myPlayerId;
+    const localPlayer = players[localId - 1];
+    const mayChoose = contestants.length === 2 && localPlayer?.alive && contestants.some((player) => player.id === localId);
+    const hasSubmitted = Boolean(localPlayer?.duelChoice || localPlayer?.duelChoiceRequest);
+
+    this.duelPrompt = this.add.text(width / 2, height - 184,
+      `DUEL ${duelRound} • ${mayChoose && !hasSubmitted ? 'Choose now' : hasSubmitted ? 'Choice locked — waiting for the other player' : 'Waiting for duel choices'}`,
+      { fontFamily: 'Arial', fontSize: '19px', color: '#f2cf66', fontStyle: 'bold', align: 'center' }).setOrigin(0.5).setDepth(50);
+    this.duelUi.push(this.duelPrompt);
+    if (mayChoose && !hasSubmitted) {
+      const buttonY = height - 112;
+      const buttonXs = [width / 2 - 175, width / 2, width / 2 + 175];
+      RPS_CHOICES.forEach((choice, index) => {
+        const button = makeButton(this, buttonXs[index], buttonY, RPS_LABELS[choice], '#34485c', 18);
+        button.setPadding(18, 14, 18, 14).setDepth(50);
+        button.on('pointerdown', () => this.submitDuelChoice(choice));
+        this.duelUi.push(button);
+      });
+    }
+  }
+
+  private submitDuelChoice(choice: RpsChoice) {
+    if (!this.duelActive || this.gameFinished) return;
+    const playerId = offlineMode ? 1 : myPlayerId;
+    const player = players[playerId - 1];
+    const aliveContestants = activePlayers().filter((candidate) => candidate.alive);
+    if (!player?.alive || !aliveContestants.some((candidate) => candidate.id === playerId) ||
+        player.duelChoice || player.duelChoiceRequest) return;
+
+    if (offlineMode) {
+      player.duelChoice = choice;
+      this.statusText?.setText(`Your ${RPS_LABELS[choice]} choice is locked. Waiting for the other player...`);
+      this.renderDuelControls();
+      this.scheduleOfflineBotChoices();
+      void this.resolveDuelIfReady();
+      return;
+    }
+
+    player.duelChoiceRequest = {
+      nonce: `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      playerId,
+      round: duelRound,
+      choice,
+    };
+    this.statusText?.setText('Choice sent. Waiting for both players...');
+    this.renderDuelControls();
+    void syncGameState(null, 0, 'duel').then(() => {
+      if (amHost()) return this.processPendingDuelChoices();
+    });
+  }
+
+  private scheduleOfflineBotChoices() {
+    if (!offlineMode || !this.duelActive || this.duelBotTimer) return;
+    const missingBots = activePlayers().filter((player) => player.alive && player.id !== 1 && !player.duelChoice);
+    if (missingBots.length === 0) return;
+    this.duelBotTimer = this.time.delayedCall(420, () => {
+      this.duelBotTimer = undefined;
+      if (!this.duelActive) return;
+      activePlayers().filter((player) => player.alive && player.id !== 1 && !player.duelChoice)
+        .forEach((player) => { player.duelChoice = Phaser.Utils.Array.GetRandom(RPS_CHOICES); });
+      this.renderDuelControls();
+      void this.resolveDuelIfReady();
+    });
+  }
+
+  private async processPendingDuelChoices() {
+    if (!amHost() || !this.duelActive || this.processingDuelChoices || this.gameFinished) return;
+    this.processingDuelChoices = true;
+    try {
+      let changed = false;
+      players.forEach((owner) => {
+        const request = owner.duelChoiceRequest;
+        if (!request) return;
+        owner.duelChoiceRequest = null;
+        changed = true;
+        if (request.playerId === owner.id && request.round === duelRound && owner.connected && owner.alive &&
+            !owner.duelChoice && normalizeRpsChoice(request.choice)) {
+          owner.duelChoice = request.choice;
+        }
+      });
+      if (changed) await syncGameState(null, 0, 'duel');
+      await this.resolveDuelIfReady();
+    } finally {
+      this.processingDuelChoices = false;
+    }
+  }
+
+  private async resolveDuelIfReady() {
+    if (!this.duelActive || this.resolvingDuel || this.gameFinished || (!offlineMode && !amHost())) return;
+    const contestants = activePlayers().filter((player) => player.alive);
+    if (contestants.length !== 2 || contestants.some((player) => !player.duelChoice)) return;
+    this.resolvingDuel = true;
+    const [first, second] = contestants as [Player, Player];
+    const firstChoice = first.duelChoice!;
+    const secondChoice = second.duelChoice!;
+    const beats: Record<RpsChoice, RpsChoice> = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
+    if (firstChoice === secondChoice) {
+      first.duelChoice = null;
+      second.duelChoice = null;
+      players.forEach((player) => { player.duelChoiceRequest = null; });
+      duelRound += 1;
+      this.countText?.setText(`DUEL ${duelRound}`);
+      this.statusText?.setText(`Tie! Both chose ${RPS_LABELS[firstChoice]}. Choose again.`);
+      this.renderDuelControls();
+      if (!offlineMode) await syncGameState(null, 0, 'duel');
+      else this.scheduleOfflineBotChoices();
+      this.resolvingDuel = false;
+      return;
+    }
+
+    const winner = beats[firstChoice] === secondChoice ? first : second;
+    const loser = winner.id === first.id ? second : first;
+    loser.alive = false;
+    loser.stage = 3;
+    players.forEach((player) => {
+      player.duelChoice = null;
+      player.duelChoiceRequest = null;
+    });
+    const resultMessage = `${winner.name} won the duel (${RPS_LABELS[winner.id === first.id ? firstChoice : secondChoice]} beats ${RPS_LABELS[winner.id === first.id ? secondChoice : firstChoice]}) and Round ${matchRound}!`;
+    this.duelActive = false;
+    this.duelBotTimer?.remove(false);
+    this.duelBotTimer = undefined;
+    this.clearDuelControls();
+    this.resolvingDuel = false;
+    await this.finishRound(resultMessage);
+  }
+
+  private startCounting(forcedStartIndex?: number) {
   if (
     (!offlineMode && !amHost()) ||
     this.countingTimer ||
     this.nextRoundTimer ||
     this.gameFinished
   ) {
+    return;
+  }
+  if (this.matchTimeExpired()) {
+    if (offlineMode || amHost()) void this.finishMatch();
     return;
   }
 
@@ -2090,7 +2948,12 @@ private startCounting(forcedStartIndex?: number) {
     );
 
   if (aliveIndexes.length <= 1) {
-    void this.finishGame();
+    void this.finishRound();
+    return;
+  }
+
+  if (aliveIndexes.length === 2) {
+    this.beginDuel();
     return;
   }
 
@@ -2104,7 +2967,13 @@ this.startIndex = forcedStartIsAlive
       aliveIndexes,
     );
 
+  countingStartIndex = this.startIndex;
+  players.forEach((player) => { player.countingStartIndex = countingStartIndex; });
+
   this.currentShooter = -1;
+  this.stopActionClock();
+  shootingDeadlineAt = '';
+  this.roundPhase = 'counting';
   this.countNumber = 0;
 
   this.shooterText?.setText(
@@ -2159,12 +3028,16 @@ this.startIndex = forcedStartIsAlive
         if (
           this.countNumber === COUNT_TO
         ) {
+          this.roundPhase = 'shooting';
+          shootingDeadlineAt = new Date(Date.now() + ACTION_LIMIT_MS).toISOString();
+          this.startActionClock();
+          PeerankiAudio.effect('select');
           this.shooterText?.setText(
             `🎯 Shooter: ${players[countedIndex].name}`,
           );
 
           this.statusText?.setText(
-           `${players[countedIndex].name} has the 10th tower.`,
+           `${players[countedIndex].name}: choose a weapon and target(s) within 10 seconds.`,
           );
 
           if (!offlineMode) {
@@ -2183,14 +3056,14 @@ this.startIndex = forcedStartIsAlive
             players[countedIndex].id !== 1
           ) {
             this.time.delayedCall(
-              700,
+            350,
               () => {
                 this.botShoot(countedIndex);
               },
             );
           } else if (offlineMode) {
             this.statusText?.setText(
-              'You are the shooter — choose a target.',
+              'Choose a weapon and target(s) before time runs out.',
             );
           }
         } else {
@@ -2210,6 +3083,61 @@ this.startIndex = forcedStartIsAlive
     });
 }
 
+  private startActionClock() {
+    if (!this.actionTimer) {
+      this.actionTimer = this.time.addEvent({
+        delay: 100,
+        loop: true,
+        callback: () => this.updateActionClock(),
+      });
+    }
+    this.updateActionClock();
+  }
+
+  private updateActionClock() {
+    if (this.roundPhase !== 'shooting' || !shootingDeadlineAt) return;
+    const deadline = Date.parse(shootingDeadlineAt);
+    if (!Number.isFinite(deadline)) return;
+    const remaining = Math.max(0, deadline - Date.now());
+    const seconds = Math.ceil(remaining / 1000);
+    this.countText?.setText(`ACTION ${seconds}s • choose weapon + target(s)`);
+    if (remaining === 0 && (offlineMode || amHost())) this.endActionOnTimeout();
+  }
+
+  private stopActionClock() {
+    this.actionTimer?.remove(false);
+    this.actionTimer = undefined;
+  }
+
+  private endActionOnTimeout() {
+    if (
+      this.gameFinished || this.roundPhase !== 'shooting' ||
+      (!offlineMode && !amHost()) || !shootingDeadlineAt ||
+      Date.now() < Date.parse(shootingDeadlineAt)
+    ) return;
+
+    const shooterIndex = this.currentShooter;
+    this.stopActionClock();
+    shootingDeadlineAt = '';
+    this.pendingDoubleTarget = -1;
+    players.forEach((player) => { player.actionRequest = null; });
+    this.nextStartIndex = this.getNextCountingStartIndex(shooterIndex);
+    this.roundPhase = 'waiting';
+    this.statusText?.setText('Time is up. Starting the next tower count...');
+    this.countText?.setText('ACTION TIME UP');
+    if (!offlineMode) void syncGameState(shooterIndex, COUNT_TO, 'shot');
+
+    if (!this.nextRoundTimer) {
+      this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
+        this.nextRoundTimer = undefined;
+        const nextStartIndex = this.nextStartIndex;
+        this.nextStartIndex = -1;
+        if (this.isGameFinished()) void this.finishRound();
+        else this.startCounting(nextStartIndex >= 0 ? nextStartIndex : undefined);
+      });
+    }
+  }
+
 private botShoot(shooterIndex: number) {
   if (!offlineMode) {
     return;
@@ -2227,21 +3155,26 @@ private botShoot(shooterIndex: number) {
     );
 
   if (possibleTargets.length === 0) {
-    void this.finishGame();
+    void this.finishRound();
     return;
   }
 
-  // Easy bot: randomly choose an alive player
-  const selectedTarget =
-    Phaser.Utils.Array.GetRandom(
-      possibleTargets,
-    );
+  // Bots use any weapon they own, with targets chosen from living players.
+  const botWeapons = ACTIVE_WEAPONS.filter((weapon) =>
+    players[shooterIndex].weapons.includes(weapon) &&
+    (weapon !== 'hook' || possibleTargets.some(({ player }) => player.weapons.includes('shield') && player.shieldDisabledRound !== matchRound)) &&
+    (weapon !== 'doublePeeranki' || possibleTargets.length >= 2));
+  this.selectedWeapon = Phaser.Utils.Array.GetRandom(botWeapons.length ? botWeapons : ['gun']);
+  const selectedTarget = Phaser.Utils.Array.GetRandom(possibleTargets);
 
   this.statusText?.setText(
     `${players[shooterIndex].name} is shooting ${selectedTarget.player.name}...`,
   );
 
-  this.time.delayedCall(500, () => {
+  PeerankiAudio.effect('shoot');
+
+  this.time.delayedCall(250, () => {
+    if (this.currentShooter !== shooterIndex || this.roundPhase !== 'shooting') return;
     this.applyOfflineShot(
       shooterIndex,
       selectedTarget.index,
@@ -2253,79 +3186,26 @@ private applyOfflineShot(
   _shooterIndex: number,
   targetIndex: number,
 ) {
-  if (!offlineMode) {
-    return;
-  }
-
+  if (!offlineMode || this.gameFinished || this.matchTimeExpired()) return;
   const target = players[targetIndex];
+  if (!target || !target.alive) return;
 
-  if (!target || !target.alive) {
-    return;
+  const weapon = this.selectedWeapon;
+  if (!players[_shooterIndex]?.weapons.includes(weapon)) return;
+  if (weapon === 'hook' && (!target.weapons.includes('shield') || target.shieldDisabledRound === matchRound)) return;
+  if (weapon === 'doublePeeranki' && players.filter((player, index) => player.connected && player.alive && index !== _shooterIndex).length < 2) return;
+  this.applyWeaponEffect(targetIndex, weapon === 'doublePeeranki' ? 'peeranki' : weapon, _shooterIndex);
+  let completedTarget = targetIndex;
+  if (weapon === 'doublePeeranki') {
+    const secondTargets = players
+      .map((player, index) => ({ player, index }))
+      .filter(({ player, index }) => player.alive && index !== targetIndex && index !== _shooterIndex);
+    const secondTarget = Phaser.Utils.Array.GetRandom(secondTargets);
+    if (!secondTarget) return;
+    this.applyWeaponEffect(secondTarget.index, 'gun', _shooterIndex);
+    completedTarget = secondTarget.index;
   }
-
-  target.stage += 1;
-
-  if (target.stage >= 3) {
-    target.stage = 3;
-    target.alive = false;
-  }
-
-  this.updatePlayerVisual(targetIndex);
-
-const targetContainer =
-  this.playerObjects[targetIndex];
-
-if (targetContainer) {
-  targetContainer.setScale(1.12);
-
-  this.time.delayedCall(180, () => {
-    targetContainer.setScale(1);
-  });
-}
-
-this.shooterText?.setText(
-  `💥 ${target.name} was shot!`,
-);
-
-if (!target.alive) {
-    this.statusText?.setText(
-      `${target.name} has been eliminated! 💥`,
-    );
-  } else if (target.stage === 1) {
-    this.statusText?.setText(
-      `${target.name} split into two small towers!`,
-    );
-  } else if (target.stage === 2) {
-    this.statusText?.setText(
-      `${target.name} has one tower remaining!`,
-    );
-  }
-
-  const alivePlayers = players.filter(
-    (player) => player.alive,
-  );
-
-  if (alivePlayers.length <= 1) {
-    this.time.delayedCall(1000, () => {
-      void this.finishGame();
-    });
-
-    return;
-  }
-
-  // Start the next counting cycle
-  const nextStartIndex =
-  this.getNextCountingStartIndex(
-    targetIndex,
-  );
-
-this.time.delayedCall(1200, () => {
-  this.startCounting(
-    nextStartIndex >= 0
-      ? nextStartIndex
-      : undefined,
-  );
-});
+  this.completePlayerShot(completedTarget);
 }
 
   private getCountedPlayerIndex(
@@ -2431,12 +3311,83 @@ private getNextCountingStartIndex(
   return -1;
 }
 
+private async requestHostAction(targetIds: number[]) {
+  const shooter = players[myPlayerId - 1];
+  if (!shooter || !ACTIVE_WEAPONS.includes(this.selectedWeapon) ||
+      !shootingDeadlineAt || !Number.isFinite(Date.parse(shootingDeadlineAt))) return;
+  const nonce = `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  shooter.actionRequest = {
+    nonce,
+    shooterId: shooter.id,
+    weapon: this.selectedWeapon,
+    targetIds: targetIds.map((id) => id + 1),
+  };
+  this.statusText?.setText('Sending action to the host...');
+  await syncGameState(this.currentShooter, this.countNumber, 'action_requested');
+}
+
+private async processPendingAction() {
+  if (!amHost() || this.gameFinished || this.matchTimeExpired()) return;
+  const requestOwner = players.find((player) => player.actionRequest !== null);
+  const action = requestOwner?.actionRequest;
+  if (!requestOwner || !action) return;
+  requestOwner.actionRequest = null;
+  if (processedOnlineActionNonces.has(action.nonce)) {
+    await syncGameState(this.currentShooter, this.countNumber, this.roundPhase === 'shooting' ? 'shooting' : 'shot');
+    return;
+  }
+  processedOnlineActionNonces.add(action.nonce);
+
+  const shooterIndex = action.shooterId - 1;
+  const shooter = players[shooterIndex];
+  const targetIndexes = action.targetIds.map((id) => id - 1);
+  const uniqueTargets = new Set(targetIndexes);
+  const validWeapon = ACTIVE_WEAPONS.includes(action.weapon) && shooter?.weapons.includes(action.weapon);
+  const expectedTargets = action.weapon === 'doublePeeranki' ? 2 : 1;
+  const validTargets = targetIndexes.length === expectedTargets && uniqueTargets.size === expectedTargets &&
+    targetIndexes.every((index) => index >= 0 && index < players.length && index !== shooterIndex && players[index].connected && players[index].alive);
+  const authorized = shooter?.sessionId === requestOwner.sessionId && shooterIndex === this.currentShooter && shooter.alive && shooter.connected;
+  const withinDeadline = Boolean(shootingDeadlineAt) && Date.now() < Date.parse(shootingDeadlineAt);
+  const validHook = action.weapon !== 'hook' || targetIndexes.length === 1 && players[targetIndexes[0]]?.weapons.includes('shield') && players[targetIndexes[0]]?.shieldDisabledRound !== matchRound;
+  if (this.roundPhase !== 'shooting') {
+    await syncGameState(
+      this.currentShooter >= 0 ? this.currentShooter : null,
+      this.countNumber,
+      this.roundPhase === 'finished' ? 'finished' : 'shot',
+    );
+    return;
+  }
+  if (!withinDeadline) {
+    this.endActionOnTimeout();
+    return;
+  }
+
+  if (!authorized || !validWeapon || !validTargets || !validHook || this.matchTimeExpired()) {
+    this.statusText?.setText('The host rejected an invalid or expired action.');
+    await syncGameState(this.currentShooter, this.countNumber, 'shooting');
+    return;
+  }
+
+  this.selectedWeapon = action.weapon;
+  this.applyWeaponEffect(targetIndexes[0], action.weapon === 'doublePeeranki' ? 'peeranki' : action.weapon, shooterIndex);
+  if (action.weapon === 'doublePeeranki') this.applyWeaponEffect(targetIndexes[1], 'gun', shooterIndex);
+  this.completePlayerShot(targetIndexes[targetIndexes.length - 1]);
+}
+
 private shootPlayer(index: number) {
   if (
     this.applyingRemoteState ||
     this.gameFinished ||
-    this.currentShooter < 0
+    this.roundPhase !== 'shooting' ||
+    this.currentShooter < 0 ||
+    !shootingDeadlineAt ||
+    ((offlineMode || amHost()) && Date.now() >= Date.parse(shootingDeadlineAt)) ||
+    this.matchTimeExpired()
   ) {
+    if (shootingDeadlineAt && Date.now() >= Date.parse(shootingDeadlineAt) && (offlineMode || amHost())) {
+      this.endActionOnTimeout();
+    }
+    if (this.matchTimeExpired() && (offlineMode || amHost())) void this.finishMatch();
     return;
   }
 
@@ -2473,14 +3424,139 @@ private shootPlayer(index: number) {
     return;
   }
 
-  target.stage += 1;
+  const shooter = players[this.currentShooter];
+  if (!ACTIVE_WEAPONS.includes(this.selectedWeapon) || !shooter?.weapons.includes(this.selectedWeapon)) {
+    this.statusText?.setText('You do not own that weapon.');
+    this.pendingDoubleTarget = -1;
+    this.refreshWeaponPicker();
+    return;
+  }
+  if (this.selectedWeapon === 'hook' && (!target.weapons.includes('shield') || target.shieldDisabledRound === matchRound)) {
+    this.statusText?.setText('Hook requires a target with a Shield.');
+    return;
+  }
 
-  if (target.stage >= 3) {
+  if (this.selectedWeapon === 'doublePeeranki' && this.pendingDoubleTarget < 0) {
+    const validTargets = players.filter((player, targetIndex) => player.connected && player.alive && targetIndex !== this.currentShooter);
+    if (validTargets.length < 2) {
+      this.statusText?.setText('Double Peeranki needs two different living targets.');
+      return;
+    }
+    this.pendingDoubleTarget = index;
+    if (offlineMode || amHost()) this.applyWeaponEffect(index, 'peeranki', this.currentShooter);
+    this.statusText?.setText(`${target.name} is the first target. Choose a different second target.`);
+    return;
+  }
+
+  if (this.selectedWeapon === 'doublePeeranki' && this.pendingDoubleTarget >= 0) {
+    if (index === this.pendingDoubleTarget) {
+      this.statusText?.setText('Choose a different second target.');
+      return;
+    }
+    const first = players[this.pendingDoubleTarget];
+    if (!first?.connected || !first.alive || !target.connected || !target.alive) {
+      this.pendingDoubleTarget = -1;
+      this.statusText?.setText('The targets changed. Select two living targets again.');
+      return;
+    }
+    const firstTarget = this.pendingDoubleTarget;
+    this.pendingDoubleTarget = -1;
+    if (!offlineMode && !amHost()) {
+      void this.requestHostAction([firstTarget, index]);
+      return;
+    }
+    this.applyWeaponEffect(index, 'gun', this.currentShooter);
+    this.completePlayerShot(firstTarget);
+    return;
+  }
+
+  if (!offlineMode && !amHost()) {
+    void this.requestHostAction([index]);
+    return;
+  }
+
+  this.applyWeaponEffect(index, this.selectedWeapon, this.currentShooter);
+  this.completePlayerShot(index);
+}
+
+private applyWeaponEffect(index: number, weapon: WeaponType, attackerIndex: number) {
+  const target = players[index];
+  if (!target || !target.alive) return;
+  const attacker = players[attackerIndex];
+  PeerankiAudio.effect('shoot');
+
+  if (weapon === 'hook') {
+    if (target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound) {
+      target.weapons = target.weapons.filter((item) => item !== 'shield');
+      PeerankiAudio.effect('hit');
+      this.statusText?.setText(`${target.name}'s Shield was destroyed permanently!`);
+      const targetCard = this.playerObjects[index];
+      if (targetCard) this.tweens.add({ targets: targetCard, angle: { from: -5, to: 5 }, alpha: { from: 0.45, to: 1 }, duration: 90, yoyo: true, repeat: 2, onComplete: () => targetCard.setAngle(0) });
+    } else {
+      this.statusText?.setText(`${target.name} has no Shield for Hook to destroy.`);
+    }
+    this.updatePlayerVisual(index);
+    this.refreshWeaponPicker();
+    return;
+  }
+
+  const hasShield = target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound;
+  if (hasShield && (weapon === 'gun' || weapon === 'peeranki')) {
+    PeerankiAudio.effect('hit');
+    if (weapon === 'peeranki') {
+      target.shieldDisabledRound = matchRound;
+      this.statusText?.setText(`${target.name}'s Shield was destroyed for this round.`);
+      const targetCard = this.playerObjects[index];
+      if (targetCard) this.tweens.add({ targets: targetCard, alpha: { from: 0.35, to: 1 }, duration: 110, yoyo: true, repeat: 2 });
+    } else {
+      this.statusText?.setText(`${target.name}'s Shield blocked the Gun shot.`);
+    }
+    this.updatePlayerVisual(index);
+    return;
+  }
+
+  if (weapon === 'peeranki') {
     target.stage = 3;
     target.alive = false;
+    PeerankiAudio.effect('elimination');
+  } else {
+    PeerankiAudio.effect('hit');
+    target.stage += 1;
+    if (target.stage >= 3) {
+      target.stage = 3;
+      target.alive = false;
+      PeerankiAudio.effect('elimination');
+    }
+  }
+  if (!target.alive && attacker && attacker.id !== target.id &&
+      (attacker.hasCollectedAllWeapons || WEAPON_ORDER.every((ownedWeapon) => attacker.weapons.includes(ownedWeapon)))) {
+    attacker.eliminationPoints += 1;
+    this.updatePlayerVisual(attackerIndex);
+  }
+  this.updatePlayerVisual(index);
+}
+
+private completePlayerShot(index: number) {
+  this.stopActionClock();
+  shootingDeadlineAt = '';
+  players.forEach((player) => { player.actionRequest = null; });
+  this.roundPhase = 'waiting';
+  const target = players[index];
+  if (!target) return;
+  const hitContainer = this.playerObjects[index];
+  if (hitContainer) {
+    this.tweens.killTweensOf(hitContainer);
+    this.tweens.add({ targets: hitContainer, scale: 1.12, angle: 2, duration: 90, yoyo: true, repeat: 1,
+      onComplete: () => { hitContainer.setAngle(0); if (this.currentShooter === index) this.updatePlayerVisual(index); },
+    });
   }
 
  this.updatePlayerVisual(index);
+
+if (activePlayers().filter((player) => player.alive).length === 2 && (offlineMode || amHost())) {
+  this.beginDuel();
+  return;
+}
 
 if (offlineMode) {
   const targetContainer =
@@ -2516,10 +3592,7 @@ if (offlineMode) {
     );
 
     if (alivePlayers.length <= 1) {
-      this.time.delayedCall(1000, () => {
-        void this.finishGame();
-      });
-
+      this.time.delayedCall(250, () => void this.finishRound());
       return;
     }
 
@@ -2550,12 +3623,11 @@ void this.recordShot();
     );
 
     if (alive.length <= 1) {
-      await syncGameState(
-        this.currentShooter,
-        COUNT_TO,
-        'finished',
-      );
-      this.showFinishedState();
+      if (!offlineMode && !amHost()) {
+        await syncGameState(this.currentShooter, COUNT_TO, 'shot');
+        return;
+      }
+      await this.finishRound();
       return;
     }
 
@@ -2566,6 +3638,135 @@ void this.recordShot();
     );
   }
 
+  private refreshWeaponPicker() {
+    const localIndex = offlineMode ? 0 : myPlayerId - 1;
+    const owned = players[localIndex]?.weapons ?? ['gun'];
+    const options = ACTIVE_WEAPONS.filter((weapon) => owned.includes(weapon));
+    if (!options.includes(this.selectedWeapon)) this.selectedWeapon = options[0] ?? 'gun';
+    this.weaponImage?.setTexture(`weapon-${this.selectedWeapon}`);
+    this.weaponText?.setText(WEAPON_NAMES[this.selectedWeapon]);
+  }
+
+  private refreshPreviousRoundText() {
+    this.previousRoundText?.setText(lastRoundMessage ? `Previous round: ${lastRoundMessage}` : '');
+  }
+
+  private cycleWeapon(direction: number) {
+    if (this.gameFinished || this.matchTimeExpired() || this.roundPhase !== 'shooting') return;
+    const localIndex = offlineMode ? 0 : myPlayerId - 1;
+    if (this.currentShooter !== localIndex || this.currentShooter < 0) return;
+    const owned = players[localIndex]?.weapons ?? ['gun'];
+    const options = ACTIVE_WEAPONS.filter((weapon) => owned.includes(weapon));
+    const current = Math.max(0, options.indexOf(this.selectedWeapon));
+    this.selectedWeapon = options[(current + direction + options.length) % options.length] ?? 'gun';
+    this.pendingDoubleTarget = -1;
+    this.refreshWeaponPicker();
+  }
+
+  private matchTimeExpired() {
+    const startedAt = Date.parse(matchStartedAt);
+    return matchOver || (Number.isFinite(startedAt) && Date.now() >= startedAt + matchDurationMs());
+  }
+
+  private startMatchClock() {
+    if (!matchStartedAt) matchStartedAt = new Date().toISOString();
+    if (this.matchTimer) return;
+    const update = () => {
+      const elapsed = Math.max(0, Date.now() - Date.parse(matchStartedAt));
+      const remaining = Math.max(0, matchDurationMs() - elapsed);
+      const seconds = Math.ceil(remaining / 1000);
+      this.matchText?.setText(`MATCH ${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} • ROUND ${matchRound}`);
+      if (remaining === 0 && (offlineMode || amHost()) && !this.gameFinished) void this.finishMatch();
+    };
+    update();
+    this.matchTimer = this.time.addEvent({ delay: 250, loop: true, callback: update });
+  }
+
+  private async finishRound(winnerMessage?: string) {
+    if (this.gameFinished || this.matchTimeExpired() || (!offlineMode && !amHost())) {
+      if (this.matchTimeExpired() && (offlineMode || amHost())) await this.finishMatch();
+      return;
+    }
+    const winner = activePlayers().find((player) => player.alive);
+    if (!winner) { await this.finishMatch(); return; }
+    const upgrade = nextWeaponUpgrade(winner.weapons, matchRound);
+    let message = winnerMessage ?? `${winner.name} wins Round ${matchRound}!`;
+    if (upgrade) {
+      winner.weapons = normalizeWeapons([...winner.weapons, upgrade]);
+      message += ` Earned ${WEAPON_LABELS[upgrade]}.`;
+    } else {
+      message += ' No new weapon unlocked this round.';
+    }
+    if (WEAPON_ORDER.every((weapon) => winner.weapons.includes(weapon))) winner.hasCollectedAllWeapons = true;
+    lastRoundMessage = message;
+    this.refreshPreviousRoundText();
+    roundWinnerId = winner.id;
+    matchRound += 1;
+    players.forEach((player) => {
+      player.stage = 0;
+      player.alive = player.connected;
+      player.shieldDisabledRound = -1;
+      player.matchStartedAt = matchStartedAt;
+      player.matchRound = matchRound;
+      player.countingStartIndex = -1;
+      player.roundWinnerId = roundWinnerId;
+      player.matchOver = false;
+    });
+    this.currentShooter = -1;
+    this.roundPhase = 'waiting';
+    this.duelActive = false;
+    this.resolvingDuel = false;
+    this.duelBotTimer?.remove(false);
+    this.duelBotTimer = undefined;
+    this.clearDuelControls();
+    duelRound = 1;
+    players.forEach((player) => {
+      player.duelChoice = null;
+      player.duelChoiceRequest = null;
+    });
+    countingStartIndex = -1;
+    this.countingTimer?.remove(false);
+    this.countingTimer = undefined;
+    this.pendingDoubleTarget = -1;
+    this.shooterText?.setText(message);
+    this.statusText?.setText('Preparing the next round...');
+    this.refreshWeaponPicker();
+    this.renderPlayers();
+    const winnerIndex = players.findIndex((player) => player.id === winner.id);
+    const winnerCard = this.playerObjects[winnerIndex];
+    if (winnerCard) this.tweens.add({ targets: winnerCard, scale: { from: 1, to: 1.12 }, duration: 300, yoyo: true, repeat: 2, ease: 'Back.Out' });
+    if (!offlineMode) await syncGameState(null, 0, 'round_won');
+    this.markShooter();
+    if (!this.nextRoundTimer) {
+      this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
+        this.nextRoundTimer = undefined;
+        this.startCounting();
+      });
+    }
+  }
+
+  private async finishMatch() {
+    if (this.gameFinished || (!offlineMode && !amHost())) return;
+    this.gameFinished = true;
+    this.duelActive = false;
+    this.duelBotTimer?.remove(false);
+    this.duelBotTimer = undefined;
+    this.clearDuelControls();
+    this.stopActionClock();
+    shootingDeadlineAt = '';
+    this.roundPhase = 'finished';
+    matchOver = true;
+    players.forEach((player) => { player.matchOver = true; });
+    this.countingTimer?.remove(false);
+    this.countingTimer = undefined;
+    this.nextRoundTimer?.remove(false);
+    this.nextRoundTimer = undefined;
+    const topCount = Math.max(0, ...connectedPlayers().map((player) => player.weapons.length));
+    const winners = connectedPlayers().filter((player) => player.weapons.length === topCount);
+    if (!offlineMode) await syncGameState(this.currentShooter >= 0 ? this.currentShooter : null, this.countNumber, 'finished');
+    this.showFinishedState(winners, topCount);
+  }
+
   private isGameFinished() {
     return (
       activePlayers().filter(
@@ -2574,48 +3775,67 @@ void this.recordShot();
     );
   }
 
-  private async finishGame() {
-    if (this.gameFinished) {
-      return;
+  private showFinishedState(finalists = connectedPlayers(), weaponCount?: number) {
+    this.duelActive = false;
+    this.duelBotTimer?.remove(false);
+    this.duelBotTimer = undefined;
+    this.clearDuelControls();
+    this.stopActionClock();
+    shootingDeadlineAt = '';
+    if (!this.victoryPlayed) {
+      this.victoryPlayed = true;
+      PeerankiAudio.effect('victory');
     }
-
     this.gameFinished = true;
 
-    await syncGameState(
-      this.currentShooter >= 0
-        ? this.currentShooter
-        : null,
-      this.countNumber,
-      'finished',
-    );
+    const topCount = weaponCount ?? Math.max(0, ...connectedPlayers().map((player) => player.weapons.length));
+    const weaponLeaders = finalists.filter((player) => player.weapons.length === topCount);
+    const topEliminationPoints = Math.max(0, ...weaponLeaders.map((player) => player.eliminationPoints));
+    const winners = weaponLeaders.filter((player) => player.eliminationPoints === topEliminationPoints);
+    const winnerLabel = winners.length === 1 ? `${winners[0].name} wins!` : `Tie: ${winners.map((player) => player.name).join(', ')}`;
 
-    this.showFinishedState();
-  }
-
-  private showFinishedState() {
-    this.gameFinished = true;
-
-    const winner = activePlayers().find(
-      (player) => player.alive,
-    );
-
-    this.countText?.setText(
-      '🏆 GAME OVER',
-    );
-    this.shooterText?.setText(
-      winner
-        ? `${winner.name} wins!`
-        : 'Game finished',
-    );
-    this.statusText?.setText(
-      'The game has ended.',
-    );
+    const { width, height } = this.scale;
+    this.matchTimer?.remove(false);
+    this.matchTimer = undefined;
+    this.countText?.setText(`🏆 ${matchDurationMinutes}-MINUTE MATCH OVER`);
+    this.shooterText?.setText(winnerLabel);
+    this.statusText?.setText('');
+    if (this.children.getByName('game-over-panel')) return;
+    const panel = this.add.container(width / 2, height * 0.53).setName('game-over-panel').setDepth(100);
+    const panelHeight = Math.min(height * 0.82, 210 + connectedPlayers().length * 23);
+    const shade = this.add.rectangle(0, 0, width * 0.76, panelHeight, 0x17212b, 0.97).setStrokeStyle(2, 0x4da3ff);
+    const results = connectedPlayers().map((player) => `${player.name}: ${player.weapons.length} weapon${player.weapons.length === 1 ? '' : 's'} • ${player.eliminationPoints} elimination point${player.eliminationPoints === 1 ? '' : 's'}`).join('\n');
+    const title = this.add.text(0, -panelHeight / 2 + 32, `${winnerLabel}\nMost weapons: ${topCount} • Elimination points break ties (earned after all five weapons)\n\n${results}`, {
+      fontFamily: 'Arial', fontSize: '20px', color: '#ffffff', fontStyle: 'bold', align: 'center',
+    }).setOrigin(0.5);
+    const actionY = panelHeight / 2 - 34;
+    const replay = makeButton(this, -100, actionY, 'PLAY AGAIN', '#20a060', 17);
+    const menu = makeButton(this, 105, actionY, 'MAIN MENU', '#2878ff', 17);
+    panel.add([shade, title, replay, menu]);
+    replay.on('pointerdown', () => {
+      this.shutdown();
+      if (offlineMode) this.scene.start('OfflineSetupScene');
+      else { void leaveCurrentRoom(); this.scene.start('OnlineModeScene'); }
+    });
+    menu.on('pointerdown', () => {
+      this.shutdown();
+      if (offlineMode) { offlineMode = false; players = []; }
+      else void leaveCurrentRoom();
+      this.scene.start('MenuScene');
+    });
+    this.tweens.add({ targets: panel, alpha: { from: 0, to: 1 }, scale: { from: 0.9, to: 1 }, duration: 220, ease: 'Back.Out' });
     this.markShooter();
   }
 
   shutdown() {
     this.countingTimer?.remove(false);
     this.countingTimer = undefined;
+    this.matchTimer?.remove(false);
+    this.matchTimer = undefined;
+    this.stopActionClock();
+    this.duelBotTimer?.remove(false);
+    this.duelBotTimer = undefined;
+    this.clearDuelControls();
 
     this.nextRoundTimer?.remove(false);
     this.nextRoundTimer = undefined;
@@ -2640,6 +3860,7 @@ const config: Phaser.Types.Core.GameConfig = {
 
   scene: [
     MenuScene,
+    SettingsScene,
     OnlineModeScene,
     OfflineSetupScene,
     FriendsScene,
@@ -2651,8 +3872,14 @@ const config: Phaser.Types.Core.GameConfig = {
 
   scale: {
     mode: Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH,
   },
 };
+
+window.peerankiDesktop?.onFullscreenChange((fullscreen) => {
+  const settings = loadSettings();
+  settings.fullscreen = fullscreen;
+  saveSettings(settings);
+});
+void window.peerankiDesktop?.setFullscreen(loadSettings().fullscreen);
 
 new Phaser.Game(config);
