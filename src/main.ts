@@ -2080,6 +2080,10 @@ private nextStartIndex = -1;
   }
 
   preload() {
+     this.load.image(
+    'game_background',
+    'assets/background/game_background.png',
+  );
     this.load.image('tower_big', 'assets/towers/tower_big.png');
     this.load.image('tower_small', 'assets/towers/tower_small.png');
     this.load.image('tower_one', 'assets/towers/tower_one.png');
@@ -2106,6 +2110,36 @@ private nextStartIndex = -1;
   console.log('Offline mode active');
 }
     const { width, height } = this.scale;
+        const background = this.add
+      .image(width / 2, height / 2, 'game_background')
+      .setOrigin(0.5);
+
+    const scaleX = width / background.width;
+    const scaleY = height / background.height;
+    const backgroundScale = Math.max(scaleX, scaleY);
+
+    background.setScale(backgroundScale);
+    background.setDepth(-100);
+    const topOverlay = this.add.rectangle(
+  width / 2,
+  92,
+  width,
+  185,
+  0x000000,
+  0.28,
+);
+
+topOverlay.setDepth(-50);
+const bottomOverlay = this.add.rectangle(
+  width / 2,
+  height - 42,
+  width,
+  90,
+  0x000000,
+  0.22,
+);
+
+bottomOverlay.setDepth(-50);
 
 if (offlineMode) {
   maxPlayers = offlineMaxPlayers;

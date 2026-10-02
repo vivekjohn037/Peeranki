@@ -1,5 +1,12 @@
 apply plugin: 'com.android.application'
 
+def uploadKeyProperties = new Properties()
+def uploadKeyPropertiesFile = rootProject.file('keystore.properties')
+def hasUploadKey = uploadKeyPropertiesFile.isFile()
+if (hasUploadKey) {
+    uploadKeyProperties.load(new FileInputStream(uploadKeyPropertiesFile))
+}
+
 android {
     namespace = "com.peeranki.kerala"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,8 +23,21 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasUploadKey) {
+                storeFile rootProject.file(uploadKeyProperties['storeFile'])
+                storePassword uploadKeyProperties['storePassword']
+                keyAlias uploadKeyProperties['keyAlias']
+                keyPassword uploadKeyProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasUploadKey) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
