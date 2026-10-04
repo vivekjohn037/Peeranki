@@ -712,40 +712,116 @@ function positionHtmlInput(
   };
 }
 
+export class PeerankiButton extends Phaser.GameObjects.Container {
+  private bgGraphics: Phaser.GameObjects.Graphics;
+  private labelText: Phaser.GameObjects.Text;
+  private currentBgColor: string;
+  private btnW: number;
+  private btnH: number;
+
+  constructor(
+    scene: Phaser.Scene,
+    x: number,
+    y: number,
+    label: string,
+    backgroundColor = '#2878ff',
+    fontSize = 17,
+    btnWidth = 300,
+    btnHeight = 50,
+  ) {
+    super(scene, x, y);
+    this.btnW = btnWidth;
+    this.btnH = btnHeight;
+    this.currentBgColor = backgroundColor;
+
+    this.bgGraphics = scene.add.graphics();
+    this.drawBackground();
+
+    this.labelText = scene.add
+      .text(0, 0, label, {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: `${fontSize}px`,
+        fontStyle: 'bold',
+        color: '#ffffff',
+        align: 'center',
+      })
+      .setOrigin(0.5, 0.5);
+
+    this.add([this.bgGraphics, this.labelText]);
+    this.setSize(btnWidth, btnHeight);
+    this.setInteractive(
+      new Phaser.Geom.Rectangle(-btnWidth / 2, -btnHeight / 2, btnWidth, btnHeight),
+      Phaser.Geom.Rectangle.Contains,
+    );
+
+    this.on('pointerover', () => {
+      scene.tweens.add({ targets: this, scale: 1.025, duration: 80, ease: 'Quad.Out' });
+    });
+    this.on('pointerout', () => {
+      scene.tweens.add({ targets: this, scale: 1, duration: 80, ease: 'Quad.Out' });
+    });
+    this.on('pointerdown', () => {
+      PeerankiAudio.effect('click');
+      scene.tweens.add({ targets: this, scale: 0.96, duration: 60, yoyo: true });
+    });
+
+    scene.add.existing(this);
+  }
+
+  private drawBackground() {
+    this.bgGraphics.clear();
+    const hex = Phaser.Display.Color.HexStringToColor(this.currentBgColor).color;
+    this.bgGraphics.fillStyle(hex, 0.96);
+    this.bgGraphics.fillRoundedRect(-this.btnW / 2, -this.btnH / 2, this.btnW, this.btnH, 10);
+    this.bgGraphics.lineStyle(1.5, 0xffffff, 0.22);
+    this.bgGraphics.strokeRoundedRect(-this.btnW / 2, -this.btnH / 2, this.btnW, this.btnH, 10);
+  }
+
+  public setText(text: string) {
+    this.labelText.setText(text);
+    return this;
+  }
+
+  public getText(): string {
+    return this.labelText.text;
+  }
+
+  public setStyle(style: { backgroundColor?: string; color?: string; fontSize?: string }) {
+    if (style.backgroundColor) {
+      this.currentBgColor = style.backgroundColor;
+      this.drawBackground();
+    }
+    if (style.color) {
+      this.labelText.setColor(style.color);
+    }
+    if (style.fontSize) {
+      this.labelText.setFontSize(style.fontSize);
+    }
+    return this;
+  }
+
+  public setBackgroundColor(color: string) {
+    this.currentBgColor = color;
+    this.drawBackground();
+    return this;
+  }
+
+  public setPadding(..._args: any[]) {
+    return this;
+  }
+}
+
 function makeButton(
   scene: Phaser.Scene,
   x: number,
   y: number,
   label: string,
   backgroundColor = '#2878ff',
-  fontSize = 19,
+  fontSize = 17,
   btnWidth = 300,
-  btnHeight = 52,
-) {
-  const padY = Math.max(0, Math.floor((btnHeight - fontSize) / 2) - 2);
-  const button = scene.add
-    .text(x, y, label, {
-      fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      fontSize: `${fontSize}px`,
-      fontStyle: 'bold',
-      color: '#ffffff',
-      backgroundColor,
-      align: 'center',
-      fixedWidth: btnWidth,
-      fixedHeight: btnHeight,
-      padding: {
-        x: 8,
-        y: padY,
-      },
-    })
-    .setOrigin(0.5, 0.5)
-    .setInteractive({ useHandCursor: true })
-    .on('pointerdown', () => PeerankiAudio.effect('click'));
-
-  button.on('pointerover', () => scene.tweens.add({ targets: button, scale: 1.025, duration: 90, ease: 'Quad.Out' }));
-  button.on('pointerout', () => scene.tweens.add({ targets: button, scale: 1, duration: 90, ease: 'Quad.Out' }));
-  button.on('pointerdown', () => scene.tweens.add({ targets: button, scale: 0.97, duration: 60, yoyo: true }));
-  return button;
+  btnHeight = 50,
+): PeerankiButton {
+  return new PeerankiButton(scene, x, y, label, backgroundColor, fontSize, btnWidth, btnHeight);
 }
 
 function addMatchDurationPicker(scene: Phaser.Scene, x: number, y: number) {
@@ -777,9 +853,9 @@ function addMatchDurationPicker(scene: Phaser.Scene, x: number, y: number) {
     button.on('pointerdown', () => {
       matchDurationMinutes = minutes;
       scene.children.list.forEach((child) => {
-        if (child instanceof Phaser.GameObjects.Text && child.getData('matchDuration') !== undefined) {
-          child.setStyle({
-            backgroundColor: Number(child.getData('matchDuration')) === minutes ? '#20a060' : '#374151',
+        if ((child as any).getData?.('matchDuration') !== undefined) {
+          (child as any).setStyle?.({
+            backgroundColor: Number((child as any).getData('matchDuration')) === minutes ? '#20a060' : '#374151',
           });
         }
       });
@@ -897,37 +973,43 @@ class MenuScene extends Phaser.Scene {
       )
       .setOrigin(0.5);
 
+    const isPortrait = height > width;
+    const btnWidth = Math.min(320, Math.floor(width * 0.86));
+    const btnHeight = 50;
+    const btnGap = 12;
+    const startBtnY = isPortrait ? height * 0.47 : height * 0.52;
+
     const offlineButton = makeButton(
       this,
       width / 2,
-      height * 0.54,
+      startBtnY,
       'OFFLINE PLAY',
       '#20a060',
-      19,
-      300,
-      52,
+      17,
+      btnWidth,
+      btnHeight,
     );
 
     const onlineButton = makeButton(
       this,
       width / 2,
-      height * 0.65,
+      startBtnY + (btnHeight + btnGap),
       'ONLINE PLAY',
       '#2878ff',
-      19,
-      300,
-      52,
+      17,
+      btnWidth,
+      btnHeight,
     );
 
     const settingsButton = makeButton(
       this,
       width / 2,
-      height * 0.76,
+      startBtnY + (btnHeight + btnGap) * 2,
       'SETTINGS',
       '#374151',
-      18,
-      300,
-      52,
+      17,
+      btnWidth,
+      btnHeight,
     );
 
     offlineButton.on('pointerdown', () => {
@@ -948,41 +1030,31 @@ class MenuScene extends Phaser.Scene {
     const howToPlayMenuBtn = makeButton(
       this,
       width / 2,
-      height * 0.87,
+      startBtnY + (btnHeight + btnGap) * 3,
       '📖 HOW TO PLAY',
       '#1f2937',
       16,
-      300,
-      48,
+      btnWidth,
+      btnHeight,
     );
     howToPlayMenuBtn.on('pointerdown', () => {
       PeerankiAudio.effect('select');
       showHowToPlayModal();
     });
 
-    const exitButton = makeButton(this, width - 64, 38, 'EXIT', '#9b3030', 13, 80, 36)
-      .setDepth(1000);
+    const topBtnY = Math.max(34, Math.round(height * 0.05));
+    const exitButton = makeButton(this, width - 42, topBtnY, 'EXIT', '#9b3030', 13, 68, 36).setDepth(1000);
+    const guideTopBtn = makeButton(this, width - 118, topBtnY, '❓ GUIDE', '#1f2937', 12, 74, 36).setDepth(1000);
 
     const isMuted = PeerankiAudio.isMuted();
     const muteButton = makeButton(
       this,
-      width - 134,
-      38,
+      width - 180,
+      topBtnY,
       isMuted ? '🔇' : '🔊',
       isMuted ? '#822727' : '#2d3748',
       16,
-      44,
-      36,
-    ).setDepth(1000);
-
-    const guideTopBtn = makeButton(
-      this,
-      width - 210,
-      38,
-      '❓ GUIDE',
-      '#1f2937',
-      12,
-      82,
+      40,
       36,
     ).setDepth(1000);
 
@@ -998,9 +1070,10 @@ class MenuScene extends Phaser.Scene {
     });
 
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      exitButton.setPosition(gameSize.width - 64, 38);
-      muteButton.setPosition(gameSize.width - 134, 38);
-      guideTopBtn.setPosition(gameSize.width - 210, 38);
+      const resizeTopY = Math.max(34, Math.round(gameSize.height * 0.05));
+      exitButton.setPosition(gameSize.width - 42, resizeTopY);
+      guideTopBtn.setPosition(gameSize.width - 118, resizeTopY);
+      muteButton.setPosition(gameSize.width - 180, resizeTopY);
     });
     exitButton.on('pointerdown', async () => {
       this.cleanup();
@@ -1244,9 +1317,9 @@ class OfflineSetupScene extends Phaser.Scene {
       button.on('pointerdown', () => {
         this.selectedPlayers = count;
         this.children.list.forEach((child) => {
-          if (child instanceof Phaser.GameObjects.Text && child.getData('playerCount')) {
-            const childCount = child.getData('playerCount');
-            child.setStyle({
+          if ((child as any).getData?.('playerCount')) {
+            const childCount = (child as any).getData('playerCount');
+            (child as any).setStyle?.({
               backgroundColor: childCount === this.selectedPlayers ? '#20a060' : '#374151',
             });
           }
@@ -1312,15 +1385,18 @@ class OfflineSetupScene extends Phaser.Scene {
 
     addMatchDurationPicker(this, width / 2, height * 0.70);
 
+    const mainBtnWidth = Math.min(320, Math.floor(width * 0.86));
+    const backBtnWidth = Math.min(220, Math.floor(width * 0.60));
+
     const startButton = makeButton(
       this,
       width / 2,
       height * (isAndroid ? 0.81 : 0.82),
       'START GAME',
       '#20a060',
-      20,
-      308,
-      52,
+      19,
+      mainBtnWidth,
+      50,
     );
 
     startButton.on('pointerdown', () => {
@@ -1340,8 +1416,8 @@ class OfflineSetupScene extends Phaser.Scene {
       'BACK',
       '#252d37',
       15,
-      160,
-      40,
+      backBtnWidth,
+      42,
     );
 
     backButton.on('pointerdown', () => {
@@ -1567,7 +1643,7 @@ class PlayerCountScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     const choices = PLAYER_COUNTS;
-    const choiceButtons: Phaser.GameObjects.Text[] = [];
+    const choiceButtons: PeerankiButton[] = [];
 
     const countCols = 4;
     const countBtnW = 68;
@@ -2000,8 +2076,8 @@ class JoinScene extends Phaser.Scene {
 class LobbyScene extends Phaser.Scene {
   private playerText?: Phaser.GameObjects.Text;
   private statusText?: Phaser.GameObjects.Text;
-  private startButton?: Phaser.GameObjects.Text;
-  private leaveButton?: Phaser.GameObjects.Text;
+  private startButton?: PeerankiButton;
+  private leaveButton?: PeerankiButton;
   private realtimeChannel: any;
   private refreshTimer?: Phaser.Time.TimerEvent;
   private starting = false;
@@ -2078,6 +2154,8 @@ class LobbyScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    const lobbyBtnW = Math.min(320, Math.floor(width * 0.86));
+
     if (amHost() && !isPublicRoom) {
       this.startButton = makeButton(
         this,
@@ -2085,8 +2163,8 @@ class LobbyScene extends Phaser.Scene {
         height * 0.81,
         'START GAME',
         '#20a060',
-        19,
-        300,
+        18,
+        lobbyBtnW,
         50,
       );
 
@@ -2105,8 +2183,8 @@ class LobbyScene extends Phaser.Scene {
       'LEAVE ROOM',
       '#9b3030',
       15,
-      180,
-      40,
+      lobbyBtnW,
+      44,
     );
 
     this.leaveButton.on(
@@ -4810,10 +4888,31 @@ void this.recordShot();
   }
 }
 
+function getOptimalGameDimensions() {
+  const container = document.getElementById('game') || document.body;
+  const winW = container.clientWidth || window.innerWidth || 900;
+  const winH = container.clientHeight || window.innerHeight || 700;
+  const aspect = winW / winH;
+
+  if (aspect >= 1.05) {
+    // Landscape (Desktop, tablet landscape, or Android phone landscape)
+    const baseH = 700;
+    const baseW = Math.round(baseH * aspect);
+    return { width: Math.max(880, Math.min(1480, baseW)), height: baseH };
+  } else {
+    // Portrait (Android phone portrait / compact mobile screens)
+    const baseW = 540;
+    const baseH = Math.round(baseW / aspect);
+    return { width: baseW, height: Math.max(760, Math.min(1200, baseH)) };
+  }
+}
+
+const initialDims = getOptimalGameDimensions();
+
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
-  width: 900,
-  height: 700,
+  width: initialDims.width,
+  height: initialDims.height,
   backgroundColor: '#101418',
   parent: 'game',
 
@@ -4834,10 +4933,10 @@ const config: Phaser.Types.Core.GameConfig = {
   ],
 
   scale: {
-    mode: Capacitor.getPlatform() === 'android'
-      ? Phaser.Scale.EXPAND
-      : Phaser.Scale.FIT,
+    mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: initialDims.width,
+    height: initialDims.height,
   },
 };
 
@@ -4848,4 +4947,15 @@ window.peerankiDesktop?.onFullscreenChange((fullscreen) => {
 });
 void window.peerankiDesktop?.setFullscreen(loadSettings().fullscreen);
 
-new Phaser.Game(config);
+const game = new Phaser.Game(config);
+
+window.addEventListener('resize', () => {
+  const dims = getOptimalGameDimensions();
+  game.scale.resize(dims.width, dims.height);
+});
+window.addEventListener('orientationchange', () => {
+  window.setTimeout(() => {
+    const dims = getOptimalGameDimensions();
+    game.scale.resize(dims.width, dims.height);
+  }, 120);
+});
