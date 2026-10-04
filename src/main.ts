@@ -671,10 +671,39 @@ function positionHtmlInput(
   gameY: number,
   width = 300,
 ) {
-  const canvas = scene.game.canvas;
+  const canvas = scene.game?.canvas;
+  if (
+    !canvas ||
+    !canvas.isConnected ||
+    !input.isConnected ||
+    !Number.isFinite(gameX) ||
+    !Number.isFinite(gameY) ||
+    !Number.isFinite(width) ||
+    width <= 0
+  ) {
+    return;
+  }
+
   const rect = canvas.getBoundingClientRect();
-  const scaleX = rect.width / scene.scale.width;
-  const scaleY = rect.height / scene.scale.height;
+  const gameWidth = scene.scale.width;
+  const gameHeight = scene.scale.height;
+  if (
+    !Number.isFinite(rect.width) ||
+    !Number.isFinite(rect.height) ||
+    !Number.isFinite(rect.left) ||
+    !Number.isFinite(rect.top) ||
+    rect.width <= 0 ||
+    rect.height <= 0 ||
+    !Number.isFinite(gameWidth) ||
+    !Number.isFinite(gameHeight) ||
+    gameWidth <= 0 ||
+    gameHeight <= 0
+  ) {
+    return;
+  }
+
+  const scaleX = rect.width / gameWidth;
+  const scaleY = rect.height / gameHeight;
   const cssWidth = Math.min(
     width * scaleX,
     rect.width * 0.88,
@@ -803,6 +832,8 @@ function addMatchDurationPicker(scene: Phaser.Scene, x: number, y: number) {
 
 class MenuScene extends Phaser.Scene {
   private nameInput?: HTMLInputElement;
+  private sceneResizeHandler?: (gameSize: Phaser.Structs.Size) => void;
+  private topButtonsResizeHandler?: (gameSize: Phaser.Structs.Size) => void;
   private resizeHandler = () => {
     if (this.nameInput) {
       positionHtmlInput(this, this.nameInput, this.scale.width / 2, this.scale.height * 0.35, 300);
@@ -840,12 +871,14 @@ class MenuScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(-5);
 
-      this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      this.sceneResizeHandler = (gameSize: Phaser.Structs.Size) => {
+        if (!this.sys.isActive() || !bg.active || !overlay.active) return;
         bg.setPosition(gameSize.width / 2, gameSize.height / 2);
         bg.setScale(Math.max(gameSize.width / bg.width, gameSize.height / bg.height));
         overlay.setPosition(gameSize.width / 2, gameSize.height / 2);
         overlay.setSize(gameSize.width, gameSize.height);
-      });
+      };
+      this.scale.on('resize', this.sceneResizeHandler);
     }
 
     const glow = this.add.circle(width / 2, height * 0.13, 70, 0x2878ff, 0.12);
@@ -1015,12 +1048,14 @@ class MenuScene extends Phaser.Scene {
       this.scene.restart();
     });
 
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+    this.topButtonsResizeHandler = (gameSize: Phaser.Structs.Size) => {
+      if (!this.sys.isActive()) return;
       const resizeTopY = Math.max(34, Math.round(gameSize.height * 0.05));
       rightTopBtn.setPosition(gameSize.width - 46, resizeTopY);
       guideTopBtn.setPosition(gameSize.width - 128, resizeTopY);
       muteButton.setPosition(gameSize.width - 190, resizeTopY);
-    });
+    };
+    this.scale.on('resize', this.topButtonsResizeHandler);
     rightTopBtn.on('pointerdown', async () => {
       if (isNativeOrDesktop) {
         this.cleanup();
@@ -1053,6 +1088,14 @@ class MenuScene extends Phaser.Scene {
 
   private cleanup() {
     window.removeEventListener('resize', this.resizeHandler);
+    if (this.sceneResizeHandler) {
+      this.scale.off('resize', this.sceneResizeHandler);
+      this.sceneResizeHandler = undefined;
+    }
+    if (this.topButtonsResizeHandler) {
+      this.scale.off('resize', this.topButtonsResizeHandler);
+      this.topButtonsResizeHandler = undefined;
+    }
     this.nameInput?.remove();
     this.nameInput = undefined;
     removePeerankiInputs();
@@ -1061,6 +1104,7 @@ class MenuScene extends Phaser.Scene {
   shutdown() {
     this.cleanup();
   }
+
 }
 
 class SettingsScene extends Phaser.Scene {
@@ -1737,15 +1781,20 @@ class PlayerCountScene extends Phaser.Scene {
 
       await previousRoomCleanup;
 
+      let roomRequestFailed = false;
       if (this.mode === 'private') {
         const result = await createPrivateRoom(
           selectedCount,
           sessionId,
           getStoredPlayerName(),
-        );
+        ).catch((error: unknown) => {
+          roomRequestFailed = true;
+          console.error('[Peeranki] Private room creation failed:', error);
+          return null;
+        });
 
         if (!result) {
-          actionButton.setText('CREATE FAILED');
+          actionButton.setText(roomRequestFailed ? 'SUPABASE ERROR' : 'CREATE FAILED');
           actionButton.setInteractive({
             useHandCursor: true,
           });
@@ -1778,15 +1827,20 @@ class PlayerCountScene extends Phaser.Scene {
         this.nameInput?.value.trim() || getStoredPlayerName();
       setStoredPlayerName(name);
 
+      roomRequestFailed = false;
       const result =
         await findOrCreateRandomRoom(
           selectedCount,
           name,
           sessionId,
-        );
+        ).catch((error: unknown) => {
+          roomRequestFailed = true;
+          console.error('[Peeranki] Random matchmaking failed:', error);
+          return null;
+        });
 
       if (!result) {
-        actionButton.setText('MATCH FAILED');
+        actionButton.setText(roomRequestFailed ? 'SUPABASE ERROR' : 'MATCH FAILED');
         actionButton.setInteractive({
           useHandCursor: true,
         });
@@ -1969,10 +2023,16 @@ class JoinScene extends Phaser.Scene {
         code,
         name,
         sessionId,
-      );
+      ).catch((error: unknown) => {
+        console.error('[Peeranki] Room join failed:', error);
+        joinButton.setText('SUPABASE ERROR');
+        return null;
+      });
 
       if (!result) {
-        joinButton.setText('JOIN FAILED');
+        if (joinButton.text !== 'SUPABASE ERROR') {
+          joinButton.setText('JOIN FAILED');
+        }
         joinButton.setInteractive({
           useHandCursor: true,
         });
@@ -2141,7 +2201,11 @@ class LobbyScene extends Phaser.Scene {
       this.startButton.on(
         'pointerdown',
         () => {
-          void this.startGame();
+          void this.startGame().catch((error: unknown) => {
+            console.error('[Peeranki] Could not start the online game:', error);
+            this.startButton?.setText('SUPABASE ERROR');
+            this.startButton?.setInteractive({ useHandCursor: true });
+          });
         },
       );
     }
@@ -2217,7 +2281,14 @@ class LobbyScene extends Phaser.Scene {
       return;
     }
 
-    const result = await fetchGameRoom(roomCode);
+    let result;
+    try {
+      result = await fetchGameRoom(roomCode);
+    } catch (error) {
+      console.error('[Peeranki] Could not refresh the online room:', error);
+      this.statusText?.setText('SERVER ERROR — CHECK CONNECTION');
+      return;
+    }
 
     if (!result) {
       this.statusText?.setText(
@@ -2396,6 +2467,7 @@ class GameScene extends Phaser.Scene {
   private countText?: Phaser.GameObjects.Text;
   private shooterText?: Phaser.GameObjects.Text;
   private leaveButton?: Phaser.GameObjects.Text;
+  private leaveButtonResizeHandler?: (gameSize: Phaser.Structs.Size) => void;
   private matchText?: Phaser.GameObjects.Text;
   private weaponText?: Phaser.GameObjects.Text;
   private weaponImage?: Phaser.GameObjects.Image;
@@ -2632,9 +2704,11 @@ if (offlineMode) {
       .setInteractive({ useHandCursor: true });
 
     // Keep the touch target inside the visible game area as Phaser FIT resizes.
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+    this.leaveButtonResizeHandler = (gameSize: Phaser.Structs.Size) => {
+      if (!this.sys.isActive() || !this.leaveButton?.active) return;
       this.leaveButton?.setPosition(gameSize.width - 54, 32);
-    });
+    };
+    this.scale.on('resize', this.leaveButtonResizeHandler);
 
     this.leaveButton.on(
       'pointerdown',
@@ -2810,7 +2884,14 @@ if (offlineMode) {
   }
 
   private async initializeGame() {
-    const room = await fetchGameRoom(roomCode);
+    let room;
+    try {
+      room = await fetchGameRoom(roomCode);
+    } catch (error) {
+      console.error('[Peeranki] Could not initialize the online game:', error);
+      this.statusText?.setText('SERVER ERROR — CHECK CONNECTION');
+      return;
+    }
 
     if (!room) {
       this.statusText?.setText(
@@ -4740,6 +4821,10 @@ void this.recordShot();
   this.markShooter();
 }
   shutdown() {
+    if (this.leaveButtonResizeHandler) {
+      this.scale.off('resize', this.leaveButtonResizeHandler);
+      this.leaveButtonResizeHandler = undefined;
+    }
     this.countingTimer?.remove(false);
     this.countingTimer = undefined;
     this.matchTimer?.remove(false);

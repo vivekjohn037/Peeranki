@@ -18,17 +18,34 @@ const isSupabaseConfigured = Boolean(
   supabaseKey.trim().length > 0,
 );
 
+const hasAnySupabaseConfiguration = [supabaseUrl, supabaseKey].some(
+  (value) => typeof value === 'string' && value.trim().length > 0,
+);
+
 let realClient: SupabaseClient | null = null;
+let clientInitializationError: unknown;
 
 if (isSupabaseConfigured) {
   try {
     realClient = createClient(supabaseUrl.trim(), supabaseKey.trim());
   } catch (err) {
-    console.warn('[Peeranki] Failed to initialize Supabase client:', err);
+    console.error('[Peeranki] Failed to initialize configured Supabase client:', err);
+    clientInitializationError = err;
     realClient = null;
   }
-} else {
+} else if (!hasAnySupabaseConfiguration) {
   console.info('[Peeranki] Supabase environment variables not configured; running with local in-memory/broadcast room manager.');
+} else {
+  clientInitializationError = new Error('Both VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are required.');
+  console.error('[Peeranki] Supabase configuration is incomplete; online rooms are unavailable.');
+}
+
+function configuredClient(): SupabaseClient {
+  if (realClient) return realClient;
+  throw new Error(
+    `Supabase is configured but unavailable: ${errorMessage(clientInitializationError)}. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.`,
+    { cause: clientInitializationError },
+  );
 }
 
 // -------------------------------------------------------------
@@ -203,7 +220,13 @@ const mockSupabaseProxy: any = {
   },
 };
 
-export const supabase: any = realClient ?? mockSupabaseProxy;
+const unavailableSupabaseProxy: any = {
+  from: () => { throw new Error('Supabase is configured but unavailable. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'); },
+  rpc: async () => { throw new Error('Supabase is configured but unavailable. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'); },
+  channel: () => { throw new Error('Supabase is configured but unavailable. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'); },
+};
+
+export const supabase: any = realClient ?? (hasAnySupabaseConfiguration ? unavailableSupabaseProxy : mockSupabaseProxy);
 
 // -------------------------------------------------------------
 // Game Room Actions
@@ -229,7 +252,8 @@ export async function createPrivateRoom(
 
   const hostName = playerName.trim() || 'Player 1';
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const roomCode = generateRoomCode();
@@ -245,7 +269,7 @@ export async function createPrivateRoom(
           },
         ];
 
-        const { data, error } = await realClient
+        const { data, error } = await client
           .from('game_states')
           .insert({
             room_code: roomCode,
@@ -266,12 +290,12 @@ export async function createPrivateRoom(
         }
 
         if (error && !String(error.message).toLowerCase().includes('duplicate')) {
-          console.warn('[Peeranki] Real Supabase private room creation failed, falling back to local store:', error);
-          break;
+          throw new Error(`Supabase room creation failed: ${error.message}`);
         }
       }
+      throw new Error('Supabase could not generate a unique room code after several attempts.');
     } catch (err) {
-      console.warn('[Peeranki] Real Supabase error on createPrivateRoom:', err);
+      throw new Error(`Supabase room creation failed: ${errorMessage(err)}`, { cause: err });
     }
   }
 
@@ -321,20 +345,19 @@ export async function joinRoom(
     return null;
   }
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
-      const { data, error } = await realClient.rpc('join_private_room', {
+      const { data, error } = await client.rpc('join_private_room', {
         p_room_code: cleanCode,
         p_player_name: cleanName,
         p_session_id: sessionId,
       });
 
-      if (!error && data) {
-        return data;
-      }
-      console.warn('[Peeranki] Real Supabase join room failed, falling back to local store:', error);
+      if (error) throw new Error(error.message);
+      return data;
     } catch (err) {
-      console.warn('[Peeranki] Real Supabase join error:', err);
+      throw new Error(`Supabase could not join room ${cleanCode}: ${errorMessage(err)}`, { cause: err });
     }
   }
 
@@ -393,20 +416,19 @@ export async function findOrCreateRandomRoom(
     return null;
   }
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
-      const { data, error } = await realClient.rpc('find_or_create_public_room', {
+      const { data, error } = await client.rpc('find_or_create_public_room', {
         p_max_players: maxPlayers,
         p_player_name: cleanName,
         p_session_id: sessionId,
       });
 
-      if (!error && data) {
-        return data;
-      }
-      console.warn('[Peeranki] Real Supabase matchmaking failed, falling back to local store:', error);
+      if (error) throw new Error(error.message);
+      return data;
     } catch (err) {
-      console.warn('[Peeranki] Real Supabase matchmaking error:', err);
+      throw new Error(`Supabase matchmaking failed: ${errorMessage(err)}`, { cause: err });
     }
   }
 
@@ -459,23 +481,27 @@ export async function findOrCreateRandomRoom(
   return newPublicRoom;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function fetchGameRoom(roomCode: string) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode) return null;
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
-      const { data, error } = await realClient
+      const { data, error } = await client
         .from('game_states')
         .select('*')
         .eq('room_code', cleanCode)
         .maybeSingle();
 
-      if (!error && data) {
-        return data;
-      }
+      if (error) throw error;
+      return data;
     } catch (err) {
-      console.warn('[Peeranki] Real Supabase fetch room error:', err);
+      throw new Error(`Supabase could not load room ${cleanCode}: ${errorMessage(err)}`, { cause: err });
     }
   }
 
@@ -499,9 +525,10 @@ export async function saveGameState(
     return;
   }
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
-      const { error } = await realClient
+      const { error } = await client
         .from('game_states')
         .update({
           players,
@@ -514,11 +541,12 @@ export async function saveGameState(
         .eq('room_code', cleanCode);
 
       if (error) {
-        console.warn('[Peeranki] Failed to save game state to Supabase:', error);
+        throw error;
       }
     } catch (err) {
-      console.warn('[Peeranki] Save game state error:', err);
+      throw new Error(`Supabase could not save game state: ${errorMessage(err)}`, { cause: err });
     }
+    return;
   }
 
   // Also update local mock room
@@ -535,15 +563,17 @@ export async function touchPlayer(roomCode: string, sessionId: string) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !sessionId) return null;
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
-      const { data, error } = await realClient.rpc('touch_player', {
+      const { data, error } = await client.rpc('touch_player', {
         p_room_code: cleanCode,
         p_session_id: sessionId,
       });
-      if (!error) return data;
-    } catch {
-      // fallback
+      if (error) throw error;
+      return data;
+    } catch (err) {
+      throw new Error(`Supabase player heartbeat failed: ${errorMessage(err)}`, { cause: err });
     }
   }
 
@@ -564,15 +594,17 @@ export async function cleanupStalePlayers(roomCode: string, staleSeconds = 30) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode) return null;
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
-      const { data, error } = await realClient.rpc('cleanup_stale_players', {
+      const { data, error } = await client.rpc('cleanup_stale_players', {
         p_room_code: cleanCode,
         p_stale_seconds: staleSeconds,
       });
-      if (!error) return data;
-    } catch {
-      // fallback
+      if (error) throw error;
+      return data;
+    } catch (err) {
+      throw new Error(`Supabase stale-player cleanup failed: ${errorMessage(err)}`, { cause: err });
     }
   }
 
@@ -598,15 +630,17 @@ export async function leaveRoom(roomCode: string, sessionId: string) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !sessionId) return null;
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
-      const { data, error } = await realClient.rpc('leave_room', {
+      const { data, error } = await client.rpc('leave_room', {
         p_room_code: cleanCode,
         p_session_id: sessionId,
       });
-      if (!error) return data;
-    } catch {
-      // fallback
+      if (error) throw error;
+      return data;
+    } catch (err) {
+      throw new Error(`Supabase could not leave room ${cleanCode}: ${errorMessage(err)}`, { cause: err });
     }
   }
 
@@ -627,7 +661,7 @@ export function leaveRoomBestEffort(roomCode: string, sessionId: string) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !sessionId) return;
 
-  if (isSupabaseConfigured) {
+  if (hasAnySupabaseConfiguration) {
     const url = `${supabaseUrl}/rest/v1/rpc/leave_room`;
     try {
       void fetch(url, {
@@ -649,7 +683,11 @@ export function leaveRoomBestEffort(roomCode: string, sessionId: string) {
     }
   }
 
-  void leaveRoom(cleanCode, sessionId);
+  if (!hasAnySupabaseConfiguration) {
+    void leaveRoom(cleanCode, sessionId).catch((err) => {
+      console.error('[Peeranki] Local room cleanup failed:', err);
+    });
+  }
 }
 
 export function subscribeToGameState(
@@ -658,16 +696,11 @@ export function subscribeToGameState(
 ) {
   const cleanCode = roomCode.trim().toUpperCase();
 
-  // Register local subscriber
-  if (!listenersByRoom.has(cleanCode)) {
-    listenersByRoom.set(cleanCode, new Set());
-  }
-  listenersByRoom.get(cleanCode)!.add(callback);
-
   let realChannel: any = null;
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
     try {
-      realChannel = realClient
+      const client = configuredClient();
+      realChannel = client
         .channel(`peeranki-room-${cleanCode}`)
         .on(
           'postgres_changes',
@@ -683,12 +716,16 @@ export function subscribeToGameState(
         )
         .subscribe((_status, error) => {
           if (error) {
-            console.warn('[Peeranki] Supabase realtime error:', error);
+            console.error('[Peeranki] Supabase realtime error:', error);
           }
         });
     } catch (err) {
-      console.warn('[Peeranki] Failed to subscribe to Supabase realtime:', err);
+      console.error('[Peeranki] Failed to subscribe to Supabase realtime:', err);
     }
+  } else {
+    // Local listeners are only valid in explicitly unconfigured mode.
+    if (!listenersByRoom.has(cleanCode)) listenersByRoom.set(cleanCode, new Set());
+    listenersByRoom.get(cleanCode)!.add(callback);
   }
 
   return {
@@ -697,8 +734,8 @@ export function subscribeToGameState(
       if (realChannel) {
         try {
           await realChannel.unsubscribe();
-        } catch {
-          // ignore
+        } catch (err) {
+          console.error('[Peeranki] Supabase realtime unsubscribe failed:', err);
         }
       }
     },
@@ -713,21 +750,23 @@ export async function updatePlayerAvatar(
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !sessionId) return;
 
-  if (realClient) {
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
     try {
       const room = await fetchGameRoom(cleanCode);
       if (room && Array.isArray(room.players)) {
         const updated = room.players.map((p: any) =>
           p.session_id === sessionId ? { ...p, avatar } : p,
         );
-        await realClient
+        await client
           .from('game_states')
           .update({ players: updated, updated_at: new Date().toISOString() })
           .eq('room_code', cleanCode);
       }
     } catch (err) {
-      console.warn('[Peeranki] Failed to update player avatar in Supabase:', err);
+      throw new Error(`Supabase could not update the player avatar: ${errorMessage(err)}`, { cause: err });
     }
+    return;
   }
 
   // Update in local mock storage

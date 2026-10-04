@@ -19,11 +19,8 @@ export const SOUNDTRACK_TRACKS: SoundtrackTrack[] = [
     title: 'Peeranki Main Theme',
     filename: 'bg_music.mp3',
     sources: [
-      'assets/audio/bg_music.mp3',
-      'assets/audio/bg_music_1.mp3',
       '/assets/audio/bg_music.mp3',
       '/assets/audio/bg_music_1.mp3',
-      'assets/audio/bg_music.wav',
       '/assets/audio/bg_music.wav',
     ],
   },
@@ -32,9 +29,7 @@ export const SOUNDTRACK_TRACKS: SoundtrackTrack[] = [
     title: 'Kerala Folk Battle Theme',
     filename: 'bg_music_2.mp3',
     sources: [
-      'assets/audio/bg_music_2.mp3',
       '/assets/audio/bg_music_2.mp3',
-      'assets/audio/bg_music.mp3',
       '/assets/audio/bg_music.mp3',
     ],
   },
@@ -65,6 +60,27 @@ export type PeerankiAudioEffect =
   | 'round_win'
   | 'victory'
   | 'defeat';
+
+// Keep this list aligned with the files shipped in public/assets/audio.
+// Missing samples use the procedural effect synthesizer without network requests.
+const SFX_ASSET_EXTENSIONS: Partial<Record<PeerankiAudioEffect, 'wav' | 'mp3'>> = {
+  click: 'wav',
+  select: 'wav',
+  shoot: 'wav',
+  cannon: 'wav',
+  double_peeranki: 'wav',
+  hit: 'wav',
+  hook: 'wav',
+  hook_strip: 'wav',
+  elimination: 'wav',
+  count_tick: 'wav',
+  duel_start: 'wav',
+  rps_clash: 'wav',
+  rps_tie: 'mp3',
+  round_win: 'wav',
+  victory: 'wav',
+  defeat: 'wav',
+};
 
 function getStoredMusicVolume(): number {
   try {
@@ -202,29 +218,21 @@ export class PeerankiAudioSystem {
       return null;
     }
 
+    const extension = SFX_ASSET_EXTENSIONS[name as PeerankiAudioEffect];
+    if (!extension) return null;
+
     this.pendingBufferFetches.add(name);
     try {
-      const candidates = [
-        `assets/audio/${name}.wav`,
-        `/assets/audio/${name}.wav`,
-        `assets/audio/${name}.mp3`,
-        `/assets/audio/${name}.mp3`,
-      ];
-
-      for (const url of candidates) {
-        try {
-          const res = await fetch(url);
-          if (res.ok) {
-            const arrayBuffer = await res.arrayBuffer();
-            const ctx = this.getContext();
-            const decoded = await ctx.decodeAudioData(arrayBuffer);
-            this.audioBufferCache.set(name, decoded);
-            return decoded;
-          }
-        } catch {
-          // try next url
-        }
+      const response = await fetch(`/assets/audio/${name}.${extension}`);
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        const ctx = this.getContext();
+        const decoded = await ctx.decodeAudioData(arrayBuffer);
+        this.audioBufferCache.set(name, decoded);
+        return decoded;
       }
+    } catch {
+      // Procedural effects remain available when an audio file cannot be loaded.
     } finally {
       this.pendingBufferFetches.delete(name);
     }
