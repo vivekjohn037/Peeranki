@@ -1,0 +1,889 @@
+/* ==============================================================
+   Peeranki Modular UI System Stylesheet
+   Responsive Design for Landscape and Portrait Orientations
+   ============================================================== */
+
+:root {
+  --pk-bg-base: #101418;
+  --pk-bg-surface: #182029;
+  --pk-bg-surface-elevated: #222c38;
+  --pk-bg-surface-hover: #2b3644;
+  --pk-border-subtle: #2d3846;
+  --pk-border-strong: #455569;
+  --pk-accent-blue: #2878ff;
+  --pk-accent-green: #20a060;
+  --pk-accent-gold: #f2cf66;
+  --pk-accent-red: #e63946;
+  --pk-text-primary: #ffffff;
+  --pk-text-secondary: #a0aec0;
+  --pk-text-muted: #718096;
+}
+
+#game-ui-root {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--pk-text-primary);
+  background-color: var(--pk-bg-base);
+  background-image: radial-gradient(circle at 50% 10%, rgba(40, 120, 255, 0.12) 0%, transparent 60%),
+                    url('/assets/background/game_background.png');
+  background-size: cover;
+  background-position: center;
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  z-index: 10;
+}
+
+/* Background darkness scrim for high legibility */
+#game-ui-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(16, 20, 24, 0.72);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.pk-layout-container {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
+
+/* ==============================================================
+   1. TOP HUD BAR
+   ============================================================== */
+.pk-hud-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: rgba(24, 32, 41, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--pk-border-subtle);
+  min-height: 52px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.pk-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pk-topbar-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.pk-topbar-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--pk-text-primary);
+}
+
+.pk-topbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pk-match-timer-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--pk-accent-gold);
+}
+
+.pk-match-round-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pk-text-secondary);
+}
+
+.pk-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pk-btn-icon {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pk-bg-surface-elevated);
+  border: 1px solid var(--pk-border-subtle);
+  border-radius: 8px;
+  color: var(--pk-text-primary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.pk-btn-icon:active {
+  transform: scale(0.92);
+}
+
+.pk-btn-leave {
+  min-height: 44px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(230, 57, 70, 0.2);
+  border: 1px solid var(--pk-accent-red);
+  color: #ff858d;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pk-btn-leave:hover {
+  background: var(--pk-accent-red);
+  color: #ffffff;
+}
+
+.pk-btn-leave:active {
+  transform: scale(0.95);
+}
+
+/* ==============================================================
+   2. ANNOUNCER BANNER
+   ============================================================== */
+.pk-announcer-banner {
+  padding: 6px 12px;
+  text-align: center;
+  background: rgba(16, 20, 24, 0.6);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pk-text-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pk-announcer-banner.pk-alert-turn {
+  background: rgba(40, 120, 255, 0.2);
+  color: #7ab3ff;
+  border-bottom-color: rgba(40, 120, 255, 0.4);
+}
+
+.pk-announcer-banner.pk-alert-notice {
+  background: rgba(242, 207, 102, 0.15);
+  color: var(--pk-accent-gold);
+}
+
+/* ==============================================================
+   3. GAME BOARD (PLAYER CARDS GRID)
+   ============================================================== */
+.pk-board-scroll-area {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pk-board-grid {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  max-width: 960px;
+  margin: auto;
+  align-content: center;
+  justify-content: center;
+}
+
+/* Card item */
+.pk-player-card {
+  position: relative;
+  background: var(--pk-bg-surface);
+  border: 2px solid var(--pk-border-subtle);
+  border-radius: 12px;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  box-sizing: border-box;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.18s ease,
+              box-shadow 0.18s ease;
+  min-height: 135px;
+  cursor: default;
+}
+
+/* Shooter Highlight */
+.pk-player-card.pk-is-shooter {
+  border-color: var(--pk-accent-blue);
+  box-shadow: 0 0 16px rgba(40, 120, 255, 0.45);
+  animation: pk-pulse-shooter 1.8s infinite alternate;
+}
+
+@keyframes pk-pulse-shooter {
+  0% { transform: scale(1); box-shadow: 0 0 10px rgba(40, 120, 255, 0.3); }
+  100% { transform: scale(1.03); box-shadow: 0 0 20px rgba(40, 120, 255, 0.6); }
+}
+
+/* Targetable State (When it's my turn to shoot) */
+.pk-player-card.pk-is-targetable {
+  cursor: pointer;
+  border-color: var(--pk-accent-green);
+  border-style: dashed;
+}
+
+.pk-player-card.pk-is-targetable:hover {
+  transform: translateY(-2px) scale(1.02);
+  border-style: solid;
+  border-color: #38e08d;
+  box-shadow: 0 0 18px rgba(32, 160, 96, 0.4);
+}
+
+.pk-player-card.pk-is-targetable:active {
+  transform: scale(0.96);
+}
+
+/* Pending Double Peeranki Selection */
+.pk-player-card.pk-pending-double {
+  border-color: var(--pk-accent-gold);
+  border-style: solid;
+  box-shadow: 0 0 20px rgba(242, 207, 102, 0.6);
+  animation: pk-pulse-target 1s infinite alternate;
+}
+
+@keyframes pk-pulse-target {
+  0% { transform: scale(1); }
+  100% { transform: scale(1.04); }
+}
+
+/* Eliminated State */
+.pk-player-card.pk-eliminated {
+  opacity: 0.35;
+  filter: grayscale(85%);
+  cursor: not-allowed;
+}
+
+/* Disconnected State */
+.pk-player-card.pk-disconnected {
+  opacity: 0.25;
+}
+
+/* Card Header */
+.pk-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--pk-text-muted);
+}
+
+.pk-card-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--pk-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+}
+
+.pk-card-role-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--pk-accent-gold);
+}
+
+.pk-card-role-tag.shooter-badge {
+  color: #7ab3ff;
+}
+
+/* Tower Visual */
+.pk-tower-stage-wrapper {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 4px 0;
+}
+
+.pk-tower-img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.4));
+  transition: transform 0.2s ease;
+}
+
+.pk-tower-shake {
+  animation: pk-shake 0.35s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes pk-shake {
+  10%, 90% { transform: translate3d(-2px, 0, 0) scale(1.08); }
+  20%, 80% { transform: translate3d(3px, 0, 0) scale(1.08); }
+  30%, 50%, 70% { transform: translate3d(-3px, 0, 0) scale(1.08); }
+  40%, 60% { transform: translate3d(3px, 0, 0) scale(1.08); }
+}
+
+/* Card Footer */
+.pk-card-stage-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pk-text-secondary);
+  margin-bottom: 4px;
+}
+
+.pk-card-weapons-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 18px;
+}
+
+.pk-card-weapon-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.pk-card-points {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--pk-accent-gold);
+  margin-top: 3px;
+}
+
+.pk-target-hint {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--pk-accent-green);
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ==============================================================
+   4. BOTTOM ACTION HUD (THUMB ZONE)
+   ============================================================== */
+.pk-hud-bottombar {
+  flex-shrink: 0;
+  background: rgba(24, 32, 41, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-top: 1px solid var(--pk-border-subtle);
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+}
+
+.pk-action-prompt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.pk-action-prompt-text {
+  font-weight: 600;
+  color: var(--pk-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pk-action-prompt-subtext {
+  font-size: 12px;
+  color: var(--pk-text-secondary);
+}
+
+.pk-weapon-selector-dock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.pk-weapon-cycle-btn {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pk-bg-surface-elevated);
+  border: 1px solid var(--pk-border-strong);
+  border-radius: 8px;
+  color: var(--pk-text-primary);
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pk-weapon-cycle-btn:active {
+  transform: scale(0.92);
+}
+
+.pk-weapon-chip-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 4px;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pk-weapon-chip {
+  min-height: 44px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--pk-bg-surface-elevated);
+  border: 1px solid var(--pk-border-subtle);
+  border-radius: 8px;
+  color: var(--pk-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.pk-weapon-chip:hover {
+  background: var(--pk-bg-surface-hover);
+  color: var(--pk-text-primary);
+}
+
+.pk-weapon-chip.pk-selected {
+  background: rgba(40, 120, 255, 0.22);
+  border-color: var(--pk-accent-blue);
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(40, 120, 255, 0.35);
+}
+
+.pk-weapon-chip:active {
+  transform: scale(0.96);
+}
+
+.pk-chip-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+/* Desktop keyboard hints */
+.pk-keyboard-hint {
+  font-size: 11px;
+  color: var(--pk-text-muted);
+  text-align: center;
+  margin-top: 2px;
+}
+
+/* ==============================================================
+   5. COUNTDOWN OVERLAY
+   ============================================================== */
+.pk-countdown-banner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(16, 20, 24, 0.9);
+  border: 2px solid var(--pk-accent-gold);
+  border-radius: 16px;
+  padding: 16px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  animation: pk-pop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pk-countdown-num {
+  font-size: 56px;
+  font-weight: 900;
+  color: var(--pk-accent-gold);
+  line-height: 1;
+  text-shadow: 0 0 20px rgba(242, 207, 102, 0.6);
+  animation: pk-count-pulse 0.2s ease-out;
+}
+
+.pk-countdown-sub {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--pk-text-secondary);
+  margin-top: 6px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+@keyframes pk-count-pulse {
+  0% { transform: scale(1.3); }
+  100% { transform: scale(1); }
+}
+
+@keyframes pk-pop-in {
+  0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+
+/* ==============================================================
+   6. DUEL MODAL (ROCK-PAPER-SCISSORS)
+   ============================================================== */
+.pk-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 14, 18, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 150;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.pk-duel-card-dialog {
+  background: var(--pk-bg-surface);
+  border: 1px solid var(--pk-border-strong);
+  border-radius: 16px;
+  padding: 20px;
+  width: 100%;
+  max-width: 440px;
+  text-align: center;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  animation: pk-pop-in 0.22s ease-out;
+}
+
+.pk-duel-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--pk-accent-gold);
+  margin-bottom: 6px;
+}
+
+.pk-duel-subtitle {
+  font-size: 13px;
+  color: var(--pk-text-secondary);
+  margin-bottom: 18px;
+}
+
+.pk-rps-buttons-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.pk-rps-choice-btn {
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--pk-bg-surface-elevated);
+  border: 2px solid var(--pk-border-subtle);
+  border-radius: 12px;
+  color: var(--pk-text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pk-rps-choice-btn:hover {
+  border-color: var(--pk-accent-blue);
+  background: var(--pk-bg-surface-hover);
+  transform: translateY(-2px);
+}
+
+.pk-rps-choice-btn:active {
+  transform: scale(0.94);
+}
+
+.pk-rps-choice-btn.pk-selected {
+  border-color: var(--pk-accent-gold);
+  background: rgba(242, 207, 102, 0.16);
+  box-shadow: 0 0 16px rgba(242, 207, 102, 0.4);
+}
+
+.pk-rps-emoji {
+  font-size: 28px;
+}
+
+.pk-rps-label {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pk-duel-status-line {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pk-text-secondary);
+}
+
+/* ==============================================================
+   7. GAME OVER / VICTORY MODAL
+   ============================================================== */
+.pk-gameover-dialog {
+  background: var(--pk-bg-surface);
+  border: 1px solid var(--pk-border-strong);
+  border-radius: 20px;
+  padding: 24px;
+  width: 100%;
+  max-width: 480px;
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+  animation: pk-pop-in 0.25s ease-out;
+}
+
+.pk-gameover-trophy {
+  font-size: 48px;
+  margin-bottom: 8px;
+}
+
+.pk-gameover-title {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--pk-accent-gold);
+  margin-bottom: 4px;
+}
+
+.pk-gameover-winner-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--pk-text-primary);
+  margin-bottom: 14px;
+}
+
+.pk-gameover-stats-list {
+  background: rgba(16, 20, 24, 0.6);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.pk-gameover-stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.pk-gameover-stat-row:last-child {
+  border-bottom: none;
+}
+
+.pk-gameover-actions-row {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.pk-btn-primary {
+  min-height: 48px;
+  padding: 0 24px;
+  background: var(--pk-accent-green);
+  border: none;
+  border-radius: 10px;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex: 1;
+}
+
+.pk-btn-primary:active {
+  transform: scale(0.96);
+}
+
+.pk-btn-secondary {
+  min-height: 48px;
+  padding: 0 20px;
+  background: var(--pk-bg-surface-elevated);
+  border: 1px solid var(--pk-border-subtle);
+  border-radius: 10px;
+  color: var(--pk-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pk-btn-secondary:active {
+  transform: scale(0.96);
+}
+
+/* ==============================================================
+   8. RESPONSIVE ORIENTATION & MOBILE RULES
+   ============================================================== */
+
+/* --- PORTRAIT ORIENTATION (Mobile phones held vertically) --- */
+#game-ui-root.pk-orientation-portrait .pk-board-grid {
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  max-width: 440px;
+}
+
+@media (min-width: 480px) and (orientation: portrait) {
+  #game-ui-root.pk-orientation-portrait .pk-board-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+#game-ui-root.pk-orientation-portrait .pk-player-card {
+  min-height: 120px;
+  padding: 8px 6px;
+}
+
+#game-ui-root.pk-orientation-portrait .pk-tower-stage-wrapper {
+  width: 48px;
+  height: 48px;
+}
+
+#game-ui-root.pk-orientation-portrait .pk-tower-img {
+  width: 44px;
+  height: 44px;
+}
+
+#game-ui-root.pk-orientation-portrait .pk-hud-bottombar {
+  padding: 8px 12px;
+}
+
+#game-ui-root.pk-orientation-portrait .pk-weapon-chip {
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+/* --- LANDSCAPE ORIENTATION (Mobile phones held horizontally or Desktop) --- */
+#game-ui-root.pk-orientation-landscape .pk-board-grid {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  max-width: 900px;
+}
+
+/* Compact height landscape (Mobile landscape, e.g. < 480px height) */
+@media (max-height: 480px) {
+  .pk-hud-topbar {
+    min-height: 42px;
+    padding: 4px 12px;
+  }
+  .pk-topbar-title {
+    display: none;
+  }
+  .pk-btn-icon {
+    width: 38px;
+    height: 38px;
+  }
+  .pk-btn-leave {
+    min-height: 38px;
+    padding: 0 10px;
+  }
+  .pk-announcer-banner {
+    padding: 3px 8px;
+    font-size: 11px;
+  }
+  .pk-board-scroll-area {
+    padding: 6px;
+  }
+  .pk-player-card {
+    min-height: 105px;
+    padding: 6px 4px;
+  }
+  .pk-tower-stage-wrapper {
+    width: 42px;
+    height: 42px;
+    margin: 2px 0;
+  }
+  .pk-tower-img {
+    width: 38px;
+    height: 38px;
+  }
+  .pk-card-name {
+    font-size: 11px;
+  }
+  .pk-card-stage-name {
+    font-size: 10px;
+    margin-bottom: 2px;
+  }
+  .pk-hud-bottombar {
+    padding: 6px 12px;
+  }
+  .pk-weapon-chip {
+    min-height: 38px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+  .pk-weapon-cycle-btn {
+    min-width: 38px;
+    min-height: 38px;
+  }
+  .pk-keyboard-hint {
+    display: none;
+  }
+}
+
+/* Reduced Motion Compliance */
+@media (prefers-reduced-motion: reduce) {
+  .pk-player-card.pk-is-shooter,
+  .pk-player-card.pk-pending-double,
+  .pk-countdown-banner,
+  .pk-countdown-num,
+  .pk-tower-shake {
+    animation: none !important;
+    transition: none !important;
+  }
+}

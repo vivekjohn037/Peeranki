@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import './style.css';
+import { GameUIManager } from './ui/GameUIManager';
+import type { HUDState, UIPlayer, DuelState, GameOverState } from './ui/types';
 
 import {
   saveGameState,
@@ -115,24 +117,59 @@ type PeerankiSettings = {
   soundEffectsVolume: number;
   fullscreen: boolean;
   keyboardControls: boolean;
+  playerName?: string;
 };
 
 const SETTINGS_KEY = 'peeranki-settings';
+export const PLAYER_NAME_KEY = 'peeranki-player-name';
+
 const DEFAULT_SETTINGS: PeerankiSettings = {
   musicVolume: 70,
   soundEffectsVolume: 80,
   fullscreen: false,
   keyboardControls: true,
+  playerName: 'Player',
 };
+
+export function getStoredPlayerName(): string {
+  try {
+    const raw = localStorage.getItem(PLAYER_NAME_KEY)?.trim();
+    if (raw && raw.length > 0) {
+      return raw.slice(0, 16);
+    }
+    const settings = loadSettings();
+    if (settings.playerName?.trim()) {
+      return settings.playerName.trim().slice(0, 16);
+    }
+  } catch {
+    // fallback
+  }
+  return 'Player';
+}
+
+export function setStoredPlayerName(name: string): string {
+  const clean = name.trim().slice(0, 16) || 'Player';
+  try {
+    localStorage.setItem(PLAYER_NAME_KEY, clean);
+    const settings = loadSettings();
+    settings.playerName = clean;
+    saveSettings(settings);
+  } catch {
+    // ignore
+  }
+  return clean;
+}
 
 function loadSettings(): PeerankiSettings {
   try {
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}');
+    const storedName = localStorage.getItem(PLAYER_NAME_KEY)?.trim() || stored.playerName;
     return {
       musicVolume: clampSetting(stored.musicVolume, DEFAULT_SETTINGS.musicVolume),
       soundEffectsVolume: clampSetting(stored.soundEffectsVolume, DEFAULT_SETTINGS.soundEffectsVolume),
       fullscreen: typeof stored.fullscreen === 'boolean' ? stored.fullscreen : DEFAULT_SETTINGS.fullscreen,
       keyboardControls: typeof stored.keyboardControls === 'boolean' ? stored.keyboardControls : DEFAULT_SETTINGS.keyboardControls,
+      playerName: typeof storedName === 'string' && storedName.trim() ? storedName.trim().slice(0, 16) : 'Player',
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -711,19 +748,30 @@ function positionHtmlInput(
   }px`;
   input.style.transform = 'translate(-50%, -50%)';
   input.style.width = `${cssWidth}px`;
-  input.style.padding = '13px 16px';
+  input.style.padding = '12px 16px';
   input.style.fontSize = `${Math.max(
-    16,
-    Math.round(19 * scaleX),
+    15,
+    Math.round(18 * scaleX),
   )}px`;
   input.style.textAlign = 'center';
   input.style.boxSizing = 'border-box';
-  input.style.border = '2px solid #444c55';
-  input.style.borderRadius = '8px';
-  input.style.backgroundColor = '#ffffff';
-  input.style.color = '#111111';
+  input.style.border = '2px solid #455569';
+  input.style.borderRadius = '10px';
+  input.style.backgroundColor = '#182029';
+  input.style.color = '#ffffff';
   input.style.outline = 'none';
   input.style.zIndex = '10000';
+  input.style.fontFamily = 'Arial, sans-serif';
+  input.style.fontWeight = '700';
+  input.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.5)';
+  input.onfocus = () => {
+    input.style.borderColor = '#2878ff';
+    input.style.boxShadow = '0 0 14px rgba(40, 120, 255, 0.5)';
+  };
+  input.onblur = () => {
+    input.style.borderColor = '#455569';
+    input.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.5)';
+  };
 }
 
 function makeButton(
@@ -775,6 +823,13 @@ function addMatchDurationPicker(scene: Phaser.Scene, x: number, y: number) {
 }
 
 class MenuScene extends Phaser.Scene {
+  private nameInput?: HTMLInputElement;
+  private resizeHandler = () => {
+    if (this.nameInput) {
+      positionHtmlInput(this, this.nameInput, this.scale.width / 2, this.scale.height * 0.435, 280);
+    }
+  };
+
   constructor() {
     super('MenuScene');
   }
@@ -789,59 +844,107 @@ class MenuScene extends Phaser.Scene {
 
     const { width, height } = this.scale;
 
-    const glow = this.add.circle(width / 2, height * 0.23, 112, 0x2878ff, 0.12);
+    const glow = this.add.circle(width / 2, height * 0.19, 100, 0x2878ff, 0.12);
     this.tweens.add({ targets: glow, alpha: 0.24, scale: 1.12, duration: 1500, yoyo: true, repeat: -1 });
-    this.add.image(width / 2, height * 0.23, 'peeranki-logo').setDisplaySize(190, 190);
+    this.add.image(width / 2, height * 0.19, 'peeranki-logo').setDisplaySize(160, 160);
 
     this.add
       .text(
         width / 2,
-        height * 0.385,
+        height * 0.315,
         'Traditional Kerala Game',
         {
           fontFamily: 'Arial',
-          fontSize: '20px',
-          color: '#bbbbbb',
+          fontSize: '17px',
+          color: '#8a99a8',
+        },
+      )
+      .setOrigin(0.5);
+
+    // Naming option at the beginning
+    this.add
+      .text(
+        width / 2,
+        height * 0.375,
+        'YOUR NAME',
+        {
+          fontFamily: 'Arial',
+          fontSize: '13px',
+          color: '#f2cf66',
+          fontStyle: 'bold',
+        },
+      )
+      .setOrigin(0.5);
+
+    this.nameInput = document.createElement('input');
+    this.nameInput.id = 'peeranki-menu-name';
+    this.nameInput.type = 'text';
+    this.nameInput.placeholder = 'Enter your name';
+    this.nameInput.maxLength = 16;
+    this.nameInput.value = getStoredPlayerName();
+    this.nameInput.autocomplete = 'name';
+    document.body.appendChild(this.nameInput);
+
+    positionHtmlInput(this, this.nameInput, width / 2, height * 0.435, 280);
+
+    this.nameInput.addEventListener('input', () => {
+      setStoredPlayerName(this.nameInput?.value ?? '');
+    });
+
+    window.addEventListener('resize', this.resizeHandler);
+
+    this.add
+      .text(
+        width / 2,
+        height * 0.495,
+        'Saved for all offline & online games',
+        {
+          fontFamily: 'Arial',
+          fontSize: '11px',
+          color: '#718096',
         },
       )
       .setOrigin(0.5);
 
     const offlineButton = makeButton(
-  this,
-  width / 2,
-  height * 0.45,
-  'OFFLINE PLAY',
-  '#20a060',
-  28,
-);
+      this,
+      width / 2,
+      height * 0.585,
+      'OFFLINE PLAY',
+      '#20a060',
+      24,
+    );
 
-const onlineButton = makeButton(
-  this,
-  width / 2,
-  height * 0.60,
-  'ONLINE PLAY',
-  '#2878ff',
-  28,
-);
-
-offlineButton.on('pointerdown', () => {
-  this.scene.start('OfflineSetupScene');
-});
-
-onlineButton.on('pointerdown', () => {
-  this.scene.start('OnlineModeScene');
-});
+    const onlineButton = makeButton(
+      this,
+      width / 2,
+      height * 0.705,
+      'ONLINE PLAY',
+      '#2878ff',
+      24,
+    );
 
     const settingsButton = makeButton(
       this,
       width / 2,
-      height * 0.75,
+      height * 0.825,
       'SETTINGS',
       '#444c55',
-      22,
+      19,
     );
 
+    offlineButton.on('pointerdown', () => {
+      this.cleanup();
+      this.scene.start('OfflineSetupScene');
+    });
+
+    onlineButton.on('pointerdown', () => {
+      this.cleanup();
+      this.scene.start('OnlineModeScene');
+    });
+
     settingsButton.on('pointerdown', () => {
+      this.cleanup();
       this.scene.start('SettingsScene');
     });
 
@@ -852,6 +955,7 @@ onlineButton.on('pointerdown', () => {
       exitButton.setPosition(gameSize.width - 68, 42);
     });
     exitButton.on('pointerdown', async () => {
+      this.cleanup();
       if (window.peerankiDesktop) {
         window.peerankiDesktop.quit();
       } else if (Capacitor.getPlatform() === 'android') {
@@ -860,6 +964,17 @@ onlineButton.on('pointerdown', () => {
         window.close();
       }
     });
+  }
+
+  private cleanup() {
+    window.removeEventListener('resize', this.resizeHandler);
+    this.nameInput?.remove();
+    this.nameInput = undefined;
+    removePeerankiInputs();
+  }
+
+  shutdown() {
+    this.cleanup();
   }
 }
 
@@ -970,27 +1085,16 @@ class OfflineSetupScene extends Phaser.Scene {
     nameInput.type = 'text';
     nameInput.placeholder = 'Enter your name';
     nameInput.maxLength = 16;
-    nameInput.value = 'Player';
+    nameInput.value = getStoredPlayerName();
+    nameInput.autocomplete = 'name';
 
     document.body.appendChild(nameInput);
 
-    const rect = this.game.canvas.getBoundingClientRect();
+    positionHtmlInput(this, nameInput, width / 2, height * 0.37, 300);
 
-nameInput.style.position = 'fixed';
-nameInput.style.left = `${rect.left + rect.width / 2}px`;
-nameInput.style.top = `${rect.top + rect.height * 0.37}px`;
-nameInput.style.transform = 'translate(-50%, -50%)';
-nameInput.style.width = `${Math.min(320, rect.width * 0.65)}px`;
-nameInput.style.padding = '13px 16px';
-nameInput.style.fontSize = '18px';
-nameInput.style.textAlign = 'center';
-nameInput.style.boxSizing = 'border-box';
-nameInput.style.border = '2px solid #444c55';
-nameInput.style.borderRadius = '8px';
-nameInput.style.backgroundColor = '#ffffff';
-nameInput.style.color = '#111111';
-nameInput.style.outline = 'none';
-nameInput.style.zIndex = '10000';
+    nameInput.addEventListener('input', () => {
+      setStoredPlayerName(nameInput.value);
+    });
 
     this.add
       .text(width / 2, height * 0.49, 'NUMBER OF PLAYERS', {
@@ -1061,7 +1165,8 @@ nameInput.style.zIndex = '10000';
 
    startButton.on('pointerdown', () => {
   const playerName =
-    nameInput.value.trim() || 'Player';
+    nameInput.value.trim() || getStoredPlayerName();
+  setStoredPlayerName(playerName);
 
   offlineMode = true;
   offlineMaxPlayers = this.selectedPlayers;
@@ -1355,7 +1460,11 @@ class PlayerCountScene extends Phaser.Scene {
       this.nameInput.type = 'text';
       this.nameInput.placeholder = 'Enter your name';
       this.nameInput.maxLength = 20;
+      this.nameInput.value = getStoredPlayerName();
       this.nameInput.autocomplete = 'name';
+      this.nameInput.addEventListener('input', () => {
+        setStoredPlayerName(this.nameInput?.value ?? '');
+      });
       document.body.appendChild(this.nameInput);
 
       positionHtmlInput(
@@ -1409,6 +1518,7 @@ class PlayerCountScene extends Phaser.Scene {
         const result = await createPrivateRoom(
           selectedCount,
           sessionId,
+          getStoredPlayerName(),
         );
 
         if (!result) {
@@ -1442,19 +1552,8 @@ class PlayerCountScene extends Phaser.Scene {
       }
 
       const name =
-        this.nameInput?.value.trim() ?? '';
-
-      if (!name) {
-        actionButton.setText('ENTER NAME');
-        actionButton.setInteractive({
-          useHandCursor: true,
-        });
-        backButton.setInteractive({
-          useHandCursor: true,
-        });
-        this.nameInput?.focus();
-        return;
-      }
+        this.nameInput?.value.trim() || getStoredPlayerName();
+      setStoredPlayerName(name);
 
       const result =
         await findOrCreateRandomRoom(
@@ -1586,6 +1685,10 @@ class JoinScene extends Phaser.Scene {
       'peeranki-player-name',
       false,
     );
+    this.nameInput.value = getStoredPlayerName();
+    this.nameInput.addEventListener('input', () => {
+      setStoredPlayerName(this.nameInput?.value ?? '');
+    });
 
     this.resizeHandler();
     window.addEventListener(
@@ -1614,17 +1717,12 @@ class JoinScene extends Phaser.Scene {
         this.roomInput?.value.trim().toUpperCase() ??
         '';
       const name =
-        this.nameInput?.value.trim() ?? '';
+        this.nameInput?.value.trim() || getStoredPlayerName();
+      setStoredPlayerName(name);
 
       if (code.length !== 6) {
         joinButton.setText('ENTER 6-CHAR CODE');
         this.roomInput?.focus();
-        return;
-      }
-
-      if (!name) {
-        joinButton.setText('ENTER NAME');
-        this.nameInput?.focus();
         return;
       }
 
@@ -2052,6 +2150,7 @@ class LobbyScene extends Phaser.Scene {
 }
 
 class GameScene extends Phaser.Scene {
+  private uiManager = new GameUIManager();
   private playerObjects: Phaser.GameObjects.Container[] = [];
   private statusText?: Phaser.GameObjects.Text;
   private countText?: Phaser.GameObjects.Text;
@@ -2118,8 +2217,75 @@ private nextStartIndex = -1;
     this.selectedWeapon = 'gun';
     shootingDeadlineAt = '';
     if (offlineMode) {
-  console.log('Offline mode active');
-}
+      console.log('Offline mode active');
+    }
+
+    const canvas = this.game.canvas;
+    canvas.style.opacity = '0';
+    canvas.style.pointerEvents = 'none';
+
+    this.uiManager.mount('#game', {
+      onShootPlayer: (targetIndex: number) => {
+        PeerankiAudio.effect('select');
+        this.shootPlayer(targetIndex);
+        this.syncUI();
+      },
+      onSelectWeapon: (weapon: WeaponType) => {
+        const localIndex = offlineMode ? 0 : myPlayerId - 1;
+        const owned = players[localIndex]?.weapons ?? ['gun'];
+        if (ACTIVE_WEAPONS.includes(weapon) && owned.includes(weapon)) {
+          this.selectedWeapon = weapon;
+          this.pendingDoubleTarget = -1;
+          this.refreshWeaponPicker();
+          this.syncUI();
+        }
+      },
+      onCycleWeapon: (direction: number) => {
+        this.cycleWeapon(direction);
+        this.syncUI();
+      },
+      onSubmitDuelChoice: (choice: RpsChoice) => {
+        this.submitDuelChoice(choice);
+        this.syncUI();
+      },
+      onLeaveGame: async () => {
+        this.uiManager.unmount();
+        canvas.style.opacity = '1';
+        canvas.style.pointerEvents = 'auto';
+        if (offlineMode) {
+          this.scene.start('OfflineSetupScene');
+        } else {
+          await leaveCurrentRoom();
+          this.scene.start('OnlineModeScene');
+        }
+      },
+      onPlayAgain: () => {
+        this.uiManager.unmount();
+        canvas.style.opacity = '1';
+        canvas.style.pointerEvents = 'auto';
+        this.scene.restart();
+      },
+      onToggleAudio: () => {
+        const settings = loadSettings();
+        const currentlyMuted = settings.soundEffectsVolume === 0 && settings.musicVolume === 0;
+        if (currentlyMuted) {
+          settings.soundEffectsVolume = 80;
+          settings.musicVolume = 70;
+        } else {
+          settings.soundEffectsVolume = 0;
+          settings.musicVolume = 0;
+        }
+        saveSettings(settings);
+        this.syncUI();
+        return !currentlyMuted;
+      },
+    });
+
+    this.events.once('shutdown', () => {
+      this.uiManager.unmount();
+      canvas.style.opacity = '1';
+      canvas.style.pointerEvents = 'auto';
+    });
     const { width, height } = this.scale;
         const background = this.add
       .image(width / 2, height / 2, 'game_background')
@@ -2275,10 +2441,106 @@ if (offlineMode) {
   this.refreshPreviousRoundText();
   this.startMatchClock();
   this.time.delayedCall(500, () => this.startCounting());
+  this.syncUI();
 } else {
   this.startRealtimeSync();
   void this.initializeGame();
+  this.syncUI();
 }
+  }
+
+  private syncUI() {
+    if (!this.uiManager) return;
+    const localIndex = offlineMode ? 0 : myPlayerId - 1;
+    const localPlayer = players[localIndex];
+    const isMyTurn = !this.gameFinished &&
+      this.roundPhase === 'shooting' &&
+      this.currentShooter === localIndex &&
+      this.currentShooter >= 0;
+
+    const startedAt = Date.parse(matchStartedAt);
+    const elapsed = Math.max(0, Date.now() - (Number.isFinite(startedAt) ? startedAt : Date.now()));
+    const remaining = Math.max(0, matchDurationMs() - elapsed);
+    const remainingSeconds = Math.ceil(remaining / 1000);
+    const elapsedSeconds = Math.floor(elapsed / 1000);
+
+    const hudState: HUDState = {
+      matchDurationMinutes,
+      elapsedSeconds,
+      remainingSeconds,
+      matchRound,
+      gameStatus: this.gameFinished ? 'finished' : this.roundPhase,
+      roundPhase: this.roundPhase,
+      currentShooterIndex: this.currentShooter,
+      isMyTurn,
+      countNumber: this.countNumber,
+      statusMessage: this.statusText?.text ?? '',
+      announcementMessage: isMyTurn ? '👉 YOUR TURN TO SHOOT!' : (this.shooterText?.text ?? ''),
+      previousRoundMessage: lastRoundMessage,
+      selectedWeapon: this.selectedWeapon,
+      availableWeapons: localPlayer?.weapons ?? ['gun'],
+      pendingDoubleTargetIndex: this.pendingDoubleTarget,
+      isOffline: offlineMode,
+      isHost: amHost(),
+      isMuted: loadSettings().soundEffectsVolume === 0 && loadSettings().musicVolume === 0,
+    };
+
+    const uiPlayers: UIPlayer[] = players.slice(0, maxPlayers).map((p) => ({
+      id: p.id,
+      name: p.name,
+      stage: p.stage,
+      alive: p.alive,
+      connected: p.connected,
+      weapons: p.weapons,
+      hasCollectedAllWeapons: p.hasCollectedAllWeapons,
+      eliminationPoints: p.eliminationPoints,
+      shieldDisabledRound: p.shieldDisabledRound,
+      duelChoice: p.duelChoice,
+    }));
+
+    const contestants = activePlayers().filter((p) => p.alive);
+    const localId = offlineMode ? 1 : myPlayerId;
+    const canChoose = this.duelActive && contestants.length === 2 && (localPlayer?.alive ?? false) && contestants.some((p) => p.id === localId);
+    const opponent = contestants.find((p) => p.id !== localId);
+
+    const duelState: DuelState = {
+      active: this.duelActive && !this.gameFinished,
+      round: duelRound,
+      contestantIds: contestants.map((p) => p.id),
+      canChoose: Boolean(canChoose && !localPlayer?.duelChoice && !localPlayer?.duelChoiceRequest),
+      hasSubmitted: Boolean(localPlayer?.duelChoice || localPlayer?.duelChoiceRequest),
+      myChoice: localPlayer?.duelChoice ?? null,
+      opponentName: opponent?.name ?? 'Opponent',
+      opponentSubmitted: Boolean(opponent?.duelChoice),
+      opponentChoice: opponent?.duelChoice ?? null,
+      resultMessage: this.statusText?.text,
+    };
+
+    const connected = connectedPlayers();
+    const topCount = Math.max(0, ...connected.map((p) => p.weapons.length));
+    const winners = connected.filter((p) => p.weapons.length === topCount);
+
+    const gameOverState: GameOverState = {
+      active: this.gameFinished,
+      winners: winners.map((p) => ({
+        id: p.id,
+        name: p.name,
+        stage: p.stage,
+        alive: p.alive,
+        connected: p.connected,
+        weapons: p.weapons,
+        hasCollectedAllWeapons: p.hasCollectedAllWeapons,
+        eliminationPoints: p.eliminationPoints,
+        shieldDisabledRound: p.shieldDisabledRound,
+      })),
+      allPlayers: uiPlayers,
+      matchDurationMinutes,
+    };
+
+    this.uiManager.updateHUD(hudState);
+    this.uiManager.updateBoard(uiPlayers, this.currentShooter, localId, isMyTurn, this.pendingDoubleTarget);
+    this.uiManager.updateDuel(duelState);
+    this.uiManager.updateGameOver(gameOverState);
   }
 
   private async initializeGame() {
@@ -2604,6 +2866,7 @@ if (offlineMode) {
     container.setInteractive(
       player.connected && player.alive,
     );
+    this.syncUI();
   }
 
   private markShooter() {
@@ -3159,6 +3422,7 @@ this.startIndex = forcedStartIsAlive
     const remaining = Math.max(0, deadline - Date.now());
     const seconds = Math.ceil(remaining / 1000);
     this.countText?.setText(`ACTION ${seconds}s • choose weapon + target(s)`);
+    this.syncUI();
     if (remaining === 0 && (offlineMode || amHost())) this.endActionOnTimeout();
   }
 
@@ -3222,11 +3486,11 @@ private botShoot(shooterIndex: number) {
     players[shooterIndex].weapons.includes(weapon) &&
     (weapon !== 'hook' || possibleTargets.some(({ player }) => player.weapons.includes('shield') && player.shieldDisabledRound !== matchRound)) &&
     (weapon !== 'doublePeeranki' || possibleTargets.length >= 2));
-  this.selectedWeapon = Phaser.Utils.Array.GetRandom(botWeapons.length ? botWeapons : ['gun']);
+  const botChosenWeapon: WeaponType = Phaser.Utils.Array.GetRandom(botWeapons.length ? botWeapons : ['gun']);
   const selectedTarget = Phaser.Utils.Array.GetRandom(possibleTargets);
 
   this.statusText?.setText(
-    `${players[shooterIndex].name} is shooting ${selectedTarget.player.name}...`,
+    `${players[shooterIndex].name} is shooting ${selectedTarget.player.name} with ${WEAPON_NAMES[botChosenWeapon]}...`,
   );
 
   PeerankiAudio.effect('shoot');
@@ -3236,6 +3500,7 @@ private botShoot(shooterIndex: number) {
     this.applyOfflineShot(
       shooterIndex,
       selectedTarget.index,
+      botChosenWeapon,
     );
   });
 }
@@ -3243,12 +3508,13 @@ private botShoot(shooterIndex: number) {
 private applyOfflineShot(
   _shooterIndex: number,
   targetIndex: number,
+  botWeapon?: WeaponType,
 ) {
   if (!offlineMode || this.gameFinished || this.matchTimeExpired()) return;
   const target = players[targetIndex];
   if (!target || !target.alive) return;
 
-  const weapon = this.selectedWeapon;
+  const weapon = botWeapon ?? 'gun';
   if (!players[_shooterIndex]?.weapons.includes(weapon)) return;
   if (weapon === 'hook' && (!target.weapons.includes('shield') || target.shieldDisabledRound === matchRound)) return;
   if (weapon === 'doublePeeranki' && players.filter((player, index) => player.connected && player.alive && index !== _shooterIndex).length < 2) return;
@@ -3426,7 +3692,6 @@ private async processPendingAction() {
     return;
   }
 
-  this.selectedWeapon = action.weapon;
   this.applyWeaponEffect(targetIndexes[0], action.weapon === 'doublePeeranki' ? 'peeranki' : action.weapon, shooterIndex);
   if (action.weapon === 'doublePeeranki') this.applyWeaponEffect(targetIndexes[1], 'gun', shooterIndex);
   this.completePlayerShot(targetIndexes[targetIndexes.length - 1]);
@@ -3501,8 +3766,8 @@ private shootPlayer(index: number) {
       return;
     }
     this.pendingDoubleTarget = index;
-    if (offlineMode || amHost()) this.applyWeaponEffect(index, 'peeranki', this.currentShooter);
     this.statusText?.setText(`${target.name} is the first target. Choose a different second target.`);
+    this.syncUI();
     return;
   }
 
@@ -3515,6 +3780,7 @@ private shootPlayer(index: number) {
     if (!first?.connected || !first.alive || !target.connected || !target.alive) {
       this.pendingDoubleTarget = -1;
       this.statusText?.setText('The targets changed. Select two living targets again.');
+      this.syncUI();
       return;
     }
     const firstTarget = this.pendingDoubleTarget;
@@ -3523,8 +3789,9 @@ private shootPlayer(index: number) {
       void this.requestHostAction([firstTarget, index]);
       return;
     }
+    this.applyWeaponEffect(firstTarget, 'peeranki', this.currentShooter);
     this.applyWeaponEffect(index, 'gun', this.currentShooter);
-    this.completePlayerShot(firstTarget);
+    this.completePlayerShot(index);
     return;
   }
 
@@ -3703,6 +3970,7 @@ void this.recordShot();
     if (!options.includes(this.selectedWeapon)) this.selectedWeapon = options[0] ?? 'gun';
     this.weaponImage?.setTexture(`weapon-${this.selectedWeapon}`);
     this.weaponText?.setText(WEAPON_NAMES[this.selectedWeapon]);
+    this.syncUI();
   }
 
   private refreshPreviousRoundText() {
@@ -3710,15 +3978,16 @@ void this.recordShot();
   }
 
   private cycleWeapon(direction: number) {
-    if (this.gameFinished || this.matchTimeExpired() || this.roundPhase !== 'shooting') return;
+    if (this.gameFinished || this.matchTimeExpired()) return;
     const localIndex = offlineMode ? 0 : myPlayerId - 1;
-    if (this.currentShooter !== localIndex || this.currentShooter < 0) return;
     const owned = players[localIndex]?.weapons ?? ['gun'];
     const options = ACTIVE_WEAPONS.filter((weapon) => owned.includes(weapon));
+    if (options.length === 0) return;
     const current = Math.max(0, options.indexOf(this.selectedWeapon));
     this.selectedWeapon = options[(current + direction + options.length) % options.length] ?? 'gun';
     this.pendingDoubleTarget = -1;
     this.refreshWeaponPicker();
+    this.syncUI();
   }
 
   private matchTimeExpired() {
@@ -3734,6 +4003,7 @@ void this.recordShot();
       const remaining = Math.max(0, matchDurationMs() - elapsed);
       const seconds = Math.ceil(remaining / 1000);
       this.matchText?.setText(`MATCH ${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} • ROUND ${matchRound}`);
+      this.syncUI();
       if (remaining === 0 && (offlineMode || amHost()) && !this.gameFinished) void this.finishMatch();
     };
     update();
@@ -4156,6 +4426,12 @@ void this.recordShot();
     if (this.realtimeChannel) {
       void this.realtimeChannel.unsubscribe();
       this.realtimeChannel = undefined;
+    }
+
+    this.uiManager.unmount();
+    if (this.game.canvas) {
+      this.game.canvas.style.opacity = '1';
+      this.game.canvas.style.pointerEvents = 'auto';
     }
   }
 }

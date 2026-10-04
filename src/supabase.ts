@@ -7,8 +7,9 @@ function validPlayerCount(value: number) {
   return Number.isInteger(value) && value >= MIN_PLAYERS && value <= MAX_PLAYERS;
 }
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const globalEnv = typeof globalThis !== 'undefined' ? (globalThis as any).process?.env : undefined;
+const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || globalEnv?.VITE_SUPABASE_URL;
+const supabaseKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY) || globalEnv?.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 const isSupabaseConfigured = Boolean(
   typeof supabaseUrl === 'string' &&
@@ -220,10 +221,13 @@ function generateRoomCode() {
 export async function createPrivateRoom(
   maxPlayers: number,
   sessionId: string,
+  playerName = 'Player 1',
 ) {
   if (!validPlayerCount(maxPlayers) || !sessionId) {
     return null;
   }
+
+  const hostName = playerName.trim() || 'Player 1';
 
   if (realClient) {
     try {
@@ -232,7 +236,7 @@ export async function createPrivateRoom(
         const initialPlayers = [
           {
             id: 1,
-            name: 'Player 1',
+            name: hostName,
             stage: 0,
             alive: true,
             session_id: sessionId,
@@ -276,7 +280,7 @@ export async function createPrivateRoom(
   const initialPlayers = [
     {
       id: 1,
-      name: 'Player 1',
+      name: hostName,
       stage: 0,
       alive: true,
       session_id: sessionId,
