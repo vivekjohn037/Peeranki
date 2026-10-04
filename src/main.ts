@@ -1231,6 +1231,17 @@ class SettingsScene extends Phaser.Scene {
 
 class OfflineSetupScene extends Phaser.Scene {
   private selectedPlayers = MIN_PLAYERS;
+  private nameInput?: HTMLInputElement;
+  private resizeHandler = () => {
+    if (!this.nameInput) return;
+    positionHtmlInput(
+      this,
+      this.nameInput,
+      this.scale.width / 2,
+      this.scale.height * 0.29,
+      308,
+    );
+  };
 
   constructor() {
     super('OfflineSetupScene');
@@ -1270,6 +1281,7 @@ class OfflineSetupScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     const nameInput = document.createElement('input');
+    this.nameInput = nameInput;
     nameInput.id = 'peeranki-offline-name';
     nameInput.type = 'text';
     nameInput.placeholder = 'Enter your name';
@@ -1279,6 +1291,8 @@ class OfflineSetupScene extends Phaser.Scene {
     document.body.appendChild(nameInput);
 
     positionHtmlInput(this, nameInput, width / 2, height * 0.29, 308);
+    window.addEventListener('resize', this.resizeHandler);
+    this.scale.on('resize', this.resizeHandler);
 
     nameInput.addEventListener('input', () => {
       setStoredPlayerName(nameInput.value);
@@ -1409,7 +1423,10 @@ class OfflineSetupScene extends Phaser.Scene {
     });
 
     this.events.once('shutdown', () => {
+      window.removeEventListener('resize', this.resizeHandler);
+      this.scale.off('resize', this.resizeHandler);
       nameInput.remove();
+      this.nameInput = undefined;
     });
   }
 }
