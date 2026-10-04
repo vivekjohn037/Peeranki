@@ -4,6 +4,7 @@ import { App } from '@capacitor/app';
 import './style.css';
 import { GameUIManager } from './ui/GameUIManager';
 import type { HUDState, UIPlayer, DuelState, GameOverState } from './ui/types';
+import { PeerankiAudio } from './audio/PeerankiAudio';
 
 import {
   saveGameState,
@@ -118,6 +119,7 @@ type PeerankiSettings = {
   fullscreen: boolean;
   keyboardControls: boolean;
   playerName?: string;
+  muted?: boolean;
 };
 
 const SETTINGS_KEY = 'peeranki-settings';
@@ -129,6 +131,7 @@ const DEFAULT_SETTINGS: PeerankiSettings = {
   fullscreen: false,
   keyboardControls: true,
   playerName: 'Player',
+  muted: false,
 };
 
 export function getStoredPlayerName(): string {
@@ -170,6 +173,7 @@ function loadSettings(): PeerankiSettings {
       fullscreen: typeof stored.fullscreen === 'boolean' ? stored.fullscreen : DEFAULT_SETTINGS.fullscreen,
       keyboardControls: typeof stored.keyboardControls === 'boolean' ? stored.keyboardControls : DEFAULT_SETTINGS.keyboardControls,
       playerName: typeof storedName === 'string' && storedName.trim() ? storedName.trim().slice(0, 16) : 'Player',
+      muted: typeof stored.muted === 'boolean' ? stored.muted : localStorage.getItem('peeranki_music_muted') === 'true',
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -186,86 +190,6 @@ function saveSettings(settings: PeerankiSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   PeerankiAudio.applySettings();
 }
-
-// All sounds are synthesized locally, so no network or bundled audio is required.
-class PeerankiAudioSystem {
-  private context?: AudioContext;
-  private musicGain?: GainNode;
-  private effectsGain?: GainNode;
-  private musicTimer?: number;
-  private musicStep = 0;
-
-  private getContext() {
-    if (!this.context) {
-      this.context = new AudioContext();
-      this.musicGain = this.context.createGain();
-      this.effectsGain = this.context.createGain();
-      this.musicGain.connect(this.context.destination);
-      this.effectsGain.connect(this.context.destination);
-      this.applySettings();
-    }
-    return this.context;
-  }
-
-  applySettings() {
-    const settings = loadSettings();
-    const now = this.context?.currentTime ?? 0;
-    this.musicGain?.gain.setTargetAtTime(settings.musicVolume / 100 * 0.16, now, 0.04);
-    this.effectsGain?.gain.setTargetAtTime(settings.soundEffectsVolume / 100 * 0.22, now, 0.04);
-  }
-
-  startMusic() {
-    const context = this.getContext();
-    if (context.state === 'suspended') void context.resume().catch(() => undefined);
-    if (this.musicTimer !== undefined) return;
-    const notes = [220, 261.63, 329.63, 392, 329.63, 261.63, 196, 246.94, 293.66, 369.99, 440, 369.99, 196, 246.94, 293.66, 392];
-    const playNext = () => {
-      this.applySettings();
-      const frequency = notes[this.musicStep % notes.length];
-      this.musicStep += 1;
-      this.tone(frequency, 0.42, 0.065, this.musicGain, 'sine');
-      if (this.musicStep % 4 === 0) this.tone(frequency / 2, 0.75, 0.035, this.musicGain, 'triangle');
-    };
-    playNext();
-    this.musicTimer = window.setInterval(playNext, 480);
-  }
-
-  effect(name: 'click' | 'select' | 'shoot' | 'hit' | 'elimination' | 'victory') {
-    const context = this.getContext();
-    if (context.state === 'suspended') void context.resume().catch(() => undefined);
-    this.startMusic();
-    this.applySettings();
-    const patterns: Record<typeof name, number[]> = {
-      click: [620], select: [440, 660], shoot: [180, 110], hit: [520, 390],
-      elimination: [330, 220, 110], victory: [523.25, 659.25, 783.99, 1046.5],
-    };
-    const durations: Record<typeof name, number> = {
-      click: 0.07, select: 0.11, shoot: 0.13, hit: 0.14, elimination: 0.2, victory: 0.28,
-    };
-    patterns[name].forEach((frequency, index) => {
-      window.setTimeout(() => this.tone(frequency, durations[name], 0.65, this.effectsGain, name === 'shoot' ? 'sawtooth' : 'sine'), index * (name === 'victory' ? 120 : 75));
-    });
-  }
-
-  private tone(frequency: number, duration: number, volume: number, destination?: GainNode, type: OscillatorType = 'sine') {
-    const context = this.context;
-    if (!context || !destination || context.state !== 'running') return;
-    const oscillator = context.createOscillator();
-    const envelope = context.createGain();
-    const start = context.currentTime;
-    oscillator.type = type;
-    oscillator.frequency.setValueAtTime(frequency, start);
-    envelope.gain.setValueAtTime(0.0001, start);
-    envelope.gain.exponentialRampToValueAtTime(volume, start + 0.015);
-    envelope.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-    oscillator.connect(envelope);
-    envelope.connect(destination);
-    oscillator.start(start);
-    oscillator.stop(start + duration + 0.02);
-  }
-}
-
-const PeerankiAudio = new PeerankiAudioSystem();
 
 declare global {
   interface Window {
@@ -728,40 +652,34 @@ function positionHtmlInput(
   input: HTMLInputElement,
   gameX: number,
   gameY: number,
-  width = 280,
+  width = 300,
 ) {
   const canvas = scene.game.canvas;
   const rect = canvas.getBoundingClientRect();
   const scaleX = rect.width / scene.scale.width;
   const scaleY = rect.height / scene.scale.height;
   const cssWidth = Math.min(
-    width,
-    rect.width * 0.72,
+    width * scaleX,
+    rect.width * 0.88,
   );
 
   input.style.position = 'fixed';
-  input.style.left = `${
-    rect.left + gameX * scaleX
-  }px`;
-  input.style.top = `${
-    rect.top + gameY * scaleY
-  }px`;
+  input.style.left = `${rect.left + gameX * scaleX}px`;
+  input.style.top = `${rect.top + gameY * scaleY}px`;
   input.style.transform = 'translate(-50%, -50%)';
-  input.style.width = `${cssWidth}px`;
-  input.style.padding = '12px 16px';
-  input.style.fontSize = `${Math.max(
-    15,
-    Math.round(18 * scaleX),
-  )}px`;
+  input.style.width = `${Math.round(cssWidth)}px`;
+  input.style.height = `${Math.max(42, Math.round(50 * scaleY))}px`;
+  input.style.padding = '0 16px';
+  input.style.fontSize = `${Math.max(14, Math.round(16 * scaleX))}px`;
   input.style.textAlign = 'center';
   input.style.boxSizing = 'border-box';
   input.style.border = '2px solid #455569';
-  input.style.borderRadius = '10px';
+  input.style.borderRadius = '8px';
   input.style.backgroundColor = '#182029';
   input.style.color = '#ffffff';
   input.style.outline = 'none';
   input.style.zIndex = '10000';
-  input.style.fontFamily = 'Arial, sans-serif';
+  input.style.fontFamily = 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
   input.style.fontWeight = '700';
   input.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.5)';
   input.onfocus = () => {
@@ -780,41 +698,69 @@ function makeButton(
   y: number,
   label: string,
   backgroundColor = '#2878ff',
-  fontSize = 24,
+  fontSize = 19,
+  btnWidth = 300,
+  btnHeight = 52,
 ) {
+  const padY = Math.max(0, Math.floor((btnHeight - fontSize) / 2) - 2);
   const button = scene.add
     .text(x, y, label, {
-      fontFamily: 'Arial',
+      fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       fontSize: `${fontSize}px`,
+      fontStyle: 'bold',
       color: '#ffffff',
       backgroundColor,
+      align: 'center',
+      fixedWidth: btnWidth,
+      fixedHeight: btnHeight,
       padding: {
-        x: 34,
-        y: 16,
+        x: 8,
+        y: padY,
       },
     })
-    .setOrigin(0.5)
+    .setOrigin(0.5, 0.5)
     .setInteractive({ useHandCursor: true })
     .on('pointerdown', () => PeerankiAudio.effect('click'));
-  button.on('pointerover', () => scene.tweens.add({ targets: button, scale: 1.06, duration: 100, ease: 'Quad.Out' }));
-  button.on('pointerout', () => scene.tweens.add({ targets: button, scale: 1, duration: 100, ease: 'Quad.Out' }));
-  button.on('pointerdown', () => scene.tweens.add({ targets: button, scale: 0.96, duration: 70, yoyo: true }));
+
+  button.on('pointerover', () => scene.tweens.add({ targets: button, scale: 1.025, duration: 90, ease: 'Quad.Out' }));
+  button.on('pointerout', () => scene.tweens.add({ targets: button, scale: 1, duration: 90, ease: 'Quad.Out' }));
+  button.on('pointerdown', () => scene.tweens.add({ targets: button, scale: 0.97, duration: 60, yoyo: true }));
   return button;
 }
 
 function addMatchDurationPicker(scene: Phaser.Scene, x: number, y: number) {
-  scene.add.text(x, y - 27, 'MATCH TIME', {
-    fontFamily: 'Arial', fontSize: '16px', color: '#ffffff', fontStyle: 'bold',
+  scene.add.text(x, y - 24, 'MATCH TIME', {
+    fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    fontSize: '14px',
+    color: '#f2cf66',
+    fontStyle: 'bold',
   }).setOrigin(0.5);
+
+  const btnWidth = 70;
+  const btnHeight = 38;
+  const gap = 10;
+  const totalW = MATCH_DURATIONS.length * btnWidth + (MATCH_DURATIONS.length - 1) * gap;
+  const startX = x - totalW / 2 + btnWidth / 2;
+
   MATCH_DURATIONS.forEach((minutes, index) => {
-    const button = makeButton(scene, x + (index - 1.5) * 112, y + 12,
-      `${minutes} MIN`, minutes === matchDurationMinutes ? '#20a060' : '#444c55', 15);
-    button.setPadding(16, 9, 16, 9);
+    const btnX = startX + index * (btnWidth + gap);
+    const button = makeButton(
+      scene,
+      btnX,
+      y + 14,
+      `${minutes} MIN`,
+      minutes === matchDurationMinutes ? '#20a060' : '#374151',
+      13,
+      btnWidth,
+      btnHeight,
+    );
     button.on('pointerdown', () => {
       matchDurationMinutes = minutes;
       scene.children.list.forEach((child) => {
         if (child instanceof Phaser.GameObjects.Text && child.getData('matchDuration') !== undefined) {
-          child.setStyle({ backgroundColor: Number(child.getData('matchDuration')) === minutes ? '#20a060' : '#444c55' });
+          child.setStyle({
+            backgroundColor: Number(child.getData('matchDuration')) === minutes ? '#20a060' : '#374151',
+          });
         }
       });
     });
@@ -826,7 +772,7 @@ class MenuScene extends Phaser.Scene {
   private nameInput?: HTMLInputElement;
   private resizeHandler = () => {
     if (this.nameInput) {
-      positionHtmlInput(this, this.nameInput, this.scale.width / 2, this.scale.height * 0.435, 280);
+      positionHtmlInput(this, this.nameInput, this.scale.width / 2, this.scale.height * 0.40, 300);
     }
   };
 
@@ -836,6 +782,7 @@ class MenuScene extends Phaser.Scene {
 
   preload() {
     this.load.image('peeranki-logo', 'assets/peeranki-logo.png');
+    this.load.image('menu-background', 'assets/background/menu_background.png');
   }
 
   create() {
@@ -844,18 +791,39 @@ class MenuScene extends Phaser.Scene {
 
     const { width, height } = this.scale;
 
-    const glow = this.add.circle(width / 2, height * 0.19, 100, 0x2878ff, 0.12);
+    // Tropical village menu background
+    if (this.textures.exists('menu-background')) {
+      const bg = this.add.image(width / 2, height / 2, 'menu-background').setOrigin(0.5).setDepth(-10);
+      const scaleX = width / bg.width;
+      const scaleY = height / bg.height;
+      const bgScale = Math.max(scaleX, scaleY);
+      bg.setScale(bgScale);
+
+      // Translucent atmospheric scrim ensuring crisp readability of titles and menu buttons
+      const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x070c14, 0.45)
+        .setOrigin(0.5)
+        .setDepth(-5);
+
+      this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+        bg.setPosition(gameSize.width / 2, gameSize.height / 2);
+        bg.setScale(Math.max(gameSize.width / bg.width, gameSize.height / bg.height));
+        overlay.setPosition(gameSize.width / 2, gameSize.height / 2);
+        overlay.setSize(gameSize.width, gameSize.height);
+      });
+    }
+
+    const glow = this.add.circle(width / 2, height * 0.17, 85, 0x2878ff, 0.12);
     this.tweens.add({ targets: glow, alpha: 0.24, scale: 1.12, duration: 1500, yoyo: true, repeat: -1 });
-    this.add.image(width / 2, height * 0.19, 'peeranki-logo').setDisplaySize(160, 160);
+    this.add.image(width / 2, height * 0.17, 'peeranki-logo').setDisplaySize(140, 140);
 
     this.add
       .text(
         width / 2,
-        height * 0.315,
+        height * 0.28,
         'Traditional Kerala Game',
         {
-          fontFamily: 'Arial',
-          fontSize: '17px',
+          fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontSize: '16px',
           color: '#8a99a8',
         },
       )
@@ -865,10 +833,10 @@ class MenuScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        height * 0.375,
+        height * 0.34,
         'YOUR NAME',
         {
-          fontFamily: 'Arial',
+          fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           fontSize: '13px',
           color: '#f2cf66',
           fontStyle: 'bold',
@@ -885,7 +853,7 @@ class MenuScene extends Phaser.Scene {
     this.nameInput.autocomplete = 'name';
     document.body.appendChild(this.nameInput);
 
-    positionHtmlInput(this, this.nameInput, width / 2, height * 0.435, 280);
+    positionHtmlInput(this, this.nameInput, width / 2, height * 0.40, 300);
 
     this.nameInput.addEventListener('input', () => {
       setStoredPlayerName(this.nameInput?.value ?? '');
@@ -896,10 +864,10 @@ class MenuScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        height * 0.495,
+        height * 0.46,
         'Saved for all offline & online games',
         {
-          fontFamily: 'Arial',
+          fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           fontSize: '11px',
           color: '#718096',
         },
@@ -909,28 +877,34 @@ class MenuScene extends Phaser.Scene {
     const offlineButton = makeButton(
       this,
       width / 2,
-      height * 0.585,
+      height * 0.54,
       'OFFLINE PLAY',
       '#20a060',
-      24,
+      19,
+      300,
+      52,
     );
 
     const onlineButton = makeButton(
       this,
       width / 2,
-      height * 0.705,
+      height * 0.65,
       'ONLINE PLAY',
       '#2878ff',
-      24,
+      19,
+      300,
+      52,
     );
 
     const settingsButton = makeButton(
       this,
       width / 2,
-      height * 0.825,
+      height * 0.76,
       'SETTINGS',
-      '#444c55',
-      19,
+      '#374151',
+      18,
+      300,
+      52,
     );
 
     offlineButton.on('pointerdown', () => {
@@ -948,11 +922,30 @@ class MenuScene extends Phaser.Scene {
       this.scene.start('SettingsScene');
     });
 
-    const exitButton = makeButton(this, width - 68, 42, 'EXIT', '#9b3030', 16)
-      .setPadding(18, 11)
+    const exitButton = makeButton(this, width - 64, 38, 'EXIT', '#9b3030', 13, 80, 36)
       .setDepth(1000);
+
+    const isMuted = PeerankiAudio.isMuted();
+    const muteButton = makeButton(
+      this,
+      width - 134,
+      38,
+      isMuted ? '🔇' : '🔊',
+      isMuted ? '#822727' : '#2d3748',
+      16,
+      44,
+      36,
+    ).setDepth(1000);
+
+    muteButton.on('pointerdown', () => {
+      PeerankiAudio.toggleMute();
+      this.cleanup();
+      this.scene.restart();
+    });
+
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      exitButton.setPosition(gameSize.width - 68, 42);
+      exitButton.setPosition(gameSize.width - 64, 38);
+      muteButton.setPosition(gameSize.width - 134, 38);
     });
     exitButton.on('pointerdown', async () => {
       this.cleanup();
@@ -988,30 +981,65 @@ class SettingsScene extends Phaser.Scene {
     const { width, height } = this.scale;
     const settings = loadSettings();
 
-    this.add.text(width / 2, 75, 'SETTINGS', {
-      fontFamily: 'Arial', fontSize: '42px', color: '#ffffff', fontStyle: 'bold',
+    this.add.text(width / 2, 65, 'SETTINGS', {
+      fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '36px',
+      color: '#ffffff',
+      fontStyle: 'bold',
     }).setOrigin(0.5);
 
     const redraw = () => this.scene.restart();
     const addVolumeSetting = (label: string, key: 'musicVolume' | 'soundEffectsVolume', y: number) => {
-      this.add.text(width / 2, y - 34, label, {
-        fontFamily: 'Arial', fontSize: '20px', color: '#ffffff',
+      this.add.text(width / 2, y - 26, label, {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '15px',
+        color: '#ffffff',
+        fontStyle: 'bold',
       }).setOrigin(0.5);
-      const minus = makeButton(this, width / 2 - 130, y, '−', '#444c55', 20);
-      const value = this.add.text(width / 2, y, `${settings[key]}%`, {
-        fontFamily: 'Arial', fontSize: '22px', color: '#ffffff',
-      }).setOrigin(0.5);
-      const plus = makeButton(this, width / 2 + 130, y, '+', '#444c55', 20);
+
+      const minus = makeButton(this, width / 2 - 90, y + 10, '−', '#374151', 22, 46, 44);
+      const value = this.add.text(width / 2, y + 10, `${settings[key]}%`, {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '18px',
+        fontStyle: 'bold',
+        color: '#f2cf66',
+        align: 'center',
+        fixedWidth: 80,
+        fixedHeight: 44,
+        padding: { x: 0, y: 11 },
+      }).setOrigin(0.5, 0.5);
+      const plus = makeButton(this, width / 2 + 90, y + 10, '+', '#374151', 22, 46, 44);
+
       minus.on('pointerdown', () => { settings[key] = Math.max(0, settings[key] - 10); saveSettings(settings); redraw(); });
       plus.on('pointerdown', () => { settings[key] = Math.min(100, settings[key] + 10); saveSettings(settings); redraw(); });
       void value;
     };
 
-    addVolumeSetting('MUSIC VOLUME', 'musicVolume', height * 0.25);
-    addVolumeSetting('SOUND EFFECTS VOLUME', 'soundEffectsVolume', height * 0.40);
+    addVolumeSetting('MUSIC VOLUME', 'musicVolume', height * 0.20);
+    addVolumeSetting('SOUND EFFECTS VOLUME', 'soundEffectsVolume', height * 0.35);
 
-    const fullscreen = makeButton(this, width / 2, height * 0.55,
-      `FULLSCREEN: ${settings.fullscreen ? 'ON' : 'OFF'}`, '#444c55', 18);
+    // Permanent Soundtrack Info
+    const themeBg = this.add.graphics();
+    themeBg.fillStyle(0x1a222d, 0.85);
+    themeBg.lineStyle(1.5, 0x3b82f6, 0.4);
+    themeBg.fillRoundedRect(width / 2 - 160, height * 0.46, 320, 52, 10);
+    themeBg.strokeRoundedRect(width / 2 - 160, height * 0.46, 320, 52, 10);
+
+    this.add.text(width / 2, height * 0.46 + 16, '🎵 SOUNDTRACK: PEERANKI THEME', {
+      fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px',
+      color: '#60a5fa',
+      fontStyle: 'bold',
+    }).setOrigin(0.5);
+
+    this.add.text(width / 2, height * 0.46 + 35, 'Sunlit Village Festival • Permanent Audio', {
+      fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '11px',
+      color: '#9ca3af',
+    }).setOrigin(0.5);
+
+    const fullscreen = makeButton(this, width / 2, height * 0.60,
+      `FULLSCREEN: ${settings.fullscreen ? 'ON' : 'OFF'}`, '#374151', 15, 300, 46);
     fullscreen.on('pointerdown', async () => {
       settings.fullscreen = !settings.fullscreen;
       saveSettings(settings);
@@ -1025,23 +1053,21 @@ class SettingsScene extends Phaser.Scene {
       redraw();
     });
 
-    const keyboard = makeButton(this, width / 2, height * 0.68,
-      `KEYBOARD CONTROLS: ${settings.keyboardControls ? 'ON' : 'OFF'}`, '#444c55', 18);
+    const keyboard = makeButton(this, width / 2, height * 0.71,
+      `KEYBOARD CONTROLS: ${settings.keyboardControls ? 'ON' : 'OFF'}`, '#374151', 15, 300, 46);
     keyboard.on('pointerdown', () => {
       settings.keyboardControls = !settings.keyboardControls;
       saveSettings(settings);
       redraw();
     });
 
-    const back = this.add.text(width / 2, height * 0.84, 'BACK', {
-      fontFamily: 'Arial', fontSize: '18px', color: '#bbbbbb',
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    const back = makeButton(this, width / 2, height * 0.83, 'BACK', '#252d37', 15, 160, 42);
     back.on('pointerdown', () => this.scene.start('MenuScene'));
   }
 }
+
 class OfflineSetupScene extends Phaser.Scene {
   private selectedPlayers = MIN_PLAYERS;
-  
 
   constructor() {
     super('OfflineSetupScene');
@@ -1054,145 +1080,131 @@ class OfflineSetupScene extends Phaser.Scene {
     const isAndroid = Capacitor.getPlatform() === 'android';
 
     this.add
-      .text(width / 2, 90, 'OFFLINE PLAY', {
-        fontFamily: 'Arial',
-        fontSize: '42px',
+      .text(width / 2, 65, 'OFFLINE PLAY', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '36px',
         color: '#ffffff',
         fontStyle: 'bold',
       })
       .setOrigin(0.5);
 
     this.add
-      .text(width / 2, 155, 'Play against Bots', {
-        fontFamily: 'Arial',
-        fontSize: '20px',
-        color: '#bbbbbb',
+      .text(width / 2, 105, 'Play against Bots', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '16px',
+        color: '#8a99a8',
       })
       .setOrigin(0.5);
 
     // Player name
     this.add
-      .text(width / 2, height * 0.30, 'YOUR NAME', {
-        fontFamily: 'Arial',
-        fontSize: '20px',
-        color: '#ffffff',
+      .text(width / 2, height * 0.23, 'YOUR NAME', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '14px',
+        color: '#f2cf66',
+        fontStyle: 'bold',
       })
       .setOrigin(0.5);
 
     const nameInput = document.createElement('input');
-
     nameInput.id = 'peeranki-offline-name';
     nameInput.type = 'text';
     nameInput.placeholder = 'Enter your name';
     nameInput.maxLength = 16;
     nameInput.value = getStoredPlayerName();
     nameInput.autocomplete = 'name';
-
     document.body.appendChild(nameInput);
 
-    positionHtmlInput(this, nameInput, width / 2, height * 0.37, 300);
+    positionHtmlInput(this, nameInput, width / 2, height * 0.29, 308);
 
     nameInput.addEventListener('input', () => {
       setStoredPlayerName(nameInput.value);
     });
 
     this.add
-      .text(width / 2, height * 0.49, 'NUMBER OF PLAYERS', {
-        fontFamily: 'Arial',
-        fontSize: '20px',
+      .text(width / 2, height * 0.38, 'NUMBER OF PLAYERS', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '14px',
         color: '#ffffff',
+        fontStyle: 'bold',
       })
       .setOrigin(0.5);
 
     const playerCounts = PLAYER_COUNTS;
+    const countCols = 4;
+    const countBtnW = 68;
+    const countBtnH = 42;
+    const countGapX = 12;
+    const countGapY = 10;
+    const totalGridW = countCols * countBtnW + (countCols - 1) * countGapX;
+    const gridStartX = width / 2 - totalGridW / 2 + countBtnW / 2;
+    const gridStartY = height * 0.45;
 
     playerCounts.forEach((count, index) => {
-      const columns = 4;
-      const row = Math.floor(index / columns);
-      const column = index % columns;
-
-      const x =
-        width / 2 +
-        (column - (columns - 1) / 2) * 90;
-
-      const y =
-        height * 0.55 + row * 58;
+      const col = index % countCols;
+      const row = Math.floor(index / countCols);
+      const x = gridStartX + col * (countBtnW + countGapX);
+      const y = gridStartY + row * (countBtnH + countGapY);
 
       const button = makeButton(
         this,
         x,
         y,
         String(count),
-        count === this.selectedPlayers ? '#20a060' : '#444c55',
-        22,
+        count === this.selectedPlayers ? '#20a060' : '#374151',
+        18,
+        countBtnW,
+        countBtnH,
       );
 
       button.setData('playerCount', count);
 
       button.on('pointerdown', () => {
         this.selectedPlayers = count;
-
         this.children.list.forEach((child) => {
-          if (
-            child instanceof Phaser.GameObjects.Text &&
-            child.getData('playerCount')
-          ) {
+          if (child instanceof Phaser.GameObjects.Text && child.getData('playerCount')) {
             const childCount = child.getData('playerCount');
-
             child.setStyle({
-              backgroundColor:
-                childCount === this.selectedPlayers
-                  ? '#20a060'
-                  : '#444c55',
+              backgroundColor: childCount === this.selectedPlayers ? '#20a060' : '#374151',
             });
           }
         });
       });
-
-      
     });
 
-    addMatchDurationPicker(this, width / 2, height * 0.73);
+    addMatchDurationPicker(this, width / 2, height * 0.67);
 
     const startButton = makeButton(
       this,
       width / 2,
-      height * (isAndroid ? 0.82 : 0.88),
+      height * (isAndroid ? 0.81 : 0.82),
       'START GAME',
       '#20a060',
-      22,
+      20,
+      308,
+      52,
     );
 
-   startButton.on('pointerdown', () => {
-  const playerName =
-    nameInput.value.trim() || getStoredPlayerName();
-  setStoredPlayerName(playerName);
+    startButton.on('pointerdown', () => {
+      const playerName = nameInput.value.trim() || getStoredPlayerName();
+      setStoredPlayerName(playerName);
+      offlineMode = true;
+      offlineMaxPlayers = this.selectedPlayers;
+      offlinePlayers = createOfflinePlayers(playerName, offlineMaxPlayers);
+      nameInput.remove();
+      this.scene.start('GameScene', { offline: true });
+    });
 
-  offlineMode = true;
-  offlineMaxPlayers = this.selectedPlayers;
-
-  offlinePlayers = createOfflinePlayers(
-    playerName,
-    offlineMaxPlayers,
-  );
-
-  console.log('Offline players created:', offlinePlayers);
-
-  nameInput.remove();
-
-  this.scene.start('GameScene', {
-    offline: true,
-  });
-});
-
-    const backButton = this.add
-      .text(width / 2, height * (isAndroid ? 0.90 : 0.96), 'BACK', {
-        fontFamily: 'Arial',
-        fontSize: '18px',
-        color: '#bbbbbb',
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
+    const backButton = makeButton(
+      this,
+      width / 2,
+      height * (isAndroid ? 0.91 : 0.92),
+      'BACK',
+      '#252d37',
+      15,
+      160,
+      40,
+    );
 
     backButton.on('pointerdown', () => {
       nameInput.remove();
@@ -1204,6 +1216,7 @@ class OfflineSetupScene extends Phaser.Scene {
     });
   }
 }
+
 class OnlineModeScene extends Phaser.Scene {
   constructor() {
     super('OnlineModeScene');
@@ -1214,43 +1227,49 @@ class OnlineModeScene extends Phaser.Scene {
 
     const { width, height } = this.scale;
 
-    addMatchDurationPicker(this, width / 2, height * 0.30);
-
     this.add
-      .text(width / 2, 90, 'ONLINE PLAY', {
-        fontFamily: 'Arial',
-        fontSize: '42px',
+      .text(width / 2, 70, 'ONLINE PLAY', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '36px',
         color: '#ffffff',
         fontStyle: 'bold',
       })
       .setOrigin(0.5);
 
+    addMatchDurationPicker(this, width / 2, height * 0.28);
+
     const friendsButton = makeButton(
       this,
       width / 2,
-      height * 0.48,
+      height * 0.46,
       'PLAY WITH FRIENDS',
       '#2878ff',
-      22,
+      19,
+      300,
+      52,
     );
 
     const randomButton = makeButton(
       this,
       width / 2,
-      height * 0.63,
+      height * 0.58,
       'RANDOM PLAYERS',
-      '#444c55',
-      22,
+      '#374151',
+      19,
+      300,
+      52,
     );
 
-    const backButton = this.add
-      .text(width / 2, height * 0.82, 'BACK', {
-        fontFamily: 'Arial',
-        fontSize: '18px',
-        color: '#bbbbbb',
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
+    const backButton = makeButton(
+      this,
+      width / 2,
+      height * 0.72,
+      'BACK',
+      '#252d37',
+      15,
+      160,
+      40,
+    );
 
     friendsButton.on('pointerdown', () => {
       this.scene.start('FriendsScene');
@@ -1279,9 +1298,9 @@ class FriendsScene extends Phaser.Scene {
     const { width, height } = this.scale;
 
     this.add
-      .text(width / 2, 90, 'PLAY WITH FRIENDS', {
-        fontFamily: 'Arial',
-        fontSize: '36px',
+      .text(width / 2, 75, 'PLAY WITH FRIENDS', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '34px',
         color: '#ffffff',
         fontStyle: 'bold',
       })
@@ -1292,24 +1311,33 @@ class FriendsScene extends Phaser.Scene {
       width / 2,
       height * 0.40,
       'CREATE GAME',
+      '#2878ff',
+      19,
+      300,
+      52,
     );
 
     const joinButton = makeButton(
       this,
       width / 2,
-      height * 0.55,
+      height * 0.52,
       'JOIN GAME',
-      '#444c55',
+      '#374151',
+      19,
+      300,
+      52,
     );
 
-    const backButton = this.add
-      .text(width / 2, height * 0.76, 'BACK', {
-        fontFamily: 'Arial',
-        fontSize: '18px',
-        color: '#bbbbbb',
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
+    const backButton = makeButton(
+      this,
+      width / 2,
+      height * 0.68,
+      'BACK',
+      '#252d37',
+      15,
+      160,
+      40,
+    );
 
     createButton.on('pointerdown', () => {
       this.scene.start('PlayerCountScene', {
@@ -1336,7 +1364,8 @@ class PlayerCountScene extends Phaser.Scene {
         this,
         this.nameInput,
         this.scale.width / 2,
-        350,
+        340,
+        308,
       );
     }
   };
@@ -1361,13 +1390,13 @@ class PlayerCountScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        this.mode === 'random' ? 52 : 75,
+        this.mode === 'random' ? 50 : 65,
         this.mode === 'private'
           ? 'CHOOSE PLAYERS'
           : 'RANDOM MATCH',
         {
-          fontFamily: 'Arial',
-          fontSize: '36px',
+          fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontSize: '34px',
           color: '#ffffff',
           fontStyle: 'bold',
         },
@@ -1377,23 +1406,23 @@ class PlayerCountScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        this.mode === 'random' ? 91 : 125,
+        this.mode === 'random' ? 88 : 105,
         this.mode === 'private'
           ? 'Choose the number of players for your room.'
           : 'Choose the number of players for random matchmaking.',
         {
-          fontFamily: 'Arial',
-          fontSize: '17px',
-          color: '#bbbbbb',
+          fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontSize: '15px',
+          color: '#8a99a8',
           align: 'center',
         },
       )
       .setOrigin(0.5);
 
     const selectedText = this.add
-      .text(width / 2, this.mode === 'random' ? 135 : 185, `${MIN_PLAYERS} PLAYERS`, {
-        fontFamily: 'Arial',
-        fontSize: '26px',
+      .text(width / 2, this.mode === 'random' ? 128 : 155, `${MIN_PLAYERS} PLAYERS`, {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '22px',
         color: '#4da3ff',
         fontStyle: 'bold',
       })
@@ -1402,28 +1431,31 @@ class PlayerCountScene extends Phaser.Scene {
     const choices = PLAYER_COUNTS;
     const choiceButtons: Phaser.GameObjects.Text[] = [];
 
-    choices.forEach((count, index) => {
-      const x = width / 2 + ((index % 4) - 1.5) * 145;
-      const y = this.mode === 'random'
-        ? 195 + Math.floor(index / 4) * 52
-        : 245 + Math.floor(index / 4) * 65;
+    const countCols = 4;
+    const countBtnW = 68;
+    const countBtnH = 42;
+    const countGapX = 12;
+    const countGapY = 10;
+    const totalGridW = countCols * countBtnW + (countCols - 1) * countGapX;
+    const gridStartX = width / 2 - totalGridW / 2 + countBtnW / 2;
+    const gridStartY = this.mode === 'random' ? 175 : 215;
 
-      const button = this.add
-        .text(x, y, String(count), {
-          fontFamily: 'Arial',
-          fontSize: '24px',
-          color: '#ffffff',
-          backgroundColor:
-            count === selectedCount
-              ? '#2878ff'
-              : '#2a3037',
-          padding: {
-            x: 20,
-            y: 16,
-          },
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true });
+    choices.forEach((count, index) => {
+      const col = index % countCols;
+      const row = Math.floor(index / countCols);
+      const x = gridStartX + col * (countBtnW + countGapX);
+      const y = gridStartY + row * (countBtnH + countGapY);
+
+      const button = makeButton(
+        this,
+        x,
+        y,
+        String(count),
+        count === selectedCount ? '#2878ff' : '#2a3037',
+        18,
+        countBtnW,
+        countBtnH,
+      );
 
       choiceButtons.push(button);
 
@@ -1447,19 +1479,19 @@ class PlayerCountScene extends Phaser.Scene {
 
     if (this.mode === 'random') {
       this.add
-        .text(width / 2, 315, 'YOUR NAME', {
-          fontFamily: 'Arial',
-          fontSize: '18px',
-          color: '#bbbbbb',
+        .text(width / 2, 290, 'YOUR NAME', {
+          fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontSize: '14px',
+          color: '#f2cf66',
+          fontStyle: 'bold',
         })
         .setOrigin(0.5);
 
       this.nameInput = document.createElement('input');
-      this.nameInput.id =
-        'peeranki-random-player-name';
+      this.nameInput.id = 'peeranki-random-player-name';
       this.nameInput.type = 'text';
       this.nameInput.placeholder = 'Enter your name';
-      this.nameInput.maxLength = 20;
+      this.nameInput.maxLength = 16;
       this.nameInput.value = getStoredPlayerName();
       this.nameInput.autocomplete = 'name';
       this.nameInput.addEventListener('input', () => {
@@ -1471,7 +1503,8 @@ class PlayerCountScene extends Phaser.Scene {
         this,
         this.nameInput,
         this.scale.width / 2,
-        350,
+        340,
+        308,
       );
 
       window.addEventListener(
@@ -1483,25 +1516,26 @@ class PlayerCountScene extends Phaser.Scene {
     const actionButton = makeButton(
       this,
       width / 2,
-      this.mode === 'random' ? 430 : 400,
+      this.mode === 'random' ? 415 : 340,
       this.mode === 'private'
         ? 'CREATE ROOM'
         : 'FIND MATCH',
+      '#2878ff',
+      19,
+      308,
+      52,
     );
 
-    const backButton = this.add
-      .text(
-        width / 2,
-        this.mode === 'random' ? 495 : 500,
-        'BACK',
-        {
-          fontFamily: 'Arial',
-          fontSize: '18px',
-          color: '#bbbbbb',
-        },
-      )
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
+    const backButton = makeButton(
+      this,
+      width / 2,
+      this.mode === 'random' ? 485 : 410,
+      'BACK',
+      '#252d37',
+      15,
+      160,
+      40,
+    );
 
     actionButton.on('pointerdown', async () => {
       actionButton.disableInteractive();
@@ -1624,7 +1658,8 @@ class JoinScene extends Phaser.Scene {
         this,
         this.roomInput,
         this.scale.width / 2,
-        225,
+        205,
+        300,
       );
     }
 
@@ -1633,7 +1668,8 @@ class JoinScene extends Phaser.Scene {
         this,
         this.nameInput,
         this.scale.width / 2,
-        350,
+        325,
+        300,
       );
     }
   };
@@ -1649,18 +1685,18 @@ class JoinScene extends Phaser.Scene {
 
     this.add
       .text(width / 2, 75, 'JOIN PRIVATE GAME', {
-        fontFamily: 'Arial',
-        fontSize: '36px',
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '34px',
         color: '#ffffff',
         fontStyle: 'bold',
       })
       .setOrigin(0.5);
 
     this.add
-      .text(width / 2, 165, 'ROOM CODE', {
-        fontFamily: 'Arial',
-        fontSize: '18px',
-        color: '#bbbbbb',
+      .text(width / 2, 155, 'ROOM CODE', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '14px',
+        color: '#f2cf66',
         fontStyle: 'bold',
       })
       .setOrigin(0.5);
@@ -1672,10 +1708,10 @@ class JoinScene extends Phaser.Scene {
     );
 
     this.add
-      .text(width / 2, 290, 'YOUR NAME', {
-        fontFamily: 'Arial',
-        fontSize: '18px',
-        color: '#bbbbbb',
+      .text(width / 2, 275, 'YOUR NAME', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '14px',
+        color: '#f2cf66',
         fontStyle: 'bold',
       })
       .setOrigin(0.5);
@@ -1699,18 +1735,24 @@ class JoinScene extends Phaser.Scene {
     const joinButton = makeButton(
       this,
       width / 2,
-      480,
+      425,
       'JOIN GAME',
+      '#2878ff',
+      19,
+      300,
+      52,
     );
 
-    const backButton = this.add
-      .text(width / 2, 575, 'BACK', {
-        fontFamily: 'Arial',
-        fontSize: '18px',
-        color: '#bbbbbb',
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
+    const backButton = makeButton(
+      this,
+      width / 2,
+      495,
+      'BACK',
+      '#252d37',
+      15,
+      160,
+      40,
+    );
 
     joinButton.on('pointerdown', async () => {
       const code =
@@ -1895,10 +1937,12 @@ class LobbyScene extends Phaser.Scene {
       this.startButton = makeButton(
         this,
         width / 2,
-        height * 0.82,
+        height * 0.79,
         'START GAME',
-        '#2878ff',
-        22,
+        '#20a060',
+        19,
+        300,
+        52,
       );
 
       this.startButton.on(
@@ -1909,14 +1953,16 @@ class LobbyScene extends Phaser.Scene {
       );
     }
 
-    this.leaveButton = this.add
-      .text(width / 2, height - 58, 'LEAVE ROOM', {
-        fontFamily: 'Arial',
-        fontSize: '16px',
-        color: '#ff7777',
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
+    this.leaveButton = makeButton(
+      this,
+      width / 2,
+      height * 0.90,
+      'LEAVE ROOM',
+      '#9b3030',
+      15,
+      180,
+      42,
+    );
 
     this.leaveButton.on(
       'pointerdown',
@@ -2164,6 +2210,8 @@ class GameScene extends Phaser.Scene {
   private actionTimer?: Phaser.Time.TimerEvent;
   private selectedWeapon: WeaponType = 'gun';
   private pendingDoubleTarget = -1;
+  private lastActionSeconds = -1;
+  private lastMatchSeconds = -1;
 
  private currentShooter = -1;
 private startIndex = -1;
@@ -2266,18 +2314,9 @@ private nextStartIndex = -1;
         this.scene.restart();
       },
       onToggleAudio: () => {
-        const settings = loadSettings();
-        const currentlyMuted = settings.soundEffectsVolume === 0 && settings.musicVolume === 0;
-        if (currentlyMuted) {
-          settings.soundEffectsVolume = 80;
-          settings.musicVolume = 70;
-        } else {
-          settings.soundEffectsVolume = 0;
-          settings.musicVolume = 0;
-        }
-        saveSettings(settings);
+        const isMuted = PeerankiAudio.toggleMute();
         this.syncUI();
-        return !currentlyMuted;
+        return isMuted;
       },
     });
 
@@ -2482,7 +2521,7 @@ if (offlineMode) {
       pendingDoubleTargetIndex: this.pendingDoubleTarget,
       isOffline: offlineMode,
       isHost: amHost(),
-      isMuted: loadSettings().soundEffectsVolume === 0 && loadSettings().musicVolume === 0,
+      isMuted: PeerankiAudio.isMuted(),
     };
 
     const uiPlayers: UIPlayer[] = players.slice(0, maxPlayers).map((p) => ({
@@ -3405,6 +3444,7 @@ this.startIndex = forcedStartIsAlive
 }
 
   private startActionClock() {
+    this.lastActionSeconds = -1;
     if (!this.actionTimer) {
       this.actionTimer = this.time.addEvent({
         delay: 100,
@@ -3421,8 +3461,11 @@ this.startIndex = forcedStartIsAlive
     if (!Number.isFinite(deadline)) return;
     const remaining = Math.max(0, deadline - Date.now());
     const seconds = Math.ceil(remaining / 1000);
-    this.countText?.setText(`ACTION ${seconds}s • choose weapon + target(s)`);
-    this.syncUI();
+    if (seconds !== this.lastActionSeconds) {
+      this.lastActionSeconds = seconds;
+      this.countText?.setText(`ACTION ${seconds}s • choose weapon + target(s)`);
+      this.syncUI();
+    }
     if (remaining === 0 && (offlineMode || amHost())) this.endActionOnTimeout();
   }
 
@@ -3998,12 +4041,16 @@ void this.recordShot();
   private startMatchClock() {
     if (!matchStartedAt) matchStartedAt = new Date().toISOString();
     if (this.matchTimer) return;
+    this.lastMatchSeconds = -1;
     const update = () => {
       const elapsed = Math.max(0, Date.now() - Date.parse(matchStartedAt));
       const remaining = Math.max(0, matchDurationMs() - elapsed);
       const seconds = Math.ceil(remaining / 1000);
-      this.matchText?.setText(`MATCH ${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} • ROUND ${matchRound}`);
-      this.syncUI();
+      if (seconds !== this.lastMatchSeconds) {
+        this.lastMatchSeconds = seconds;
+        this.matchText?.setText(`MATCH ${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} • ROUND ${matchRound}`);
+        this.syncUI();
+      }
       if (remaining === 0 && (offlineMode || amHost()) && !this.gameFinished) void this.finishMatch();
     };
     update();

@@ -47,7 +47,7 @@ export class HUDComponent {
         <span class="pk-match-round-text">ROUND 1</span>
       </div>
       <div class="pk-topbar-actions">
-        <button type="button" class="pk-btn-icon pk-audio-btn" aria-label="Toggle Sound" title="Toggle Sound">
+        <button type="button" class="pk-btn-icon pk-audio-btn" aria-label="Mute Background Music" title="Mute Background Music">
           🔊
         </button>
         <button type="button" class="pk-btn-leave" aria-label="Leave Game">
@@ -61,9 +61,17 @@ export class HUDComponent {
     this.audioBtnEl = this.topbarEl.querySelector('.pk-audio-btn')!;
     const leaveBtn = this.topbarEl.querySelector('.pk-btn-leave')!;
 
+    // Initialize initial mute state from global storage
+    try {
+      const isInitiallyMuted = localStorage.getItem('peeranki_music_muted') === 'true';
+      this.updateAudioButtonState(isInitiallyMuted);
+    } catch {
+      // ignore
+    }
+
     this.audioBtnEl.addEventListener('click', () => {
       const isMuted = this.callbacks.onToggleAudio();
-      this.audioBtnEl.textContent = isMuted ? '🔇' : '🔊';
+      this.updateAudioButtonState(isMuted);
     });
 
     leaveBtn.addEventListener('click', () => {
@@ -132,6 +140,18 @@ export class HUDComponent {
     return this.bottombarEl;
   }
 
+  public updateAudioButtonState(isMuted: boolean) {
+    if (!this.audioBtnEl) return;
+    this.audioBtnEl.textContent = isMuted ? '🔇' : '🔊';
+    this.audioBtnEl.setAttribute('aria-label', isMuted ? 'Unmute Background Music' : 'Mute Background Music');
+    this.audioBtnEl.setAttribute('title', isMuted ? 'Unmute Background Music (Currently Silenced)' : 'Mute Background Music');
+    if (isMuted) {
+      this.audioBtnEl.classList.add('pk-audio-muted');
+    } else {
+      this.audioBtnEl.classList.remove('pk-audio-muted');
+    }
+  }
+
   public update(state: HUDState) {
     // 1. Update Match Timer
     const mins = Math.floor(state.remainingSeconds / 60);
@@ -140,7 +160,7 @@ export class HUDComponent {
     this.roundValEl.textContent = `ROUND ${state.matchRound}`;
 
     // Audio status
-    this.audioBtnEl.textContent = state.isMuted ? '🔇' : '🔊';
+    this.updateAudioButtonState(state.isMuted);
 
     // 2. Announcer Banner
     let bannerText = state.statusMessage;

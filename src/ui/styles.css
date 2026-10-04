@@ -145,6 +145,23 @@
   transform: scale(0.92);
 }
 
+.pk-audio-btn {
+  font-size: 18px;
+  position: relative;
+  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pk-audio-btn:hover {
+  background: var(--pk-bg-surface-elevated-hover);
+  border-color: var(--pk-border-focus);
+}
+
+.pk-audio-btn.pk-audio-muted {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.7);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.35);
+}
+
 .pk-btn-leave {
   min-height: 44px;
   padding: 0 14px;
@@ -235,11 +252,15 @@
   align-items: center;
   text-align: center;
   box-sizing: border-box;
-  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-              border-color 0.18s ease,
-              box-shadow 0.18s ease;
+  transition: border-color 0.18s ease,
+              box-shadow 0.18s ease,
+              background-color 0.18s ease,
+              transform 0.12s ease;
   min-height: 135px;
   cursor: default;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Shooter Highlight */
@@ -250,8 +271,8 @@
 }
 
 @keyframes pk-pulse-shooter {
-  0% { transform: scale(1); box-shadow: 0 0 10px rgba(40, 120, 255, 0.3); }
-  100% { transform: scale(1.03); box-shadow: 0 0 20px rgba(40, 120, 255, 0.6); }
+  0% { box-shadow: 0 0 10px rgba(40, 120, 255, 0.3); }
+  100% { box-shadow: 0 0 22px rgba(40, 120, 255, 0.75); }
 }
 
 /* Targetable State (When it's my turn to shoot) */
@@ -262,14 +283,15 @@
 }
 
 .pk-player-card.pk-is-targetable:hover {
-  transform: translateY(-2px) scale(1.02);
   border-style: solid;
   border-color: #38e08d;
-  box-shadow: 0 0 18px rgba(32, 160, 96, 0.4);
+  box-shadow: 0 0 20px rgba(56, 224, 141, 0.55);
+  background-color: var(--pk-bg-surface-elevated);
 }
 
 .pk-player-card.pk-is-targetable:active {
-  transform: scale(0.96);
+  transform: scale(0.97);
+  box-shadow: 0 0 24px rgba(56, 224, 141, 0.8);
 }
 
 /* Pending Double Peeranki Selection */
@@ -281,8 +303,8 @@
 }
 
 @keyframes pk-pulse-target {
-  0% { transform: scale(1); }
-  100% { transform: scale(1.04); }
+  0% { box-shadow: 0 0 12px rgba(242, 207, 102, 0.4); }
+  100% { box-shadow: 0 0 24px rgba(242, 207, 102, 0.85); }
 }
 
 /* Eliminated State */

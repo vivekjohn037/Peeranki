@@ -14,11 +14,28 @@ const TOWER_IMAGES = [
   'assets/towers/tower_destroyed.png',
 ];
 
+interface PlayerCardView {
+  card: HTMLDivElement;
+  nameSpan: HTMLSpanElement;
+  roleSpan: HTMLSpanElement;
+  towerImg: HTMLImageElement;
+  stageName: HTMLDivElement;
+  weaponsRow: HTMLDivElement;
+  points: HTMLDivElement;
+  hint: HTMLDivElement;
+  targetIndex: number;
+  isTargetable: boolean;
+  weaponsKey: string;
+  stageIdx: number;
+}
+
 export class BoardComponent {
   private containerEl: HTMLElement;
   private gridEl: HTMLElement;
   private callbacks: UICallbacks;
   private previousStages = new Map<number, number>();
+  private cards = new Map<number, PlayerCardView>();
+  private lastShootTimestamp = 0;
 
   constructor(callbacks: UICallbacks) {
     this.callbacks = callbacks;
@@ -42,135 +59,225 @@ export class BoardComponent {
     pendingDoubleTargetIndex: number,
     _orientation: OrientationMode,
   ) {
-    this.gridEl.innerHTML = '';
-
+    // Retain and update cards in-place to prevent DOM thrashing, cursor jitter, and lost clicks
     players.forEach((player, index) => {
       const isMe = player.id === localPlayerId;
       const isShooter = index === currentShooterIndex;
       const isEliminated = !player.alive || player.stage >= 3;
       const isTargetable = isMyTurn && !isMe && player.alive && player.connected;
       const isPendingDouble = index === pendingDoubleTargetIndex;
+      const stageIdx = Math.max(0, Math.min(3, player.stage));
 
-      const card = document.createElement('div');
-      card.className = 'pk-player-card';
+      let view = this.cards.get(player.id);
+      if (!view) {
+        const card = document.createElement('div');
+        card.className = 'pk-player-card';
 
-      if (isShooter && player.alive) card.classList.add('pk-is-shooter');
-      if (isTargetable) card.classList.add('pk-is-targetable');
-      if (isPendingDouble) card.classList.add('pk-pending-double');
-      if (isEliminated) card.classList.add('pk-eliminated');
-      if (!player.connected) card.classList.add('pk-disconnected');
+        const header = document.createElement('div');
+        header.className = 'pk-card-header';
 
-      // Check if stage changed to trigger damage shake
-      const prevStage = this.previousStages.get(player.id);
-      const stageChanged = prevStage !== undefined && prevStage !== player.stage;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'pk-card-name';
+
+        const roleSpan = document.createElement('span');
+        roleSpan.className = 'pk-card-role-tag';
+
+        header.appendChild(nameSpan);
+        header.appendChild(roleSpan);
+
+        const towerWrapper = document.createElement('div');
+        towerWrapper.className = 'pk-tower-stage-wrapper';
+
+        const towerImg = document.createElement('img');
+        towerImg.className = 'pk-tower-img';
+        towerImg.src = TOWER_IMAGES[stageIdx];
+        towerImg.alt = STAGE_NAMES[stageIdx];
+        towerWrapper.appendChild(towerImg);
+
+        const stageName = document.createElement('div');
+        stageName.className = 'pk-card-stage-name';
+
+        const weaponsRow = document.createElement('div');
+        weaponsRow.className = 'pk-card-weapons-row';
+
+        const points = document.createElement('div');
+        points.className = 'pk-card-points';
+
+        const hint = document.createElement('div');
+        hint.className = 'pk-target-hint';
+        hint.style.display = 'none';
+
+        card.appendChild(header);
+        card.appendChild(towerWrapper);
+        card.appendChild(stageName);
+        card.appendChild(weaponsRow);
+        card.appendChild(points);
+        card.appendChild(hint);
+
+        // Immediate responsive shooting for mouse click, touch tap, and keyboard
+        const handleShoot = (e: Event) => {
+          const currentView = this.cards.get(player.id);
+          if (!currentView || !currentView.isTargetable) return;
+          if ('button' in e && (e as MouseEvent).button !== 0) return;
+
+          const now = Date.now();
+          if (now - this.lastShootTimestamp < 200) return;
+          this.lastShootTimestamp = now;
+
+          e.preventDefault();
+          e.stopPropagation();
+          this.callbacks.onShootPlayer(currentView.targetIndex);
+        };
+
+        card.addEventListener('pointerdown', handleShoot);
+        card.addEventListener('click', handleShoot);
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            handleShoot(e);
+          }
+        });
+
+        view = {
+          card,
+          nameSpan,
+          roleSpan,
+          towerImg,
+          stageName,
+          weaponsRow,
+          points,
+          hint,
+          targetIndex: index,
+          isTargetable: false,
+          weaponsKey: '',
+          stageIdx,
+        };
+
+        this.cards.set(player.id, view);
+        this.gridEl.appendChild(card);
+      }
+
+      // Update dynamic target and state references
+      view.targetIndex = index;
+      view.isTargetable = isTargetable;
+
+      // Ensure stable DOM order
+      if (this.gridEl.children[index] !== view.card) {
+        this.gridEl.appendChild(view.card);
+      }
+
+      // State CSS classes
+      view.card.classList.toggle('pk-is-shooter', isShooter && player.alive);
+      view.card.classList.toggle('pk-is-targetable', isTargetable);
+      view.card.classList.toggle('pk-pending-double', isPendingDouble);
+      view.card.classList.toggle('pk-eliminated', isEliminated);
+      view.card.classList.toggle('pk-disconnected', !player.connected);
+
+      // Name & Role tags
+      const nameText = player.connected ? player.name : `Slot ${player.id} (Empty)`;
+      if (view.nameSpan.textContent !== nameText) {
+        view.nameSpan.textContent = nameText;
+      }
+
+      let roleText = '';
+      let isShooterBadge = false;
+      if (isMe) {
+        roleText = 'YOU';
+      } else if (isShooter && player.alive) {
+        roleText = 'SHOOTER';
+        isShooterBadge = true;
+      } else if (!player.connected) {
+        roleText = 'OFFLINE';
+      }
+
+      if (view.roleSpan.textContent !== roleText) {
+        view.roleSpan.textContent = roleText;
+      }
+      view.roleSpan.classList.toggle('shooter-badge', isShooterBadge);
+
+      // Tower visual & stage name
+      if (view.stageIdx !== stageIdx) {
+        view.stageIdx = stageIdx;
+        view.towerImg.src = TOWER_IMAGES[stageIdx];
+        view.towerImg.alt = STAGE_NAMES[stageIdx];
+        const stageLabel = player.connected ? STAGE_NAMES[stageIdx] : 'Available Slot';
+        if (view.stageName.textContent !== stageLabel) {
+          view.stageName.textContent = stageLabel;
+        }
+
+        const prevStage = this.previousStages.get(player.id);
+        if (prevStage !== undefined && player.stage > prevStage && player.alive) {
+          view.towerImg.classList.remove('pk-tower-shake');
+          void view.towerImg.offsetWidth; // Trigger reflow for clean re-shake
+          view.towerImg.classList.add('pk-tower-shake');
+        }
+      } else {
+        const stageLabel = player.connected ? STAGE_NAMES[stageIdx] : 'Available Slot';
+        if (view.stageName.textContent !== stageLabel) {
+          view.stageName.textContent = stageLabel;
+        }
+      }
       this.previousStages.set(player.id, player.stage);
 
-      // Card Header
-      const header = document.createElement('div');
-      header.className = 'pk-card-header';
-
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'pk-card-name';
-      nameSpan.textContent = player.connected ? player.name : `Slot ${player.id} (Empty)`;
-
-      const roleSpan = document.createElement('span');
-      roleSpan.className = 'pk-card-role-tag';
-      if (isMe) {
-        roleSpan.textContent = 'YOU';
-      } else if (isShooter && player.alive) {
-        roleSpan.className += ' shooter-badge';
-        roleSpan.textContent = 'SHOOTER';
-      } else if (!player.connected) {
-        roleSpan.textContent = 'OFFLINE';
-      }
-      header.appendChild(nameSpan);
-      header.appendChild(roleSpan);
-
-      // Tower Visual
-      const towerWrapper = document.createElement('div');
-      towerWrapper.className = 'pk-tower-stage-wrapper';
-
-      const towerImg = document.createElement('img');
-      towerImg.className = 'pk-tower-img';
-      const stageIdx = Math.max(0, Math.min(3, player.stage));
-      towerImg.src = TOWER_IMAGES[stageIdx];
-      towerImg.alt = STAGE_NAMES[stageIdx];
-
-      if (stageChanged && player.alive) {
-        towerImg.classList.add('pk-tower-shake');
-      }
-
-      towerWrapper.appendChild(towerImg);
-
-      // Card Stage Name
-      const stageName = document.createElement('div');
-      stageName.className = 'pk-card-stage-name';
-      stageName.textContent = player.connected ? STAGE_NAMES[stageIdx] : 'Available Slot';
-
       // Weapons inventory row
-      const weaponsRow = document.createElement('div');
-      weaponsRow.className = 'pk-card-weapons-row';
-      if (player.connected && player.weapons?.length > 0) {
-        player.weapons.forEach((weapon) => {
-          const icon = document.createElement('img');
-          icon.className = 'pk-card-weapon-icon';
-          const fileName = weapon === 'doublePeeranki' ? 'double_peeranki' : weapon;
-          icon.src = `assets/weapons/${fileName}.png`;
-          icon.alt = weapon;
-          icon.title = weapon;
-          weaponsRow.appendChild(icon);
-        });
+      const weaponsKey = player.connected && player.weapons ? player.weapons.join(',') : '';
+      if (view.weaponsKey !== weaponsKey) {
+        view.weaponsKey = weaponsKey;
+        view.weaponsRow.innerHTML = '';
+        if (player.connected && player.weapons?.length > 0) {
+          player.weapons.forEach((weapon) => {
+            const icon = document.createElement('img');
+            icon.className = 'pk-card-weapon-icon';
+            const fileName = weapon === 'doublePeeranki' ? 'double_peeranki' : weapon;
+            icon.src = `assets/weapons/${fileName}.png`;
+            icon.alt = weapon;
+            icon.title = weapon;
+            view.weaponsRow.appendChild(icon);
+          });
+        }
       }
 
-      // Elimination Points
-      const points = document.createElement('div');
-      points.className = 'pk-card-points';
-      if (player.connected) {
-        points.textContent = `⭐ ${player.eliminationPoints} pt${player.eliminationPoints === 1 ? '' : 's'}`;
+      // Elimination points
+      const pointsText = player.connected
+        ? `⭐ ${player.eliminationPoints} pt${player.eliminationPoints === 1 ? '' : 's'}`
+        : '';
+      if (view.points.textContent !== pointsText) {
+        view.points.textContent = pointsText;
       }
-
-      // Append elements
-      card.appendChild(header);
-      card.appendChild(towerWrapper);
-      card.appendChild(stageName);
-      card.appendChild(weaponsRow);
-      card.appendChild(points);
 
       // Target Hint Badge
       if (isPendingDouble) {
-        const hint = document.createElement('div');
-        hint.className = 'pk-target-hint';
-        hint.style.background = '#f2cf66';
-        hint.style.color = '#111';
-        hint.textContent = '1ST TARGET';
-        card.appendChild(hint);
+        view.hint.style.display = 'block';
+        view.hint.style.background = '#f2cf66';
+        view.hint.style.color = '#111';
+        view.hint.textContent = '1ST TARGET';
       } else if (isTargetable) {
-        const hint = document.createElement('div');
-        hint.className = 'pk-target-hint';
-        hint.textContent = 'TAP TO SHOOT';
-        card.appendChild(hint);
+        view.hint.style.display = 'block';
+        view.hint.style.background = '';
+        view.hint.style.color = '';
+        view.hint.textContent = 'CLICK TO SHOOT';
+      } else {
+        view.hint.style.display = 'none';
       }
 
-      // Tap / Click Interaction
+      // Accessibility
       if (isTargetable) {
-        card.setAttribute('role', 'button');
-        card.setAttribute('tabindex', '0');
-        card.setAttribute('aria-label', `Shoot ${player.name}`);
-
-        const handleSelect = (e: Event) => {
-          e.preventDefault();
-          this.callbacks.onShootPlayer(index);
-        };
-
-        card.addEventListener('click', handleSelect);
-        card.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            handleSelect(e);
-          }
-        });
+        view.card.setAttribute('role', 'button');
+        view.card.setAttribute('tabindex', '0');
+        view.card.setAttribute('aria-label', `Shoot ${player.name}`);
+      } else {
+        view.card.removeAttribute('role');
+        view.card.removeAttribute('tabindex');
+        view.card.removeAttribute('aria-label');
       }
-
-      this.gridEl.appendChild(card);
     });
+
+    // Remove any stale player cards
+    for (const [id, view] of this.cards.entries()) {
+      if (!players.some((p) => p.id === id)) {
+        view.card.remove();
+        this.cards.delete(id);
+      }
+    }
   }
 }
+
