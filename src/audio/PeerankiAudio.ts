@@ -1,9 +1,45 @@
-// Peeranki Permanent Soundtrack & Audio System
-// Plays the authentic permanent Peeranki theme soundtrack with seamless looping,
-// volume controls, mute toggling, and synthesized fallback.
+// Peeranki Audio System
+// Supports background music playback from public/assets/audio/ (bg_music.mp3, bg_music_1.mp3, bg_music_2.mp3)
+// and SFX from public/assets/audio/ (click.mp3, select.mp3, shoot.mp3, hit.mp3, elimination.mp3, victory.mp3).
+// Handles autoplay unlock on user interaction and provides track switching.
 
 const SETTINGS_KEY = 'peeranki-settings';
 const MUTE_KEY = 'peeranki_music_muted';
+const TRACK_KEY = 'peeranki_selected_track';
+
+export interface SoundtrackTrack {
+  id: 1 | 2;
+  title: string;
+  filename: string;
+  sources: string[];
+}
+
+export const SOUNDTRACK_TRACKS: SoundtrackTrack[] = [
+  {
+    id: 1,
+    title: 'Peeranki Main Theme',
+    filename: 'bg_music.mp3',
+    sources: [
+      'assets/audio/bg_music.mp3',
+      'assets/audio/bg_music_1.mp3',
+      '/assets/audio/bg_music.mp3',
+      '/assets/audio/bg_music_1.mp3',
+      'assets/audio/bg_music.wav',
+      '/assets/audio/bg_music.wav',
+    ],
+  },
+  {
+    id: 2,
+    title: 'Kerala Folk Battle Theme',
+    filename: 'bg_music_2.mp3',
+    sources: [
+      'assets/audio/bg_music_2.mp3',
+      '/assets/audio/bg_music_2.mp3',
+      'assets/audio/bg_music.mp3',
+      '/assets/audio/bg_music.mp3',
+    ],
+  },
+];
 
 function getStoredMusicVolume(): number {
   try {
@@ -31,6 +67,16 @@ function getStoredSfxVolume(): number {
   return 80;
 }
 
+function getStoredTrack(): 1 | 2 {
+  try {
+    const raw = localStorage.getItem(TRACK_KEY);
+    if (raw === '2') return 2;
+  } catch {
+    // ignore
+  }
+  return 1;
+}
+
 export type MusicMode = 'both' | 'track1' | 'track2';
 
 export class PeerankiAudioSystem {
@@ -40,22 +86,76 @@ export class PeerankiAudioSystem {
   private musicTimer?: number;
   private musicStep = 0;
 
+  private currentTrackId: 1 | 2 = 1;
   private audioElement: HTMLAudioElement | null = null;
-  private permanentSongUrl = 'assets/audio/bg_music.mp3';
-  private permanentSongFallbackUrl = 'assets/audio/bg_music.wav';
+  private currentSourceIndex = 0;
   private isHtmlAudioPlaying = false;
+  private hasPendingAutoplay = false;
+  private unlocked = false;
   private onTrackChangeCallbacks = new Set<() => void>();
 
+  // SFX cache for instant response
+  private sfxPool: Map<string, HTMLAudioElement[]> = new Map();
+
   constructor() {
-    // Pre-warm audio if running in browser
-    if (typeof window !== 'undefined') {
-      // Remove any legacy uploaded song overrides from previous sessions
-      try {
-        localStorage.removeItem('peeranki_music_mode');
-      } catch {
-        // ignore
+    this.currentTrackId = getStoredTrack();
+    this.setupUserInteractionUnlock();
+    this.preloadSFX();
+  }
+
+  private setupUserInteractionUnlock() {
+    if (typeof window === 'undefined') return;
+
+    const unlock = () => {
+      if (this.unlocked && (!this.hasPendingAutoplay || this.isHtmlAudioPlaying)) return;
+      this.unlocked = true;
+
+      // Resume Web Audio Context if suspended
+      if (this.context && this.context.state === 'suspended') {
+        void this.context.resume().catch(() => undefined);
       }
-    }
+
+      // If background music should be playing, start it now that user has interacted
+      if (this.hasPendingAutoplay && !this.isMuted()) {
+        this.hasPendingAutoplay = false;
+        this.startMusic();
+      }
+    };
+
+    const events = ['pointerdown', 'touchstart', 'mousedown', 'keydown'];
+    const handleEvent = () => {
+      unlock();
+    };
+
+    events.forEach((ev) => {
+      window.addEventListener(ev, handleEvent, { capture: true, passive: true });
+    });
+  }
+
+  private preloadSFX() {
+    if (typeof window === 'undefined') return;
+    const sfxList: Array<{ name: string; src: string; fallback: string }> = [
+      { name: 'click', src: 'assets/audio/click.mp3', fallback: 'assets/audio/click.wav' },
+      { name: 'select', src: 'assets/audio/select.mp3', fallback: 'assets/audio/select.wav' },
+      { name: 'shoot', src: 'assets/audio/shoot.mp3', fallback: 'assets/audio/shoot.wav' },
+      { name: 'hit', src: 'assets/audio/hit.mp3', fallback: 'assets/audio/hit.wav' },
+      { name: 'elimination', src: 'assets/audio/elimination.mp3', fallback: 'assets/audio/elimination.wav' },
+      { name: 'victory', src: 'assets/audio/victory.mp3', fallback: 'assets/audio/victory.wav' },
+    ];
+
+    sfxList.forEach(({ name, src, fallback }) => {
+      const audio1 = new Audio(src);
+      audio1.preload = 'auto';
+      audio1.onerror = () => {
+        audio1.src = fallback;
+      };
+      const audio2 = new Audio(src);
+      audio2.preload = 'auto';
+      audio2.onerror = () => {
+        audio2.src = fallback;
+      };
+      this.sfxPool.set(name, [audio1, audio2]);
+    });
   }
 
   public onTrackChange(callback: () => void): () => void {
@@ -73,25 +173,68 @@ export class PeerankiAudioSystem {
     });
   }
 
+  public getCurrentTrack(): 1 | 2 {
+    return this.currentTrackId;
+  }
+
+  public getCurrentTrackTitle(): string {
+    const track = SOUNDTRACK_TRACKS.find((t) => t.id === this.currentTrackId) || SOUNDTRACK_TRACKS[0];
+    return track.title;
+  }
+
+  public getCurrentTrackFilename(): string {
+    const track = SOUNDTRACK_TRACKS.find((t) => t.id === this.currentTrackId) || SOUNDTRACK_TRACKS[0];
+    return track.filename;
+  }
+
   public getPermanentSongName(): string {
-    return 'Peeranki Festival Valley Theme';
+    return this.getCurrentTrackTitle();
+  }
+
+  public setTrack(trackId: 1 | 2) {
+    if (this.currentTrackId === trackId && this.audioElement) return;
+    this.currentTrackId = trackId;
+    try {
+      localStorage.setItem(TRACK_KEY, String(trackId));
+    } catch {
+      // ignore
+    }
+
+    if (this.audioElement) {
+      this.audioElement.pause();
+      this.audioElement = null;
+    }
+    this.isHtmlAudioPlaying = false;
+    this.currentSourceIndex = 0;
+
+    if (!this.isMuted()) {
+      this.startMusic();
+    }
+    this.notifyChange();
+  }
+
+  public cycleTrack(): 1 | 2 {
+    const next = this.currentTrackId === 1 ? 2 : 1;
+    this.setTrack(next);
+    return next;
   }
 
   // Backward compatibility stubs
   public getMusicMode(): MusicMode {
-    return 'track1';
+    return this.currentTrackId === 1 ? 'track1' : 'track2';
   }
 
-  public setMusicMode(_mode: MusicMode) {
-    this.notifyChange();
+  public setMusicMode(mode: MusicMode) {
+    if (mode === 'track2') {
+      this.setTrack(2);
+    } else {
+      this.setTrack(1);
+    }
   }
 
   public cycleMusicMode(): MusicMode {
-    return 'track1';
-  }
-
-  public getCurrentTrack(): 1 | 2 {
-    return 1;
+    const next = this.cycleTrack();
+    return next === 1 ? 'track1' : 'track2';
   }
 
   public isTrackLoaded(_slot: 1 | 2): boolean {
@@ -103,13 +246,13 @@ export class PeerankiAudioSystem {
   }
 
   public async setCustomTrack(_slot: 1 | 2, _file: File | Blob) {
-    // Permanent song is locked
     return Promise.resolve();
   }
 
-  private getContext() {
+  private getContext(): AudioContext {
     if (!this.context) {
-      this.context = new AudioContext();
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.context = new AudioCtx();
       this.musicGain = this.context.createGain();
       this.effectsGain = this.context.createGain();
       this.musicGain.connect(this.context.destination);
@@ -152,6 +295,7 @@ export class PeerankiAudioSystem {
         this.audioElement.pause();
       }
       this.stopSynthesizedMusic();
+      this.hasPendingAutoplay = false;
     } else {
       this.startMusic();
     }
@@ -182,10 +326,38 @@ export class PeerankiAudioSystem {
       }
     }
 
-    // 2. Update Web Audio synthesizer volume
-    const now = this.context?.currentTime ?? 0;
-    this.musicGain?.gain.setTargetAtTime((musicVol / 100) * 0.16, now, 0.04);
-    this.effectsGain?.gain.setTargetAtTime((sfxVol / 100) * 0.24, now, 0.04);
+    // 2. Update Web Audio volume
+    if (this.context) {
+      const now = this.context.currentTime;
+      this.musicGain?.gain.setTargetAtTime((musicVol / 100) * 0.16, now, 0.04);
+      this.effectsGain?.gain.setTargetAtTime((sfxVol / 100) * 0.24, now, 0.04);
+    }
+  }
+
+  private getCurrentSources(): string[] {
+    const track = SOUNDTRACK_TRACKS.find((t) => t.id === this.currentTrackId) || SOUNDTRACK_TRACKS[0];
+    return track.sources;
+  }
+
+  private tryNextSource() {
+    const sources = this.getCurrentSources();
+    this.currentSourceIndex += 1;
+    if (this.currentSourceIndex < sources.length && this.audioElement) {
+      const nextUrl = sources[this.currentSourceIndex];
+      this.audioElement.src = nextUrl;
+      const playPromise = this.audioElement.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            this.stopSynthesizedMusic();
+            this.isHtmlAudioPlaying = true;
+          })
+          .catch(() => undefined);
+      }
+    } else {
+      // All file sources failed, fallback to gentle synth
+      this.startSynthesizedMusic();
+    }
   }
 
   public startMusic() {
@@ -193,32 +365,26 @@ export class PeerankiAudioSystem {
     const musicVol = getStoredMusicVolume();
     if (musicVol === 0) return;
 
-    const ctx = this.getContext();
-    if (ctx.state === 'suspended') {
-      void ctx.resume().catch(() => undefined);
+    if (this.context && this.context.state === 'suspended') {
+      void this.context.resume().catch(() => undefined);
     }
 
     if (!this.audioElement) {
+      const sources = this.getCurrentSources();
+      this.currentSourceIndex = 0;
       const audio = new Audio();
-      audio.src = this.permanentSongUrl;
+      audio.src = sources[0];
       audio.loop = true;
       const volumeRatio = (musicVol / 100) * 0.72;
       audio.volume = Math.max(0, Math.min(1, volumeRatio));
 
-      // Try fallback to wav if mp3 cannot load
+      audio.addEventListener('playing', () => {
+        this.stopSynthesizedMusic();
+        this.isHtmlAudioPlaying = true;
+      });
+
       audio.onerror = () => {
-        if (audio.src.endsWith('.mp3')) {
-          console.info('[PeerankiAudio] Retrying with WAV permanent track...');
-          audio.src = this.permanentSongFallbackUrl;
-          void audio.play().catch(() => {
-            this.startSynthesizedMusic();
-          });
-        } else {
-          console.info('[PeerankiAudio] Falling back to Web Audio ambient synthesizer.');
-          this.audioElement = null;
-          this.isHtmlAudioPlaying = false;
-          this.startSynthesizedMusic();
-        }
+        this.tryNextSource();
       };
 
       this.audioElement = audio;
@@ -227,21 +393,24 @@ export class PeerankiAudioSystem {
     this.isHtmlAudioPlaying = true;
     const playPromise = this.audioElement.play();
     if (playPromise !== undefined) {
-      playPromise.catch((err) => {
-        if (err.name !== 'AbortError') {
-          // Fall back to synth on autoplay restrictions or format issue
-          this.startSynthesizedMusic();
-        }
-      });
+      playPromise
+        .then(() => {
+          this.stopSynthesizedMusic();
+          this.hasPendingAutoplay = false;
+        })
+        .catch((err) => {
+          if (err.name === 'NotAllowedError') {
+            // Autoplay was blocked before user interaction; wait for gesture instead of synthesized beeps
+            this.hasPendingAutoplay = true;
+          } else if (err.name !== 'AbortError') {
+            this.tryNextSource();
+          }
+        });
     }
   }
 
   public nextTrack() {
-    // There is one permanent theme, restart or maintain
-    if (this.audioElement) {
-      this.audioElement.currentTime = 0;
-      void this.audioElement.play().catch(() => undefined);
-    }
+    this.cycleTrack();
   }
 
   public stopMusic() {
@@ -249,6 +418,7 @@ export class PeerankiAudioSystem {
       this.audioElement.pause();
       this.isHtmlAudioPlaying = false;
     }
+    this.hasPendingAutoplay = false;
     this.stopSynthesizedMusic();
   }
 
@@ -259,7 +429,7 @@ export class PeerankiAudioSystem {
     }
   }
 
-  // Graceful synthesized Kerala temple ambient melody fallback
+  // Graceful synthesized Kerala temple ambient melody fallback (used only if all audio files fail)
   private startSynthesizedMusic() {
     if (this.musicTimer !== undefined) return;
     const notes = [220, 261.63, 329.63, 392, 329.63, 261.63, 196, 246.94, 293.66, 369.99, 440, 369.99, 196, 246.94, 293.66, 392];
@@ -267,33 +437,59 @@ export class PeerankiAudioSystem {
       this.applySettings();
       const frequency = notes[this.musicStep % notes.length];
       this.musicStep += 1;
-      this.tone(frequency, 0.42, 0.065, this.musicGain, 'sine');
-      if (this.musicStep % 4 === 0) this.tone(frequency / 2, 0.75, 0.035, this.musicGain, 'triangle');
+      this.tone(frequency, 0.42, 0.05, this.musicGain, 'sine');
+      if (this.musicStep % 4 === 0) this.tone(frequency / 2, 0.75, 0.025, this.musicGain, 'triangle');
     };
     playNext();
-    this.musicTimer = window.setInterval(playNext, 480);
+    this.musicTimer = window.setInterval(playNext, 520);
   }
 
   public effect(name: 'click' | 'select' | 'shoot' | 'hit' | 'elimination' | 'victory') {
     const sfxVol = getStoredSfxVolume();
     if (sfxVol === 0) return;
 
-    const context = this.getContext();
-    if (context.state === 'suspended') void context.resume().catch(() => undefined);
-    this.startMusic();
-    this.applySettings();
+    if (this.context && this.context.state === 'suspended') {
+      void this.context.resume().catch(() => undefined);
+    }
 
-    // Check for custom audio effect file first
-    const audioPath = `assets/audio/${name}.mp3`;
-    const sfx = new Audio(audioPath);
-    sfx.volume = Math.max(0, Math.min(1, (sfxVol / 100) * 0.85));
-    const sfxPromise = sfx.play();
-    if (sfxPromise !== undefined) {
-      sfxPromise.catch(() => {
+    // Trigger music start if autoplay was pending on this user interaction
+    if (this.hasPendingAutoplay && !this.isMuted()) {
+      this.hasPendingAutoplay = false;
+      this.startMusic();
+    }
+
+    // Try pool of preloaded audio elements
+    const pool = this.sfxPool.get(name);
+    let played = false;
+    if (pool && pool.length > 0) {
+      // Find an audio element that is either paused or ended
+      let sfx = pool.find((a) => a.paused || a.ended);
+      if (!sfx) {
+        sfx = pool[0];
+        sfx.currentTime = 0;
+      }
+      sfx.volume = Math.max(0, Math.min(1, (sfxVol / 100) * 0.85));
+      const p = sfx.play();
+      if (p !== undefined) {
+        p.catch(() => {
+          this.playSynthesizedEffect(name);
+        });
+      }
+      played = true;
+    }
+
+    if (!played) {
+      // Direct audio load
+      const sfx = new Audio(`assets/audio/${name}.mp3`);
+      sfx.volume = Math.max(0, Math.min(1, (sfxVol / 100) * 0.85));
+      const sfxPromise = sfx.play();
+      if (sfxPromise !== undefined) {
+        sfxPromise.catch(() => {
+          this.playSynthesizedEffect(name);
+        });
+      } else {
         this.playSynthesizedEffect(name);
-      });
-    } else {
-      this.playSynthesizedEffect(name);
+      }
     }
   }
 
@@ -323,7 +519,7 @@ export class PeerankiAudioSystem {
   }
 
   private tone(frequency: number, duration: number, volume: number, destination?: GainNode, type: OscillatorType = 'sine') {
-    const context = this.context;
+    const context = this.getContext();
     if (!context || !destination || context.state !== 'running') return;
     const oscillator = context.createOscillator();
     const envelope = context.createGain();

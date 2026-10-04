@@ -1018,21 +1018,31 @@ class SettingsScene extends Phaser.Scene {
     addVolumeSetting('MUSIC VOLUME', 'musicVolume', height * 0.20);
     addVolumeSetting('SOUND EFFECTS VOLUME', 'soundEffectsVolume', height * 0.35);
 
-    // Permanent Soundtrack Info
+    // Soundtrack Info & Switcher
+    const currentTrackTitle = PeerankiAudio.getCurrentTrackTitle();
+    const currentTrackFile = PeerankiAudio.getCurrentTrackFilename();
     const themeBg = this.add.graphics();
     themeBg.fillStyle(0x1a222d, 0.85);
     themeBg.lineStyle(1.5, 0x3b82f6, 0.4);
     themeBg.fillRoundedRect(width / 2 - 160, height * 0.46, 320, 52, 10);
     themeBg.strokeRoundedRect(width / 2 - 160, height * 0.46, 320, 52, 10);
 
-    this.add.text(width / 2, height * 0.46 + 16, '🎵 SOUNDTRACK: PEERANKI THEME', {
+    const soundHitZone = this.add.zone(width / 2, height * 0.46 + 26, 320, 52)
+      .setInteractive({ useHandCursor: true });
+    soundHitZone.on('pointerdown', () => {
+      PeerankiAudio.cycleTrack();
+      PeerankiAudio.effect('select');
+      redraw();
+    });
+
+    this.add.text(width / 2, height * 0.46 + 16, `🎵 MUSIC: ${currentTrackTitle.toUpperCase()}`, {
       fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       fontSize: '13px',
       color: '#60a5fa',
       fontStyle: 'bold',
     }).setOrigin(0.5);
 
-    this.add.text(width / 2, height * 0.46 + 35, 'Sunlit Village Festival • Permanent Audio', {
+    this.add.text(width / 2, height * 0.46 + 35, `assets/audio/${currentTrackFile} • Tap to Switch`, {
       fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       fontSize: '11px',
       color: '#9ca3af',
