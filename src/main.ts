@@ -8,10 +8,8 @@ import { PeerankiAudio } from './audio/PeerankiAudio';
 import { showHowToPlayModal } from './ui/HowToPlayModalComponent';
 import {
   type AnimalAvatarId,
-  ANIMAL_AVATARS,
   AVATAR_IDS,
   getSelectedAvatarId,
-  setSelectedAvatarId,
   getAvatarDef,
   getBotAvatarId,
 } from './game/avatars';
@@ -27,7 +25,6 @@ import {
   leaveRoomBestEffort,
   touchPlayer,
   cleanupStalePlayers,
-  updatePlayerAvatar,
   supabase,
 } from './supabase';
 
@@ -688,9 +685,10 @@ function positionHtmlInput(
   input.style.top = `${rect.top + gameY * scaleY}px`;
   input.style.transform = 'translate(-50%, -50%)';
   input.style.width = `${Math.round(cssWidth)}px`;
-  input.style.height = `${Math.max(42, Math.round(50 * scaleY))}px`;
+  input.style.height = `${Math.max(44, Math.round(50 * scaleY))}px`;
   input.style.padding = '0 16px';
-  input.style.fontSize = `${Math.max(14, Math.round(16 * scaleX))}px`;
+  // Enforce >= 16px font size on mobile web to prevent iOS Safari auto-zoom
+  input.style.fontSize = `${Math.max(16, Math.round(16 * scaleX))}px`;
   input.style.textAlign = 'center';
   input.style.boxSizing = 'border-box';
   input.style.border = '2px solid #455569';
@@ -702,6 +700,7 @@ function positionHtmlInput(
   input.style.fontFamily = 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
   input.style.fontWeight = '700';
   input.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.5)';
+  input.setAttribute('enterkeyhint', 'done');
   input.onfocus = () => {
     input.style.borderColor = '#2878ff';
     input.style.boxShadow = '0 0 14px rgba(40, 120, 255, 0.5)';
@@ -709,6 +708,8 @@ function positionHtmlInput(
   input.onblur = () => {
     input.style.borderColor = '#455569';
     input.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.5)';
+    // Reset window scroll on mobile browsers after keyboard closes
+    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
   };
 }
 
@@ -804,7 +805,7 @@ class MenuScene extends Phaser.Scene {
   private nameInput?: HTMLInputElement;
   private resizeHandler = () => {
     if (this.nameInput) {
-      positionHtmlInput(this, this.nameInput, this.scale.width / 2, this.scale.height * 0.40, 300);
+      positionHtmlInput(this, this.nameInput, this.scale.width / 2, this.scale.height * 0.35, 300);
     }
   };
 
@@ -847,28 +848,28 @@ class MenuScene extends Phaser.Scene {
       });
     }
 
-    const glow = this.add.circle(width / 2, height * 0.17, 85, 0x2878ff, 0.12);
+    const glow = this.add.circle(width / 2, height * 0.13, 70, 0x2878ff, 0.12);
     this.tweens.add({ targets: glow, alpha: 0.24, scale: 1.12, duration: 1500, yoyo: true, repeat: -1 });
-    this.add.image(width / 2, height * 0.17, 'peeranki-logo').setDisplaySize(140, 140);
+    this.add.image(width / 2, height * 0.13, 'peeranki-logo').setDisplaySize(115, 115);
 
     this.add
       .text(
         width / 2,
-        height * 0.28,
+        height * 0.22,
         'Traditional Kerala Game',
         {
           fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          fontSize: '16px',
+          fontSize: '15px',
           color: '#8a99a8',
         },
       )
       .setOrigin(0.5);
 
-    // Naming option at the beginning
+    // Naming option
     this.add
       .text(
         width / 2,
-        height * 0.34,
+        height * 0.28,
         'YOUR NAME',
         {
           fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -888,7 +889,7 @@ class MenuScene extends Phaser.Scene {
     this.nameInput.autocomplete = 'name';
     document.body.appendChild(this.nameInput);
 
-    positionHtmlInput(this, this.nameInput, width / 2, height * 0.40, 300);
+    positionHtmlInput(this, this.nameInput, width / 2, height * 0.35, 300);
 
     this.nameInput.addEventListener('input', () => {
       setStoredPlayerName(this.nameInput?.value ?? '');
@@ -899,7 +900,7 @@ class MenuScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        height * 0.46,
+        height * 0.41,
         'Saved for all offline & online games',
         {
           fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -909,11 +910,10 @@ class MenuScene extends Phaser.Scene {
       )
       .setOrigin(0.5);
 
-    const isPortrait = height > width;
     const btnWidth = Math.min(320, Math.floor(width * 0.86));
-    const btnHeight = 50;
-    const btnGap = 12;
-    const startBtnY = isPortrait ? height * 0.47 : height * 0.52;
+    const btnHeight = 46;
+    const btnGap = 10;
+    const startBtnY = height * 0.48;
 
     const offlineButton = makeButton(
       this,
@@ -979,13 +979,23 @@ class MenuScene extends Phaser.Scene {
     });
 
     const topBtnY = Math.max(34, Math.round(height * 0.05));
-    const exitButton = makeButton(this, width - 42, topBtnY, 'EXIT', '#9b3030', 13, 68, 36).setDepth(1000);
-    const guideTopBtn = makeButton(this, width - 118, topBtnY, '❓ GUIDE', '#1f2937', 12, 74, 36).setDepth(1000);
+    const isNativeOrDesktop = Boolean(window.peerankiDesktop || (typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform?.()));
+    const rightTopBtn = makeButton(
+      this,
+      width - 46,
+      topBtnY,
+      isNativeOrDesktop ? 'EXIT' : '⛶ FULL',
+      '#2d3748',
+      12,
+      76,
+      36,
+    ).setDepth(1000);
+    const guideTopBtn = makeButton(this, width - 128, topBtnY, '❓ GUIDE', '#1f2937', 12, 74, 36).setDepth(1000);
 
     const isMuted = PeerankiAudio.isMuted();
     const muteButton = makeButton(
       this,
-      width - 180,
+      width - 190,
       topBtnY,
       isMuted ? '🔇' : '🔊',
       isMuted ? '#822727' : '#2d3748',
@@ -1007,18 +1017,36 @@ class MenuScene extends Phaser.Scene {
 
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
       const resizeTopY = Math.max(34, Math.round(gameSize.height * 0.05));
-      exitButton.setPosition(gameSize.width - 42, resizeTopY);
-      guideTopBtn.setPosition(gameSize.width - 118, resizeTopY);
-      muteButton.setPosition(gameSize.width - 180, resizeTopY);
+      rightTopBtn.setPosition(gameSize.width - 46, resizeTopY);
+      guideTopBtn.setPosition(gameSize.width - 128, resizeTopY);
+      muteButton.setPosition(gameSize.width - 190, resizeTopY);
     });
-    exitButton.on('pointerdown', async () => {
-      this.cleanup();
-      if (window.peerankiDesktop) {
-        window.peerankiDesktop.quit();
-      } else if (Capacitor.getPlatform() === 'android') {
-        await App.exitApp();
+    rightTopBtn.on('pointerdown', async () => {
+      if (isNativeOrDesktop) {
+        this.cleanup();
+        if (window.peerankiDesktop) {
+          window.peerankiDesktop.quit();
+        } else if (Capacitor.getPlatform() === 'android') {
+          await App.exitApp();
+        }
       } else {
-        window.close();
+        try {
+          if (!document.fullscreenElement && !(document as any).webkitFullscreenElement) {
+            if (document.documentElement.requestFullscreen) {
+              await document.documentElement.requestFullscreen();
+            } else if ((document.documentElement as any).webkitRequestFullscreen) {
+              (document.documentElement as any).webkitRequestFullscreen();
+            }
+          } else {
+            if (document.exitFullscreen) {
+              await document.exitFullscreen();
+            } else if ((document as any).webkitExitFullscreen) {
+              (document as any).webkitExitFullscreen();
+            }
+          }
+        } catch {
+          // ignore
+        }
       }
     });
   }
@@ -1213,7 +1241,7 @@ class OfflineSetupScene extends Phaser.Scene {
     });
 
     this.add
-      .text(width / 2, height * 0.38, 'NUMBER OF PLAYERS', {
+      .text(width / 2, height * 0.34, 'NUMBER OF PLAYERS', {
         fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         fontSize: '14px',
         color: '#ffffff',
@@ -1222,28 +1250,31 @@ class OfflineSetupScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     const playerCounts = PLAYER_COUNTS;
-    const countCols = 4;
-    const countBtnW = 68;
-    const countBtnH = 42;
-    const countGapX = 12;
-    const countGapY = 10;
-    const totalGridW = countCols * countBtnW + (countCols - 1) * countGapX;
-    const gridStartX = width / 2 - totalGridW / 2 + countBtnW / 2;
-    const gridStartY = height * 0.45;
+    const row1 = playerCounts.slice(0, 5);
+    const row2 = playerCounts.slice(5);
+    const countBtnW = 64;
+    const countBtnH = 40;
+    const countGapX = 8;
+    const countGapY = 8;
 
-    playerCounts.forEach((count, index) => {
-      const col = index % countCols;
-      const row = Math.floor(index / countCols);
-      const x = gridStartX + col * (countBtnW + countGapX);
-      const y = gridStartY + row * (countBtnH + countGapY);
+    const row1TotalW = row1.length * countBtnW + (row1.length - 1) * countGapX;
+    const row1StartX = width / 2 - row1TotalW / 2 + countBtnW / 2;
 
+    const row2TotalW = row2.length * countBtnW + (row2.length - 1) * countGapX;
+    const row2StartX = width / 2 - row2TotalW / 2 + countBtnW / 2;
+
+    const row1Y = height * 0.40;
+    const row2Y = row1Y + countBtnH + countGapY;
+
+    row1.forEach((count, index) => {
+      const x = row1StartX + index * (countBtnW + countGapX);
       const button = makeButton(
         this,
         x,
-        y,
+        row1Y,
         String(count),
         count === this.selectedPlayers ? '#20a060' : '#374151',
-        18,
+        17,
         countBtnW,
         countBtnH,
       );
@@ -1263,63 +1294,35 @@ class OfflineSetupScene extends Phaser.Scene {
       });
     });
 
-    // Avatar selector for offline play
-    let chosenAvatar: AnimalAvatarId = getSelectedAvatarId();
-    this.add
-      .text(width / 2, height * 0.55, 'CHOOSE YOUR AVATAR', {
-        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        fontSize: '13px',
-        color: '#f2cf66',
-        fontStyle: 'bold',
-      })
-      .setOrigin(0.5);
+    row2.forEach((count, index) => {
+      const x = row2StartX + index * (countBtnW + countGapX);
+      const button = makeButton(
+        this,
+        x,
+        row2Y,
+        String(count),
+        count === this.selectedPlayers ? '#20a060' : '#374151',
+        17,
+        countBtnW,
+        countBtnH,
+      );
 
-    const avatarBtns: Phaser.GameObjects.Container[] = [];
-    const avW = 56;
-    const avGap = 8;
-    const avStartX = width / 2 - (5 * avW + 4 * avGap) / 2 + avW / 2;
-    const avY = height * 0.61;
+      button.setData('playerCount', count);
 
-    ANIMAL_AVATARS.forEach((av, idx) => {
-      const avX = avStartX + idx * (avW + avGap);
-      const avContainer = this.add.container(avX, avY);
-
-      const avBg = this.add.rectangle(0, 0, avW, 44, av.id === chosenAvatar ? 0x1e3a8a : 0x1e293b)
-        .setStrokeStyle(av.id === chosenAvatar ? 2.5 : 1, av.id === chosenAvatar ? av.borderColorHex : 0x475569);
-
-      const avIcon = this.textures.exists(`avatar_${av.id}`)
-        ? this.add.image(0, -6, `avatar_${av.id}`).setDisplaySize(20, 20)
-        : this.add.text(0, -6, av.emoji, { fontSize: '16px' }).setOrigin(0.5);
-
-      const avLabel = this.add.text(0, 11, av.name.split(' ')[1] || av.name, {
-        fontFamily: 'Arial',
-        fontSize: '9px',
-        color: av.id === chosenAvatar ? '#ffffff' : '#94a3b8',
-        fontStyle: 'bold',
-      }).setOrigin(0.5);
-
-      avContainer.add([avBg, avIcon, avLabel]);
-      avContainer.setSize(avW, 44);
-      avContainer.setInteractive(new Phaser.Geom.Rectangle(-avW / 2 - 6, -22 - 6, avW + 12, 44 + 12), Phaser.Geom.Rectangle.Contains);
-
-      avContainer.on('pointerdown', () => {
-        chosenAvatar = av.id;
-        setSelectedAvatarId(av.id);
-        PeerankiAudio.effect('select');
-        avatarBtns.forEach((btn, bIdx) => {
-          const isSel = ANIMAL_AVATARS[bIdx].id === chosenAvatar;
-          const bg = btn.list[0] as Phaser.GameObjects.Rectangle;
-          const lbl = btn.list[2] as Phaser.GameObjects.Text;
-          bg.setFillStyle(isSel ? 0x1e3a8a : 0x1e293b);
-          bg.setStrokeStyle(isSel ? 2.5 : 1, isSel ? ANIMAL_AVATARS[bIdx].borderColorHex : 0x475569);
-          lbl.setColor(isSel ? '#ffffff' : '#94a3b8');
+      button.on('pointerdown', () => {
+        this.selectedPlayers = count;
+        this.children.list.forEach((child) => {
+          if (child instanceof Phaser.GameObjects.Text && child.getData('playerCount')) {
+            const childCount = child.getData('playerCount');
+            child.setStyle({
+              backgroundColor: childCount === this.selectedPlayers ? '#20a060' : '#374151',
+            });
+          }
         });
       });
-
-      avatarBtns.push(avContainer);
     });
 
-    addMatchDurationPicker(this, width / 2, height * 0.70);
+    addMatchDurationPicker(this, width / 2, height * 0.58);
 
     const mainBtnWidth = Math.min(320, Math.floor(width * 0.86));
     const backBtnWidth = Math.min(220, Math.floor(width * 0.60));
@@ -1327,7 +1330,7 @@ class OfflineSetupScene extends Phaser.Scene {
     const startButton = makeButton(
       this,
       width / 2,
-      height * (isAndroid ? 0.81 : 0.82),
+      height * (isAndroid ? 0.74 : 0.75),
       'START GAME',
       '#20a060',
       19,
@@ -1340,7 +1343,7 @@ class OfflineSetupScene extends Phaser.Scene {
       setStoredPlayerName(playerName);
       offlineMode = true;
       offlineMaxPlayers = this.selectedPlayers;
-      offlinePlayers = createOfflinePlayers(playerName, offlineMaxPlayers, chosenAvatar);
+      offlinePlayers = createOfflinePlayers(playerName, offlineMaxPlayers);
       nameInput.remove();
       this.scene.start('GameScene', { offline: true });
     });
@@ -1348,7 +1351,7 @@ class OfflineSetupScene extends Phaser.Scene {
     const backButton = makeButton(
       this,
       width / 2,
-      height * (isAndroid ? 0.91 : 0.92),
+      height * (isAndroid ? 0.85 : 0.86),
       'BACK',
       '#252d37',
       15,
@@ -1581,28 +1584,64 @@ class PlayerCountScene extends Phaser.Scene {
     const choices = PLAYER_COUNTS;
     const choiceButtons: Phaser.GameObjects.Text[] = [];
 
-    const countCols = 4;
-    const countBtnW = 68;
-    const countBtnH = 42;
-    const countGapX = 12;
-    const countGapY = 10;
-    const totalGridW = countCols * countBtnW + (countCols - 1) * countGapX;
-    const gridStartX = width / 2 - totalGridW / 2 + countBtnW / 2;
-    const gridStartY = this.mode === 'random' ? 175 : 215;
+    const row1 = choices.slice(0, 5);
+    const row2 = choices.slice(5);
+    const countBtnW = 64;
+    const countBtnH = 40;
+    const countGapX = 8;
+    const countGapY = 8;
 
-    choices.forEach((count, index) => {
-      const col = index % countCols;
-      const row = Math.floor(index / countCols);
-      const x = gridStartX + col * (countBtnW + countGapX);
-      const y = gridStartY + row * (countBtnH + countGapY);
+    const row1TotalW = row1.length * countBtnW + (row1.length - 1) * countGapX;
+    const row1StartX = width / 2 - row1TotalW / 2 + countBtnW / 2;
 
+    const row2TotalW = row2.length * countBtnW + (row2.length - 1) * countGapX;
+    const row2StartX = width / 2 - row2TotalW / 2 + countBtnW / 2;
+
+    const row1Y = this.mode === 'random' ? 175 : 210;
+    const row2Y = row1Y + countBtnH + countGapY;
+
+    row1.forEach((count, index) => {
+      const x = row1StartX + index * (countBtnW + countGapX);
       const button = makeButton(
         this,
         x,
-        y,
+        row1Y,
         String(count),
         count === selectedCount ? '#2878ff' : '#2a3037',
-        18,
+        17,
+        countBtnW,
+        countBtnH,
+      );
+
+      choiceButtons.push(button);
+
+      button.on('pointerdown', () => {
+        selectedCount = count;
+        selectedText.setText(
+          `${selectedCount} PLAYERS`,
+        );
+
+        choiceButtons.forEach(
+          (choiceButton, choiceIndex) => {
+            choiceButton.setBackgroundColor(
+              choices[choiceIndex] === selectedCount
+                ? '#2878ff'
+                : '#2a3037',
+            );
+          },
+        );
+      });
+    });
+
+    row2.forEach((count, index) => {
+      const x = row2StartX + index * (countBtnW + countGapX);
+      const button = makeButton(
+        this,
+        x,
+        row2Y,
+        String(count),
+        count === selectedCount ? '#2878ff' : '#2a3037',
+        17,
         countBtnW,
         countBtnH,
       );
@@ -1803,12 +1842,13 @@ class JoinScene extends Phaser.Scene {
   private roomInput?: HTMLInputElement;
   private nameInput?: HTMLInputElement;
   private resizeHandler = () => {
+    const { width, height } = this.scale;
     if (this.roomInput) {
       positionHtmlInput(
         this,
         this.roomInput,
-        this.scale.width / 2,
-        205,
+        width / 2,
+        height * 0.30,
         300,
       );
     }
@@ -1817,8 +1857,8 @@ class JoinScene extends Phaser.Scene {
       positionHtmlInput(
         this,
         this.nameInput,
-        this.scale.width / 2,
-        325,
+        width / 2,
+        height * 0.48,
         300,
       );
     }
@@ -1831,19 +1871,19 @@ class JoinScene extends Phaser.Scene {
   create() {
     removePeerankiInputs();
 
-    const { width } = this.scale;
+    const { width, height } = this.scale;
 
     this.add
-      .text(width / 2, 75, 'JOIN PRIVATE GAME', {
+      .text(width / 2, height * 0.12, 'JOIN PRIVATE GAME', {
         fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        fontSize: '34px',
+        fontSize: '32px',
         color: '#ffffff',
         fontStyle: 'bold',
       })
       .setOrigin(0.5);
 
     this.add
-      .text(width / 2, 155, 'ROOM CODE', {
+      .text(width / 2, height * 0.23, 'ROOM CODE', {
         fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         fontSize: '14px',
         color: '#f2cf66',
@@ -1858,7 +1898,7 @@ class JoinScene extends Phaser.Scene {
     );
 
     this.add
-      .text(width / 2, 275, 'YOUR NAME', {
+      .text(width / 2, height * 0.41, 'YOUR NAME', {
         fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         fontSize: '14px',
         color: '#f2cf66',
@@ -1882,26 +1922,27 @@ class JoinScene extends Phaser.Scene {
       this.resizeHandler,
     );
 
+    const btnWidth = Math.min(320, Math.floor(width * 0.86));
     const joinButton = makeButton(
       this,
       width / 2,
-      425,
+      height * 0.65,
       'JOIN GAME',
       '#2878ff',
       19,
-      300,
-      52,
+      btnWidth,
+      50,
     );
 
     const backButton = makeButton(
       this,
       width / 2,
-      495,
+      height * 0.77,
       'BACK',
       '#252d37',
       15,
-      160,
-      40,
+      Math.min(220, Math.floor(width * 0.60)),
+      42,
     );
 
     joinButton.on('pointerdown', async () => {
@@ -2017,10 +2058,6 @@ class LobbyScene extends Phaser.Scene {
   private realtimeChannel: any;
   private refreshTimer?: Phaser.Time.TimerEvent;
   private starting = false;
-  private avatarButtons: Phaser.GameObjects.Container[] = [];
-  private selectedAvatar: AnimalAvatarId = getSelectedAvatarId();
-  private avatarSectionTitle?: Phaser.GameObjects.Text;
-  private avatarSectionSubtitle?: Phaser.GameObjects.Text;
 
   constructor() {
     super('LobbyScene');
@@ -2028,7 +2065,6 @@ class LobbyScene extends Phaser.Scene {
 
   create() {
     const { width, height } = this.scale;
-    this.selectedAvatar = getSelectedAvatarId();
 
     this.add
       .text(width / 2, 45, 'WAITING ROOM', {
@@ -2071,19 +2107,17 @@ class LobbyScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.playerText = this.add
-      .text(width / 2, 210, 'Loading players...', {
+      .text(width / 2, height * 0.40, 'Loading players...', {
         fontFamily: 'Arial',
-        fontSize: '17px',
+        fontSize: '18px',
         color: '#ffffff',
         align: 'center',
-        lineSpacing: 5,
+        lineSpacing: 8,
       })
       .setOrigin(0.5);
 
-    this.renderAvatarSelector();
-
     this.statusText = this.add
-      .text(width / 2, height * 0.72, '', {
+      .text(width / 2, height * 0.68, '', {
         fontFamily: 'Arial',
         fontSize: '16px',
         color: '#bbbbbb',
@@ -2096,7 +2130,7 @@ class LobbyScene extends Phaser.Scene {
       this.startButton = makeButton(
         this,
         width / 2,
-        height * 0.81,
+        height * 0.78,
         'START GAME',
         '#20a060',
         18,
@@ -2115,7 +2149,7 @@ class LobbyScene extends Phaser.Scene {
     this.leaveButton = makeButton(
       this,
       width / 2,
-      height * 0.91,
+      height * 0.88,
       'LEAVE ROOM',
       '#9b3030',
       15,
@@ -2149,128 +2183,6 @@ class LobbyScene extends Phaser.Scene {
         void this.refreshLobby();
       },
     });
-  }
-
-  private renderAvatarSelector() {
-    this.avatarButtons.forEach((btn) => btn.destroy());
-    this.avatarButtons = [];
-    this.avatarSectionTitle?.destroy();
-    this.avatarSectionSubtitle?.destroy();
-
-    const { width, height } = this.scale;
-    const titleY = height * 0.47;
-    const rowY = height * 0.58;
-
-    this.avatarSectionTitle = this.add.text(width / 2, titleY, '👑 CHOOSE YOUR ANIMAL AVATAR', {
-      fontFamily: 'Arial, sans-serif',
-      fontSize: '15px',
-      color: '#f2cf66',
-      fontStyle: 'bold',
-      align: 'center',
-    }).setOrigin(0.5);
-
-    this.avatarSectionSubtitle = this.add.text(width / 2, titleY + 20, 'Displayed on your battle card in combat', {
-      fontFamily: 'Arial, sans-serif',
-      fontSize: '12px',
-      color: '#94a3b8',
-      align: 'center',
-    }).setOrigin(0.5);
-
-    const btnW = 84;
-    const btnH = 92;
-    const gap = 12;
-    const totalW = 5 * btnW + 4 * gap;
-    const startX = width / 2 - totalW / 2 + btnW / 2;
-
-    ANIMAL_AVATARS.forEach((av, idx) => {
-      const x = startX + idx * (btnW + gap);
-      const isSelected = av.id === this.selectedAvatar;
-      const card = this.add.container(x, rowY);
-
-      // Card background
-      const bg = this.add.rectangle(0, 0, btnW, btnH, isSelected ? 0x1e293b : 0x131b26)
-        .setStrokeStyle(isSelected ? 3 : 1.2, isSelected ? av.borderColorHex : 0x334155);
-
-      // Circular portrait ring
-      const ring = this.add.circle(0, -18, 22, isSelected ? 0x0f172a : 0x1e293b, 0.95)
-        .setStrokeStyle(isSelected ? 2 : 1, isSelected ? av.borderColorHex : 0x475569);
-
-      // Avatar image or emoji
-      let visual: Phaser.GameObjects.GameObject;
-      if (this.textures.exists(`avatar_${av.id}`)) {
-        visual = this.add.image(0, -18, `avatar_${av.id}`).setDisplaySize(38, 38);
-      } else {
-        visual = this.add.text(0, -18, av.emoji, { fontSize: '26px' }).setOrigin(0.5);
-      }
-
-      // Name & Title text
-      const nameTxt = this.add.text(0, 16, av.name.split(' ')[1] || av.name, {
-        fontFamily: 'Arial',
-        fontSize: '11px',
-        fontStyle: 'bold',
-        color: isSelected ? '#ffffff' : '#cbd5e1',
-        align: 'center',
-      }).setOrigin(0.5);
-
-      const titleTxt = this.add.text(0, 31, av.title, {
-        fontFamily: 'Arial',
-        fontSize: '10px',
-        color: isSelected ? av.color : '#64748b',
-        align: 'center',
-      }).setOrigin(0.5);
-
-      card.add([bg, ring, visual, nameTxt, titleTxt]);
-
-      // Checkmark for active selection
-      if (isSelected) {
-        const checkBg = this.add.circle(btnW / 2 - 10, -btnH / 2 + 10, 8, av.borderColorHex);
-        const checkTxt = this.add.text(btnW / 2 - 10, -btnH / 2 + 10, '✓', {
-          fontFamily: 'Arial',
-          fontSize: '10px',
-          fontStyle: 'bold',
-          color: '#000000',
-        }).setOrigin(0.5);
-        card.add([checkBg, checkTxt]);
-      }
-
-      card.setSize(btnW, btnH);
-      card.setInteractive(new Phaser.Geom.Rectangle(-btnW / 2 - 6, -btnH / 2 - 6, btnW + 12, btnH + 12), Phaser.Geom.Rectangle.Contains);
-
-      card.on('pointerover', () => {
-        card.setScale(1.06);
-      });
-
-      card.on('pointerout', () => {
-        card.setScale(1.0);
-      });
-
-      card.on('pointerdown', () => {
-        this.selectAvatar(av.id);
-      });
-
-      this.avatarButtons.push(card);
-    });
-  }
-
-  private selectAvatar(avatarId: AnimalAvatarId) {
-    if (this.selectedAvatar === avatarId) return;
-    this.selectedAvatar = avatarId;
-    setSelectedAvatarId(avatarId);
-    PeerankiAudio.effect('select');
-
-    // Update local player object
-    const me = players.find((p) => p.sessionId === sessionId) || (myPlayerId > 0 ? players[myPlayerId - 1] : null);
-    if (me) {
-      me.avatar = avatarId;
-    }
-
-    // Sync to Supabase
-    if (roomCode) {
-      void updatePlayerAvatar(roomCode, sessionId, avatarId);
-    }
-
-    this.renderAvatarSelector();
-    this.updateLobbyText();
   }
 
   private applyRoomState(gameState: any) {
@@ -2335,7 +2247,6 @@ class LobbyScene extends Phaser.Scene {
       `PLAYERS ${connected.length}/${maxPlayers}\n\n`;
 
     connected.forEach((player, index) => {
-      const avatarDef = getAvatarDef(player.avatar);
       const hostMark =
         player.sessionId === hostSessionId
           ? ' 👑'
@@ -2346,7 +2257,7 @@ class LobbyScene extends Phaser.Scene {
           : '';
 
       text +=
-        `${index + 1}. ${avatarDef.emoji} ${player.name} [${avatarDef.title}]` +
+        `${index + 1}. ${player.name}` +
         `${hostMark}${youMark}\n`;
     });
 

@@ -48,6 +48,9 @@ export class HUDComponent {
         <span class="pk-match-round-text">ROUND 1</span>
       </div>
       <div class="pk-topbar-actions">
+        <button type="button" class="pk-btn-icon pk-btn-fullscreen" aria-label="Toggle Fullscreen" title="Toggle Fullscreen">
+          ⛶
+        </button>
         <button type="button" class="pk-btn-icon pk-btn-help" aria-label="How to Play Guide" title="How to Play Guide">
           ❓
         </button>
@@ -63,8 +66,40 @@ export class HUDComponent {
     this.timerValEl = this.topbarEl.querySelector('.pk-timer-display')!;
     this.roundValEl = this.topbarEl.querySelector('.pk-match-round-text')!;
     this.audioBtnEl = this.topbarEl.querySelector('.pk-audio-btn')!;
+    const fullscreenBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-btn-fullscreen');
     const helpBtn = this.topbarEl.querySelector('.pk-btn-help');
     const leaveBtn = this.topbarEl.querySelector('.pk-btn-leave')!;
+
+    if (fullscreenBtn) {
+      const updateFsIcon = () => {
+        const isFs = Boolean(document.fullscreenElement || (document as any).webkitFullscreenElement);
+        fullscreenBtn.textContent = isFs ? '✕' : '⛶';
+        fullscreenBtn.title = isFs ? 'Exit Fullscreen' : 'Enter Fullscreen';
+      };
+
+      fullscreenBtn.addEventListener('click', () => {
+        try {
+          if (!document.fullscreenElement && !(document as any).webkitFullscreenElement) {
+            if (document.documentElement.requestFullscreen) {
+              void document.documentElement.requestFullscreen().catch(() => undefined);
+            } else if ((document.documentElement as any).webkitRequestFullscreen) {
+              (document.documentElement as any).webkitRequestFullscreen();
+            }
+          } else {
+            if (document.exitFullscreen) {
+              void document.exitFullscreen().catch(() => undefined);
+            } else if ((document as any).webkitExitFullscreen) {
+              (document as any).webkitExitFullscreen();
+            }
+          }
+        } catch {
+          // ignore
+        }
+      });
+
+      document.addEventListener('fullscreenchange', updateFsIcon);
+      document.addEventListener('webkitfullscreenchange', updateFsIcon);
+    }
 
     helpBtn?.addEventListener('click', () => {
       showHowToPlayModal();

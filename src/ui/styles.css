@@ -80,8 +80,10 @@
 }
 
 .pk-topbar-brand {
+  flex: 1;
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
 }
 
@@ -99,9 +101,11 @@
 }
 
 .pk-topbar-meta {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  gap: 14px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -121,8 +125,10 @@
 }
 
 .pk-topbar-actions {
+  flex: 1;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -261,17 +267,12 @@
   touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* Expanded hit area using transparent pseudo-element padding for touch targets */
-.pk-player-card::after {
-  content: '';
-  position: absolute;
-  inset: -8px;
-  border-radius: 16px;
-  background: transparent;
-  pointer-events: auto;
-  z-index: 5;
+/* Ensure all child elements inside cards pass pointer events cleanly to card container */
+.pk-player-card * {
+  pointer-events: none;
 }
 
 /* Shooter Highlight */
@@ -339,22 +340,26 @@
   margin-bottom: 4px;
   font-size: 11px;
   color: var(--pk-text-muted);
+  gap: 4px;
 }
 
 .pk-card-name {
-  font-size: 13px;
+  flex: 1;
+  font-size: 12px;
   font-weight: 700;
   color: var(--pk-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 110px;
+  text-align: left;
 }
 
 .pk-card-role-tag {
   font-size: 10px;
   font-weight: 700;
   color: var(--pk-accent-gold);
+  flex-shrink: 0;
+  text-align: right;
 }
 
 .pk-card-role-tag.shooter-badge {
@@ -447,14 +452,18 @@
   padding: 10px 16px;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
   box-sizing: border-box;
+  width: 100%;
 }
 
 .pk-action-prompt-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
+  max-width: 680px;
   font-size: 13px;
 }
 
@@ -477,6 +486,7 @@
   justify-content: center;
   gap: 8px;
   width: 100%;
+  max-width: 680px;
 }
 
 .pk-weapon-cycle-btn {
@@ -502,6 +512,7 @@
 .pk-weapon-chip-list {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   overflow-x: auto;
   padding: 2px 4px;
@@ -702,9 +713,10 @@
 }
 
 /* ==============================================================
-   7. GAME OVER / VICTORY MODAL
+   7. GAME OVER / VICTORY MODAL & CONFETTI CELEBRATION
    ============================================================== */
 .pk-gameover-dialog {
+  position: relative;
   background: var(--pk-bg-surface);
   border: 1px solid var(--pk-border-strong);
   border-radius: 20px;
@@ -714,25 +726,135 @@
   text-align: center;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
   animation: pk-pop-in 0.25s ease-out;
+  overflow: hidden;
+}
+
+/* Confetti explosion particle container */
+.pk-confetti-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 1;
+}
+
+/* Individual confetti particle */
+.pk-confetti-piece {
+  position: absolute;
+  top: 24%;
+  left: 50%;
+  opacity: 0;
+  pointer-events: none;
+  backface-visibility: visible;
+  will-change: transform, opacity;
+  animation: pk-confetti-explode var(--duration, 2.5s) cubic-bezier(0.18, 0.89, 0.32, 1.1) infinite;
+  animation-delay: var(--delay, 0s);
+}
+
+.pk-confetti-rect {
+  width: 10px;
+  height: 15px;
+  border-radius: 2px;
+  background: var(--confetti-color, #f2cf66);
+}
+
+.pk-confetti-circle {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--confetti-color, #38e08d);
+}
+
+.pk-confetti-streamer {
+  width: 4px;
+  height: 24px;
+  border-radius: 2px;
+  background: var(--confetti-color, #3b82f6);
+}
+
+.pk-confetti-star {
+  width: 11px;
+  height: 11px;
+  background: var(--confetti-color, #f97316);
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+}
+
+@keyframes pk-confetti-explode {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(0);
+    opacity: 0;
+  }
+  5% {
+    opacity: 1;
+    transform: translate3d(calc(var(--burst-x) * 0.3), calc(var(--burst-y) * 0.3), 0) rotate(45deg) scale(0.85);
+  }
+  22% {
+    opacity: 1;
+    transform: translate3d(var(--burst-x), var(--burst-y), 0) rotate(var(--rot)) scale(1.15);
+  }
+  65% {
+    opacity: 0.95;
+  }
+  90% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translate3d(var(--fall-x), calc(var(--burst-y) + var(--fall-y)), 0) rotateX(720deg) rotateY(360deg) rotateZ(var(--rot)) scale(0.6);
+    opacity: 0;
+  }
+}
+
+.pk-gameover-content {
+  position: relative;
+  z-index: 2;
 }
 
 .pk-gameover-trophy {
-  font-size: 48px;
+  font-size: 52px;
   margin-bottom: 8px;
+  display: inline-block;
+  animation: pk-trophy-celebrate 1.4s cubic-bezier(0.34, 1.56, 0.64, 1) infinite alternate;
+  filter: drop-shadow(0 0 18px rgba(242, 207, 102, 0.65));
+}
+
+@keyframes pk-trophy-celebrate {
+  0% {
+    transform: translateY(0) scale(1) rotate(-3deg);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.12) rotate(0deg);
+  }
+  100% {
+    transform: translateY(-3px) scale(1.06) rotate(4deg);
+  }
 }
 
 .pk-gameover-title {
   font-size: 24px;
   font-weight: 800;
   color: var(--pk-accent-gold);
+  letter-spacing: 0.04em;
   margin-bottom: 4px;
+  text-shadow: 0 0 12px rgba(242, 207, 102, 0.35);
 }
 
 .pk-gameover-winner-name {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--pk-text-primary);
-  margin-bottom: 14px;
+  font-size: 20px;
+  font-weight: 800;
+  margin-bottom: 16px;
+  background: linear-gradient(90deg, #f2cf66 0%, #ffffff 45%, #38e08d 70%, #f2cf66 100%);
+  background-size: 250% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: pk-winner-shimmer 3s linear infinite;
+}
+
+@keyframes pk-winner-shimmer {
+  to {
+    background-position: 250% center;
+  }
 }
 
 .pk-gameover-stats-list {
@@ -837,20 +959,17 @@
 
 /* --- PORTRAIT ORIENTATION (Mobile phones held vertically) --- */
 #game-ui-root.pk-orientation-portrait .pk-board-grid {
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 165px));
+  justify-content: center;
+  align-content: center;
+  gap: 10px;
   max-width: 440px;
-}
-
-@media (min-width: 480px) and (orientation: portrait) {
-  #game-ui-root.pk-orientation-portrait .pk-board-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
 }
 
 #game-ui-root.pk-orientation-portrait .pk-player-card {
   min-height: 120px;
-  padding: 8px 6px;
+  padding: 8px 8px;
+  width: 100%;
 }
 
 #game-ui-root.pk-orientation-portrait .pk-tower-stage-wrapper {
@@ -874,8 +993,15 @@
 
 /* --- LANDSCAPE ORIENTATION (Mobile phones held horizontally or Desktop) --- */
 #game-ui-root.pk-orientation-landscape .pk-board-grid {
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  max-width: 900px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 160px));
+  justify-content: center;
+  align-content: center;
+  gap: 12px;
+  max-width: 920px;
+}
+
+#game-ui-root.pk-orientation-landscape .pk-player-card {
+  width: 100%;
 }
 
 /* Compact height landscape (Mobile landscape, e.g. < 480px height) */

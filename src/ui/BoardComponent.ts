@@ -134,11 +134,20 @@ export class BoardComponent {
           if ('button' in e && (e as MouseEvent).button !== 0) return;
 
           const now = Date.now();
-          if (now - this.lastShootTimestamp < 200) return;
+          if (now - this.lastShootTimestamp < 250) return;
           this.lastShootTimestamp = now;
 
           e.preventDefault();
           e.stopPropagation();
+
+          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+            try {
+              navigator.vibrate(25);
+            } catch {
+              // ignore
+            }
+          }
+
           this.callbacks.onShootPlayer(currentView.targetIndex);
         };
 
