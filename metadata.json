@@ -1,0 +1,8 @@
+{
+  "name": "Peeranki - Kerala Strategy Game",
+  "description": "Traditional Kerala strategic shooting game featuring towers, weapons, rock-paper-scissors duels, bot offline play, and multiplayer lobby.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
