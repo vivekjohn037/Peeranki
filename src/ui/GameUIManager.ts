@@ -24,6 +24,19 @@ export class GameUIManager {
   private resizeObserver: ResizeObserver | null = null;
   private boundResizeHandler: (() => void) | null = null;
 
+  // requestAnimationFrame batching for smooth rendering and latency mitigation
+  private rafId: number | null = null;
+  private pendingHUDState: HUDState | null = null;
+  private pendingBoardArgs: {
+    players: UIPlayer[];
+    currentShooterIndex: number;
+    localPlayerId: number;
+    isMyTurn: boolean;
+    pendingDoubleTargetIndex: number;
+  } | null = null;
+  private pendingDuelState: DuelState | null = null;
+  private pendingGameOverState: GameOverState | null = null;
+
   public mount(parentSelector = '#game', callbacks: UICallbacks): boolean {
     this.unmount();
 
@@ -91,9 +104,52 @@ export class GameUIManager {
     }
   }
 
-  public updateHUD(state: HUDState) {
-    if (this.hud) {
-      this.hud.update(state);
+  private scheduleRender() {
+    if (this.rafId !== null) return;
+    this.rafId = window.requestAnimationFrame(() => this.flushRender());
+  }
+
+  public flushRender() {
+    if (this.rafId !== null) {
+      window.cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+
+    if (this.pendingHUDState && this.hud) {
+      this.hud.update(this.pendingHUDState);
+      this.pendingHUDState = null;
+    }
+
+    if (this.pendingBoardArgs && this.board) {
+      const args = this.pendingBoardArgs;
+      this.pendingBoardArgs = null;
+      this.board.update(
+        args.players,
+        args.currentShooterIndex,
+        args.localPlayerId,
+        args.isMyTurn,
+        args.pendingDoubleTargetIndex,
+        this.currentOrientation,
+      );
+    }
+
+    if (this.pendingDuelState && this.duelModal) {
+      this.duelModal.update(this.pendingDuelState);
+      this.pendingDuelState = null;
+    }
+
+    if (this.pendingGameOverState && this.gameOverModal) {
+      this.gameOverModal.update(this.pendingGameOverState);
+      this.pendingGameOverState = null;
+    }
+  }
+
+  public updateHUD(state: HUDState, immediate = false) {
+    this.pendingHUDState = state;
+    if (immediate) {
+      this.flushRender();
+    } else {
+      this.scheduleRender();
     }
   }
 
@@ -103,32 +159,50 @@ export class GameUIManager {
     localPlayerId: number,
     isMyTurn: boolean,
     pendingDoubleTargetIndex: number,
+    immediate = false,
   ) {
-    if (this.board) {
-      this.board.update(
-        players,
-        currentShooterIndex,
-        localPlayerId,
-        isMyTurn,
-        pendingDoubleTargetIndex,
-        this.currentOrientation,
-      );
+    this.pendingBoardArgs = {
+      players,
+      currentShooterIndex,
+      localPlayerId,
+      isMyTurn,
+      pendingDoubleTargetIndex,
+    };
+    if (immediate) {
+      this.flushRender();
+    } else {
+      this.scheduleRender();
     }
   }
 
-  public updateDuel(state: DuelState) {
-    if (this.duelModal) {
-      this.duelModal.update(state);
+  public updateDuel(state: DuelState, immediate = false) {
+    this.pendingDuelState = state;
+    if (immediate) {
+      this.flushRender();
+    } else {
+      this.scheduleRender();
     }
   }
 
-  public updateGameOver(state: GameOverState) {
-    if (this.gameOverModal) {
-      this.gameOverModal.update(state);
+  public updateGameOver(state: GameOverState, immediate = false) {
+    this.pendingGameOverState = state;
+    if (immediate) {
+      this.flushRender();
+    } else {
+      this.scheduleRender();
     }
   }
 
   public unmount() {
+    if (this.rafId !== null) {
+      window.cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.pendingHUDState = null;
+    this.pendingBoardArgs = null;
+    this.pendingDuelState = null;
+    this.pendingGameOverState = null;
+
     if (this.boundResizeHandler) {
       window.removeEventListener('resize', this.boundResizeHandler);
       window.removeEventListener('orientationchange', this.boundResizeHandler);

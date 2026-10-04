@@ -263,6 +263,17 @@
   -webkit-user-select: none;
 }
 
+/* Expanded hit area using transparent pseudo-element padding for touch targets */
+.pk-player-card::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 16px;
+  background: transparent;
+  pointer-events: auto;
+  z-index: 5;
+}
+
 /* Shooter Highlight */
 .pk-player-card.pk-is-shooter {
   border-color: var(--pk-accent-blue);
@@ -788,6 +799,36 @@
 
 .pk-btn-secondary:active {
   transform: scale(0.96);
+}
+
+/* Touch target expansion via transparent padding (meets >=44px/48px standard with zero margin bloat) */
+.pk-btn-icon,
+.pk-btn-leave,
+.pk-weapon-cycle-btn,
+.pk-weapon-chip,
+.pk-rps-choice-btn,
+.pk-btn-primary,
+.pk-btn-secondary,
+.pk-htp-close-btn,
+.pk-htp-tab {
+  position: relative;
+}
+
+.pk-btn-icon::after,
+.pk-btn-leave::after,
+.pk-weapon-cycle-btn::after,
+.pk-weapon-chip::after,
+.pk-rps-choice-btn::after,
+.pk-btn-primary::after,
+.pk-btn-secondary::after,
+.pk-htp-close-btn::after,
+.pk-htp-tab::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+  background: transparent;
+  pointer-events: auto;
 }
 
 /* ==============================================================

@@ -712,105 +712,6 @@ function positionHtmlInput(
   };
 }
 
-export class PeerankiButton extends Phaser.GameObjects.Container {
-  private bgGraphics: Phaser.GameObjects.Graphics;
-  private labelText: Phaser.GameObjects.Text;
-  private currentBgColor: string;
-  private btnW: number;
-  private btnH: number;
-
-  constructor(
-    scene: Phaser.Scene,
-    x: number,
-    y: number,
-    label: string,
-    backgroundColor = '#2878ff',
-    fontSize = 17,
-    btnWidth = 300,
-    btnHeight = 50,
-  ) {
-    super(scene, x, y);
-    this.btnW = btnWidth;
-    this.btnH = btnHeight;
-    this.currentBgColor = backgroundColor;
-
-    this.bgGraphics = scene.add.graphics();
-    this.drawBackground();
-
-    this.labelText = scene.add
-      .text(0, 0, label, {
-        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        fontSize: `${fontSize}px`,
-        fontStyle: 'bold',
-        color: '#ffffff',
-        align: 'center',
-      })
-      .setOrigin(0.5, 0.5);
-
-    this.add([this.bgGraphics, this.labelText]);
-    this.setSize(btnWidth, btnHeight);
-    this.setInteractive(
-      new Phaser.Geom.Rectangle(-btnWidth / 2, -btnHeight / 2, btnWidth, btnHeight),
-      Phaser.Geom.Rectangle.Contains,
-    );
-
-    this.on('pointerover', () => {
-      scene.tweens.add({ targets: this, scale: 1.025, duration: 80, ease: 'Quad.Out' });
-    });
-    this.on('pointerout', () => {
-      scene.tweens.add({ targets: this, scale: 1, duration: 80, ease: 'Quad.Out' });
-    });
-    this.on('pointerdown', () => {
-      PeerankiAudio.effect('click');
-      scene.tweens.add({ targets: this, scale: 0.96, duration: 60, yoyo: true });
-    });
-
-    scene.add.existing(this);
-  }
-
-  private drawBackground() {
-    this.bgGraphics.clear();
-    const hex = Phaser.Display.Color.HexStringToColor(this.currentBgColor).color;
-    this.bgGraphics.fillStyle(hex, 0.96);
-    this.bgGraphics.fillRoundedRect(-this.btnW / 2, -this.btnH / 2, this.btnW, this.btnH, 10);
-    this.bgGraphics.lineStyle(1.5, 0xffffff, 0.22);
-    this.bgGraphics.strokeRoundedRect(-this.btnW / 2, -this.btnH / 2, this.btnW, this.btnH, 10);
-  }
-
-  public setText(text: string) {
-    this.labelText.setText(text);
-    return this;
-  }
-
-  public getText(): string {
-    return this.labelText.text;
-  }
-
-  public setStyle(style: { backgroundColor?: string; color?: string; fontSize?: string }) {
-    if (style.backgroundColor) {
-      this.currentBgColor = style.backgroundColor;
-      this.drawBackground();
-    }
-    if (style.color) {
-      this.labelText.setColor(style.color);
-    }
-    if (style.fontSize) {
-      this.labelText.setFontSize(style.fontSize);
-    }
-    return this;
-  }
-
-  public setBackgroundColor(color: string) {
-    this.currentBgColor = color;
-    this.drawBackground();
-    return this;
-  }
-
-  public setPadding(..._args: any[]) {
-    return this;
-  }
-}
-
 function makeButton(
   scene: Phaser.Scene,
   x: number,
@@ -820,8 +721,43 @@ function makeButton(
   fontSize = 17,
   btnWidth = 300,
   btnHeight = 50,
-): PeerankiButton {
-  return new PeerankiButton(scene, x, y, label, backgroundColor, fontSize, btnWidth, btnHeight);
+): Phaser.GameObjects.Text {
+  const padY = Math.max(0, Math.floor((btnHeight - fontSize * 1.25) / 2));
+  const button = scene.add
+    .text(x, y, label, {
+      fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: `${fontSize}px`,
+      fontStyle: 'bold',
+      color: '#ffffff',
+      backgroundColor,
+      align: 'center',
+      fixedWidth: btnWidth,
+      fixedHeight: btnHeight,
+      padding: {
+        x: 8,
+        y: padY,
+      },
+    })
+    .setOrigin(0.5, 0.5);
+
+  // Expand hit area with transparent padding ensuring minimum touch target standards (>= 48px)
+  const minTarget = 48;
+  const padHitX = Math.max(6, Math.ceil((minTarget - btnWidth) / 2));
+  const padHitY = Math.max(6, Math.ceil((minTarget - btnHeight) / 2));
+
+  button.setInteractive(
+    new Phaser.Geom.Rectangle(-padHitX, -padHitY, btnWidth + padHitX * 2, btnHeight + padHitY * 2),
+    Phaser.Geom.Rectangle.Contains,
+  );
+  if (button.input) {
+    button.input.cursor = 'pointer';
+  }
+
+  button.on('pointerdown', () => PeerankiAudio.effect('click'));
+  button.on('pointerover', () => scene.tweens.add({ targets: button, scale: 1.025, duration: 80, ease: 'Quad.Out' }));
+  button.on('pointerout', () => scene.tweens.add({ targets: button, scale: 1, duration: 80, ease: 'Quad.Out' }));
+  button.on('pointerdown', () => scene.tweens.add({ targets: button, scale: 0.96, duration: 60, yoyo: true }));
+  return button;
 }
 
 function addMatchDurationPicker(scene: Phaser.Scene, x: number, y: number) {
@@ -853,9 +789,9 @@ function addMatchDurationPicker(scene: Phaser.Scene, x: number, y: number) {
     button.on('pointerdown', () => {
       matchDurationMinutes = minutes;
       scene.children.list.forEach((child) => {
-        if ((child as any).getData?.('matchDuration') !== undefined) {
-          (child as any).setStyle?.({
-            backgroundColor: Number((child as any).getData('matchDuration')) === minutes ? '#20a060' : '#374151',
+        if (child instanceof Phaser.GameObjects.Text && child.getData('matchDuration') !== undefined) {
+          child.setStyle({
+            backgroundColor: Number(child.getData('matchDuration')) === minutes ? '#20a060' : '#374151',
           });
         }
       });
@@ -1317,9 +1253,9 @@ class OfflineSetupScene extends Phaser.Scene {
       button.on('pointerdown', () => {
         this.selectedPlayers = count;
         this.children.list.forEach((child) => {
-          if ((child as any).getData?.('playerCount')) {
-            const childCount = (child as any).getData('playerCount');
-            (child as any).setStyle?.({
+          if (child instanceof Phaser.GameObjects.Text && child.getData('playerCount')) {
+            const childCount = child.getData('playerCount');
+            child.setStyle({
               backgroundColor: childCount === this.selectedPlayers ? '#20a060' : '#374151',
             });
           }
@@ -1364,7 +1300,7 @@ class OfflineSetupScene extends Phaser.Scene {
 
       avContainer.add([avBg, avIcon, avLabel]);
       avContainer.setSize(avW, 44);
-      avContainer.setInteractive(new Phaser.Geom.Rectangle(-avW / 2, -22, avW, 44), Phaser.Geom.Rectangle.Contains);
+      avContainer.setInteractive(new Phaser.Geom.Rectangle(-avW / 2 - 6, -22 - 6, avW + 12, 44 + 12), Phaser.Geom.Rectangle.Contains);
 
       avContainer.on('pointerdown', () => {
         chosenAvatar = av.id;
@@ -1643,7 +1579,7 @@ class PlayerCountScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     const choices = PLAYER_COUNTS;
-    const choiceButtons: PeerankiButton[] = [];
+    const choiceButtons: Phaser.GameObjects.Text[] = [];
 
     const countCols = 4;
     const countBtnW = 68;
@@ -2076,8 +2012,8 @@ class JoinScene extends Phaser.Scene {
 class LobbyScene extends Phaser.Scene {
   private playerText?: Phaser.GameObjects.Text;
   private statusText?: Phaser.GameObjects.Text;
-  private startButton?: PeerankiButton;
-  private leaveButton?: PeerankiButton;
+  private startButton?: Phaser.GameObjects.Text;
+  private leaveButton?: Phaser.GameObjects.Text;
   private realtimeChannel: any;
   private refreshTimer?: Phaser.Time.TimerEvent;
   private starting = false;
@@ -2207,7 +2143,7 @@ class LobbyScene extends Phaser.Scene {
     void this.refreshLobby();
 
     this.refreshTimer = this.time.addEvent({
-      delay: 1500,
+      delay: 3500,
       loop: true,
       callback: () => {
         void this.refreshLobby();
@@ -2298,7 +2234,7 @@ class LobbyScene extends Phaser.Scene {
       }
 
       card.setSize(btnW, btnH);
-      card.setInteractive(new Phaser.Geom.Rectangle(-btnW / 2, -btnH / 2, btnW, btnH), Phaser.Geom.Rectangle.Contains);
+      card.setInteractive(new Phaser.Geom.Rectangle(-btnW / 2 - 6, -btnH / 2 - 6, btnW + 12, btnH + 12), Phaser.Geom.Rectangle.Contains);
 
       card.on('pointerover', () => {
         card.setScale(1.06);
@@ -2579,6 +2515,8 @@ private nextStartIndex = -1;
   private duelUi: Phaser.GameObjects.GameObject[] = [];
   private duelPrompt?: Phaser.GameObjects.Text;
   private duelBotTimer?: Phaser.Time.TimerEvent;
+  private uiSyncScheduled = false;
+  private uiSyncRafId: number | null = null;
 
   constructor() {
     super('GameScene');
@@ -2626,7 +2564,7 @@ private nextStartIndex = -1;
       onShootPlayer: (targetIndex: number) => {
         PeerankiAudio.effect('select');
         this.shootPlayer(targetIndex);
-        this.syncUI();
+        this.scheduleUiSync();
       },
       onSelectWeapon: (weapon: WeaponType) => {
         const localIndex = offlineMode ? 0 : myPlayerId - 1;
@@ -2635,16 +2573,16 @@ private nextStartIndex = -1;
           this.selectedWeapon = weapon;
           this.pendingDoubleTarget = -1;
           this.refreshWeaponPicker();
-          this.syncUI();
+          this.scheduleUiSync();
         }
       },
       onCycleWeapon: (direction: number) => {
         this.cycleWeapon(direction);
-        this.syncUI();
+        this.scheduleUiSync();
       },
       onSubmitDuelChoice: (choice: RpsChoice) => {
         this.submitDuelChoice(choice);
-        this.syncUI();
+        this.scheduleUiSync();
       },
       onLeaveGame: async () => {
         this.uiManager.unmount();
@@ -2665,7 +2603,7 @@ private nextStartIndex = -1;
       },
       onToggleAudio: () => {
         const isMuted = PeerankiAudio.toggleMute();
-        this.syncUI();
+        this.scheduleUiSync();
         return isMuted;
       },
     });
@@ -2836,6 +2774,33 @@ if (offlineMode) {
   void this.initializeGame();
   this.syncUI();
 }
+  }
+
+  private scheduleUiSync() {
+    if (this.uiSyncScheduled) return;
+    this.uiSyncScheduled = true;
+    this.uiSyncRafId = window.requestAnimationFrame(() => {
+      this.uiSyncScheduled = false;
+      this.uiSyncRafId = null;
+      this.syncUI();
+    });
+  }
+
+  update(_time: number, _delta: number) {
+    if (this.gameFinished) return;
+
+    // Smooth frame-based action clock progression and perceived latency mitigation
+    if (this.roundPhase === 'shooting' && shootingDeadlineAt) {
+      const deadline = Date.parse(shootingDeadlineAt);
+      if (Number.isFinite(deadline)) {
+        const remainingMs = Math.max(0, deadline - Date.now());
+        const seconds = Math.ceil(remainingMs / 1000);
+        if (seconds !== this.lastActionSeconds) {
+          this.lastActionSeconds = seconds;
+          this.scheduleUiSync();
+        }
+      }
+    }
   }
 
   private syncUI() {
@@ -3081,10 +3046,10 @@ if (offlineMode) {
       container.setSize(cardWidth, 160);
       container.setInteractive(
         new Phaser.Geom.Rectangle(
-          -cardWidth / 2,
-          -78,
-          cardWidth,
-          156,
+          -cardWidth / 2 - 8,
+          -78 - 8,
+          cardWidth + 16,
+          156 + 16,
         ),
         Phaser.Geom.Rectangle.Contains,
       );
@@ -3318,7 +3283,12 @@ if (offlineMode) {
       this.refreshWeaponPicker();
 
       if (this.initialized) {
-        this.renderPlayers();
+        if (this.playerObjects.length !== maxPlayers) {
+          this.renderPlayers();
+        } else {
+          this.markShooter();
+        }
+        this.syncUI();
       }
     }
 
@@ -3804,13 +3774,6 @@ this.startIndex = forcedStartIsAlive
           }
         } else {
           PeerankiAudio.effect('count_tick');
-          if (!offlineMode) {
-            void syncGameState(
-              countedIndex,
-              this.countNumber,
-              'counting',
-            );
-          }
         }
 
         this.markShooter();
@@ -4228,6 +4191,9 @@ private shootPlayer(index: number) {
   }
 
   if (!offlineMode && !amHost()) {
+    this.statusText?.setText(`Firing at ${target.name}...`);
+    PeerankiAudio.effect(this.selectedWeapon === 'peeranki' ? 'cannon' : this.selectedWeapon === 'hook' ? 'hook' : 'shoot');
+    this.scheduleUiSync();
     void this.requestHostAction([index]);
     return;
   }
@@ -4872,6 +4838,12 @@ void this.recordShot();
     this.duelBotTimer = undefined;
     this.clearDuelControls();
 
+    if (this.uiSyncRafId !== null) {
+      window.cancelAnimationFrame(this.uiSyncRafId);
+      this.uiSyncRafId = null;
+    }
+    this.uiSyncScheduled = false;
+
     this.nextRoundTimer?.remove(false);
     this.nextRoundTimer = undefined;
 
@@ -4888,31 +4860,10 @@ void this.recordShot();
   }
 }
 
-function getOptimalGameDimensions() {
-  const container = document.getElementById('game') || document.body;
-  const winW = container.clientWidth || window.innerWidth || 900;
-  const winH = container.clientHeight || window.innerHeight || 700;
-  const aspect = winW / winH;
-
-  if (aspect >= 1.05) {
-    // Landscape (Desktop, tablet landscape, or Android phone landscape)
-    const baseH = 700;
-    const baseW = Math.round(baseH * aspect);
-    return { width: Math.max(880, Math.min(1480, baseW)), height: baseH };
-  } else {
-    // Portrait (Android phone portrait / compact mobile screens)
-    const baseW = 540;
-    const baseH = Math.round(baseW / aspect);
-    return { width: baseW, height: Math.max(760, Math.min(1200, baseH)) };
-  }
-}
-
-const initialDims = getOptimalGameDimensions();
-
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
-  width: initialDims.width,
-  height: initialDims.height,
+  width: 900,
+  height: 700,
   backgroundColor: '#101418',
   parent: 'game',
 
@@ -4935,8 +4886,6 @@ const config: Phaser.Types.Core.GameConfig = {
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
-    width: initialDims.width,
-    height: initialDims.height,
   },
 };
 
@@ -4947,15 +4896,4 @@ window.peerankiDesktop?.onFullscreenChange((fullscreen) => {
 });
 void window.peerankiDesktop?.setFullscreen(loadSettings().fullscreen);
 
-const game = new Phaser.Game(config);
-
-window.addEventListener('resize', () => {
-  const dims = getOptimalGameDimensions();
-  game.scale.resize(dims.width, dims.height);
-});
-window.addEventListener('orientationchange', () => {
-  window.setTimeout(() => {
-    const dims = getOptimalGameDimensions();
-    game.scale.resize(dims.width, dims.height);
-  }, 120);
-});
+new Phaser.Game(config);
