@@ -7,11 +7,11 @@
     "dev": "vite --host 0.0.0.0 --port 3000",
     "test": "node --test tests/game.test.mjs",
     "lint": "tsc --noEmit",
-  "build": "tsc && vite build",
-  "preview": "vite preview",
-  "desktop": "npm run build && electron .",
-  "dist:win": "npm run build && electron-builder --win"
-},
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "desktop": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win"
+  },
   "devDependencies": {
     "electron": "44.5.1",
     "electron-builder": "26.15.3",
@@ -24,30 +24,31 @@
     "@capacitor/cli": "^8.5.2",
     "@capacitor/core": "^8.5.2",
     "@supabase/supabase-js": "^2.117.2",
+    "@vercel/analytics": "^2.0.1",
     "phaser": "^4.2.1"
   },
   "main": "electron/main.cjs",
   "build": {
-  "appId": "com.peeranki.game",
-  "productName": "Peeranki",
-  "directories": {
-    "output": "release"
-  },
-  "files": [
-    "dist/**/*",
-    "electron/**/*",
-    "package.json"
-  ],
- "win": {
-  "target": "nsis",
-  "icon": "build/peeranki.ico"
-},
-"nsis": {
-  "oneClick": false,
-  "allowToChangeInstallationDirectory": true,
-  "createDesktopShortcut": true,
-  "createStartMenuShortcut": true,
-  "shortcutName": "Peeranki"
-}
+    "appId": "com.peeranki.game",
+    "productName": "Peeranki",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/peeranki.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Peeranki"
+    }
   }
 }

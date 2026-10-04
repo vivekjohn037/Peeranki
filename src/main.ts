@@ -1,3 +1,4 @@
+import { inject } from '@vercel/analytics';
 import Phaser from 'phaser';
 import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
@@ -27,6 +28,9 @@ import {
   cleanupStalePlayers,
   supabase,
 } from './supabase';
+
+// Initialize Vercel Web Analytics
+inject();
 
 interface Player {
   id: number;
