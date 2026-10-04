@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg-leopard" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4c1d95"/>
+      <stop offset="50%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#09090b"/>
+    </linearGradient>
+    <filter id="glow-leopard" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#c084fc" flood-opacity="0.65"/>
+    </filter>
+  </defs>
+
+  <!-- Circular Base -->
+  <circle cx="64" cy="64" r="60" fill="url(#bg-leopard)" stroke="#c084fc" stroke-width="3.5" filter="url(#glow-leopard)"/>
+  <circle cx="64" cy="64" r="54" fill="none" stroke="#e9d5ff" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.75"/>
+
+  <!-- Shadow Leopard / Panther Face -->
+  <g transform="translate(64, 64)">
+    <!-- Ears -->
+    <path d="M-26 -28 Q-36 -12 -20 -14 Z" fill="#2e1065" stroke="#09090b" stroke-width="2"/>
+    <path d="M26 -28 Q36 -12 20 -14 Z" fill="#2e1065" stroke="#09090b" stroke-width="2"/>
+    <path d="M-25 -25 Q-30 -16 -22 -17 Z" fill="#a855f7" opacity="0.8"/>
+    <path d="M25 -25 Q30 -16 22 -17 Z" fill="#a855f7" opacity="0.8"/>
+
+    <!-- Head Contour -->
+    <ellipse cx="0" cy="0" rx="27" ry="24" fill="#1e1b4b" stroke="#09090b" stroke-width="2"/>
+
+    <!-- Rosette Leopard Spots -->
+    <!-- Forehead spots -->
+    <circle cx="0" cy="-15" r="2.2" fill="#09090b"/>
+    <circle cx="-7" cy="-12" r="1.8" fill="#09090b"/>
+    <circle cx="7" cy="-12" r="1.8" fill="#09090b"/>
+    <circle cx="-14" cy="-8" r="2.2" fill="#09090b"/>
+    <circle cx="14" cy="-8" r="2.2" fill="#09090b"/>
+    <!-- Cheek rosettes -->
+    <path d="M-18 2 Q-22 0 -20 -4 Q-16 -3 -17 2 Z" fill="#09090b"/>
+    <path d="M18 2 Q22 0 20 -4 Q16 -3 17 2 Z" fill="#09090b"/>
+    <path d="M-20 10 Q-24 9 -22 6 Q-18 7 -19 10 Z" fill="#09090b"/>
+    <path d="M20 10 Q24 9 22 6 Q18 7 19 10 Z" fill="#09090b"/>
+
+    <!-- Snout Base -->
+    <ellipse cx="0" cy="10" rx="12" ry="9" fill="#312e81" stroke="#09090b" stroke-width="1.4"/>
+    <path d="M-4 5 L4 5 L0 9 Z" fill="#c084fc"/>
+    <line x1="0" y1="9" x2="0" y2="13" stroke="#09090b" stroke-width="1.5"/>
+    <path d="M-5 13 Q0 16 5 13" stroke="#09090b" stroke-width="1.5" fill="none"/>
+
+    <!-- Glowing Emerald Green Eyes -->
+    <ellipse cx="-10" cy="-2" rx="4.5" ry="3.2" fill="#10b981" stroke="#09090b" stroke-width="1.4"/>
+    <ellipse cx="10" cy="-2" rx="4.5" ry="3.2" fill="#10b981" stroke="#09090b" stroke-width="1.4"/>
+    <ellipse cx="-10" cy="-2" rx="1.6" ry="2.8" fill="#09090b"/>
+    <ellipse cx="10" cy="-2" rx="1.6" ry="2.8" fill="#09090b"/>
+    <circle cx="-11" cy="-3.2" r="1.2" fill="#ffffff"/>
+    <circle cx="9" cy="-3.2" r="1.2" fill="#ffffff"/>
+
+    <!-- Sleek Whiskers -->
+    <path d="M-7 11 L-18 9 M-7 13 L-19 14 M7 11 L18 9 M7 13 L19 14" stroke="#c084fc" stroke-width="1.2" stroke-linecap="round" opacity="0.8"/>
+  </g>
+</svg>

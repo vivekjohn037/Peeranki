@@ -1,4 +1,5 @@
 import type { HUDState, UICallbacks, WeaponType } from './types';
+import { showHowToPlayModal } from './HowToPlayModalComponent';
 
 const WEAPON_INFO: Record<WeaponType, { label: string; icon: string; desc: string }> = {
   gun: { label: 'Gun', icon: 'assets/weapons/gun.png', desc: 'Standard single shot' },
@@ -47,6 +48,9 @@ export class HUDComponent {
         <span class="pk-match-round-text">ROUND 1</span>
       </div>
       <div class="pk-topbar-actions">
+        <button type="button" class="pk-btn-icon pk-btn-help" aria-label="How to Play Guide" title="How to Play Guide">
+          ❓
+        </button>
         <button type="button" class="pk-btn-icon pk-audio-btn" aria-label="Mute Background Music" title="Mute Background Music">
           🔊
         </button>
@@ -59,7 +63,12 @@ export class HUDComponent {
     this.timerValEl = this.topbarEl.querySelector('.pk-timer-display')!;
     this.roundValEl = this.topbarEl.querySelector('.pk-match-round-text')!;
     this.audioBtnEl = this.topbarEl.querySelector('.pk-audio-btn')!;
+    const helpBtn = this.topbarEl.querySelector('.pk-btn-help');
     const leaveBtn = this.topbarEl.querySelector('.pk-btn-leave')!;
+
+    helpBtn?.addEventListener('click', () => {
+      showHowToPlayModal();
+    });
 
     // Initialize initial mute state from global storage
     try {

@@ -5,6 +5,16 @@ import './style.css';
 import { GameUIManager } from './ui/GameUIManager';
 import type { HUDState, UIPlayer, DuelState, GameOverState } from './ui/types';
 import { PeerankiAudio } from './audio/PeerankiAudio';
+import { showHowToPlayModal } from './ui/HowToPlayModalComponent';
+import {
+  type AnimalAvatarId,
+  ANIMAL_AVATARS,
+  AVATAR_IDS,
+  getSelectedAvatarId,
+  setSelectedAvatarId,
+  getAvatarDef,
+  getBotAvatarId,
+} from './game/avatars';
 
 import {
   saveGameState,
@@ -17,12 +27,14 @@ import {
   leaveRoomBestEffort,
   touchPlayer,
   cleanupStalePlayers,
+  updatePlayerAvatar,
   supabase,
 } from './supabase';
 
 interface Player {
   id: number;
   name: string;
+  avatar: AnimalAvatarId;
   stage: number;
   alive: boolean;
   sessionId: string;
@@ -225,12 +237,14 @@ const processedOnlineActionNonces = new Set<string>();
 function createOfflinePlayers(
   playerName: string,
   totalPlayers: number,
+  selectedAvatar: AnimalAvatarId = getSelectedAvatarId(),
 ): Player[] {
   const offlinePlayers: Player[] = [];
 
   offlinePlayers.push({
     id: 1,
     name: playerName || 'Player',
+    avatar: selectedAvatar,
     stage: 0,
     alive: true,
     sessionId: 'offline-human',
@@ -254,6 +268,7 @@ function createOfflinePlayers(
     offlinePlayers.push({
       id: i,
       name: `Bot ${i - 1}`,
+      avatar: getBotAvatarId(i - 1),
       stage: 0,
       alive: true,
       sessionId: `offline-bot-${i}`,
@@ -374,6 +389,7 @@ function createEmptyPlayer(id: number): Player {
   return {
     id,
     name: `Player ${id}`,
+    avatar: getBotAvatarId(id - 1),
     stage: 0,
     alive: false,
     sessionId: '',
@@ -429,6 +445,10 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
         rawPlayer.name.trim()
           ? rawPlayer.name
           : `Player ${id}`,
+      avatar:
+        typeof rawPlayer?.avatar === 'string' && (AVATAR_IDS as string[]).includes(rawPlayer.avatar)
+          ? (rawPlayer.avatar as AnimalAvatarId)
+          : getBotAvatarId(id - 1),
       stage:
         Number.isInteger(rawPlayer?.stage) &&
         rawPlayer.stage >= 0 &&
@@ -783,6 +803,9 @@ class MenuScene extends Phaser.Scene {
   preload() {
     this.load.image('peeranki-logo', 'assets/peeranki-logo.png');
     this.load.image('menu-background', 'assets/background/menu_background.png');
+    AVATAR_IDS.forEach((id) => {
+      this.load.svg(`avatar_${id}`, `assets/players/avatar_${id}.svg`, { width: 96, height: 96 });
+    });
   }
 
   create() {
@@ -922,6 +945,21 @@ class MenuScene extends Phaser.Scene {
       this.scene.start('SettingsScene');
     });
 
+    const howToPlayMenuBtn = makeButton(
+      this,
+      width / 2,
+      height * 0.87,
+      '📖 HOW TO PLAY',
+      '#1f2937',
+      16,
+      300,
+      48,
+    );
+    howToPlayMenuBtn.on('pointerdown', () => {
+      PeerankiAudio.effect('select');
+      showHowToPlayModal();
+    });
+
     const exitButton = makeButton(this, width - 64, 38, 'EXIT', '#9b3030', 13, 80, 36)
       .setDepth(1000);
 
@@ -937,6 +975,22 @@ class MenuScene extends Phaser.Scene {
       36,
     ).setDepth(1000);
 
+    const guideTopBtn = makeButton(
+      this,
+      width - 210,
+      38,
+      '❓ GUIDE',
+      '#1f2937',
+      12,
+      82,
+      36,
+    ).setDepth(1000);
+
+    guideTopBtn.on('pointerdown', () => {
+      PeerankiAudio.effect('select');
+      showHowToPlayModal();
+    });
+
     muteButton.on('pointerdown', () => {
       PeerankiAudio.toggleMute();
       this.cleanup();
@@ -946,6 +1000,7 @@ class MenuScene extends Phaser.Scene {
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
       exitButton.setPosition(gameSize.width - 64, 38);
       muteButton.setPosition(gameSize.width - 134, 38);
+      guideTopBtn.setPosition(gameSize.width - 210, 38);
     });
     exitButton.on('pointerdown', async () => {
       this.cleanup();
@@ -1010,8 +1065,18 @@ class SettingsScene extends Phaser.Scene {
       }).setOrigin(0.5, 0.5);
       const plus = makeButton(this, width / 2 + 90, y + 10, '+', '#374151', 22, 46, 44);
 
-      minus.on('pointerdown', () => { settings[key] = Math.max(0, settings[key] - 10); saveSettings(settings); redraw(); });
-      plus.on('pointerdown', () => { settings[key] = Math.min(100, settings[key] + 10); saveSettings(settings); redraw(); });
+      minus.on('pointerdown', () => {
+        settings[key] = Math.max(0, settings[key] - 10);
+        saveSettings(settings);
+        if (key === 'soundEffectsVolume') PeerankiAudio.effect('click');
+        redraw();
+      });
+      plus.on('pointerdown', () => {
+        settings[key] = Math.min(100, settings[key] + 10);
+        saveSettings(settings);
+        if (key === 'soundEffectsVolume') PeerankiAudio.effect('click');
+        redraw();
+      });
       void value;
     };
 
@@ -1048,8 +1113,8 @@ class SettingsScene extends Phaser.Scene {
       color: '#9ca3af',
     }).setOrigin(0.5);
 
-    const fullscreen = makeButton(this, width / 2, height * 0.60,
-      `FULLSCREEN: ${settings.fullscreen ? 'ON' : 'OFF'}`, '#374151', 15, 300, 46);
+    const fullscreen = makeButton(this, width / 2, height * 0.58,
+      `FULLSCREEN: ${settings.fullscreen ? 'ON' : 'OFF'}`, '#374151', 14, 300, 42);
     fullscreen.on('pointerdown', async () => {
       settings.fullscreen = !settings.fullscreen;
       saveSettings(settings);
@@ -1063,15 +1128,22 @@ class SettingsScene extends Phaser.Scene {
       redraw();
     });
 
-    const keyboard = makeButton(this, width / 2, height * 0.71,
-      `KEYBOARD CONTROLS: ${settings.keyboardControls ? 'ON' : 'OFF'}`, '#374151', 15, 300, 46);
+    const keyboard = makeButton(this, width / 2, height * 0.68,
+      `KEYBOARD CONTROLS: ${settings.keyboardControls ? 'ON' : 'OFF'}`, '#374151', 14, 300, 42);
     keyboard.on('pointerdown', () => {
       settings.keyboardControls = !settings.keyboardControls;
       saveSettings(settings);
       redraw();
     });
 
-    const back = makeButton(this, width / 2, height * 0.83, 'BACK', '#252d37', 15, 160, 42);
+    const guideBtn = makeButton(this, width / 2, height * 0.78,
+      '📖 HOW TO PLAY GUIDE', '#1e293b', 14, 300, 42);
+    guideBtn.on('pointerdown', () => {
+      PeerankiAudio.effect('select');
+      showHowToPlayModal();
+    });
+
+    const back = makeButton(this, width / 2, height * 0.88, 'BACK', '#252d37', 15, 160, 40);
     back.on('pointerdown', () => this.scene.start('MenuScene'));
   }
 }
@@ -1182,7 +1254,63 @@ class OfflineSetupScene extends Phaser.Scene {
       });
     });
 
-    addMatchDurationPicker(this, width / 2, height * 0.67);
+    // Avatar selector for offline play
+    let chosenAvatar: AnimalAvatarId = getSelectedAvatarId();
+    this.add
+      .text(width / 2, height * 0.55, 'CHOOSE YOUR AVATAR', {
+        fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: '13px',
+        color: '#f2cf66',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5);
+
+    const avatarBtns: Phaser.GameObjects.Container[] = [];
+    const avW = 56;
+    const avGap = 8;
+    const avStartX = width / 2 - (5 * avW + 4 * avGap) / 2 + avW / 2;
+    const avY = height * 0.61;
+
+    ANIMAL_AVATARS.forEach((av, idx) => {
+      const avX = avStartX + idx * (avW + avGap);
+      const avContainer = this.add.container(avX, avY);
+
+      const avBg = this.add.rectangle(0, 0, avW, 44, av.id === chosenAvatar ? 0x1e3a8a : 0x1e293b)
+        .setStrokeStyle(av.id === chosenAvatar ? 2.5 : 1, av.id === chosenAvatar ? av.borderColorHex : 0x475569);
+
+      const avIcon = this.textures.exists(`avatar_${av.id}`)
+        ? this.add.image(0, -6, `avatar_${av.id}`).setDisplaySize(20, 20)
+        : this.add.text(0, -6, av.emoji, { fontSize: '16px' }).setOrigin(0.5);
+
+      const avLabel = this.add.text(0, 11, av.name.split(' ')[1] || av.name, {
+        fontFamily: 'Arial',
+        fontSize: '9px',
+        color: av.id === chosenAvatar ? '#ffffff' : '#94a3b8',
+        fontStyle: 'bold',
+      }).setOrigin(0.5);
+
+      avContainer.add([avBg, avIcon, avLabel]);
+      avContainer.setSize(avW, 44);
+      avContainer.setInteractive(new Phaser.Geom.Rectangle(-avW / 2, -22, avW, 44), Phaser.Geom.Rectangle.Contains);
+
+      avContainer.on('pointerdown', () => {
+        chosenAvatar = av.id;
+        setSelectedAvatarId(av.id);
+        PeerankiAudio.effect('select');
+        avatarBtns.forEach((btn, bIdx) => {
+          const isSel = ANIMAL_AVATARS[bIdx].id === chosenAvatar;
+          const bg = btn.list[0] as Phaser.GameObjects.Rectangle;
+          const lbl = btn.list[2] as Phaser.GameObjects.Text;
+          bg.setFillStyle(isSel ? 0x1e3a8a : 0x1e293b);
+          bg.setStrokeStyle(isSel ? 2.5 : 1, isSel ? ANIMAL_AVATARS[bIdx].borderColorHex : 0x475569);
+          lbl.setColor(isSel ? '#ffffff' : '#94a3b8');
+        });
+      });
+
+      avatarBtns.push(avContainer);
+    });
+
+    addMatchDurationPicker(this, width / 2, height * 0.70);
 
     const startButton = makeButton(
       this,
@@ -1200,7 +1328,7 @@ class OfflineSetupScene extends Phaser.Scene {
       setStoredPlayerName(playerName);
       offlineMode = true;
       offlineMaxPlayers = this.selectedPlayers;
-      offlinePlayers = createOfflinePlayers(playerName, offlineMaxPlayers);
+      offlinePlayers = createOfflinePlayers(playerName, offlineMaxPlayers, chosenAvatar);
       nameInput.remove();
       this.scene.start('GameScene', { offline: true });
     });
@@ -1877,6 +2005,10 @@ class LobbyScene extends Phaser.Scene {
   private realtimeChannel: any;
   private refreshTimer?: Phaser.Time.TimerEvent;
   private starting = false;
+  private avatarButtons: Phaser.GameObjects.Container[] = [];
+  private selectedAvatar: AnimalAvatarId = getSelectedAvatarId();
+  private avatarSectionTitle?: Phaser.GameObjects.Text;
+  private avatarSectionSubtitle?: Phaser.GameObjects.Text;
 
   constructor() {
     super('LobbyScene');
@@ -1884,11 +2016,12 @@ class LobbyScene extends Phaser.Scene {
 
   create() {
     const { width, height } = this.scale;
+    this.selectedAvatar = getSelectedAvatarId();
 
     this.add
-      .text(width / 2, 55, 'WAITING ROOM', {
+      .text(width / 2, 45, 'WAITING ROOM', {
         fontFamily: 'Arial',
-        fontSize: '38px',
+        fontSize: '34px',
         color: '#ffffff',
         fontStyle: 'bold',
       })
@@ -1897,11 +2030,11 @@ class LobbyScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        105,
+        85,
         `ROOM: ${roomCode}`,
         {
           fontFamily: 'Arial',
-          fontSize: '27px',
+          fontSize: '24px',
           color: '#4da3ff',
           fontStyle: 'bold',
         },
@@ -1911,7 +2044,7 @@ class LobbyScene extends Phaser.Scene {
     this.add
       .text(
         width / 2,
-        140,
+        115,
         `${maxPlayers} PLAYER MATCH${
           isPublicRoom
             ? ' • RANDOM'
@@ -1919,26 +2052,28 @@ class LobbyScene extends Phaser.Scene {
         }`,
         {
           fontFamily: 'Arial',
-          fontSize: '15px',
+          fontSize: '14px',
           color: '#bbbbbb',
         },
       )
       .setOrigin(0.5);
 
     this.playerText = this.add
-      .text(width / 2, 255, 'Loading players...', {
+      .text(width / 2, 210, 'Loading players...', {
         fontFamily: 'Arial',
-        fontSize: '21px',
+        fontSize: '17px',
         color: '#ffffff',
         align: 'center',
-        lineSpacing: 7,
+        lineSpacing: 5,
       })
       .setOrigin(0.5);
 
+    this.renderAvatarSelector();
+
     this.statusText = this.add
-      .text(width / 2, 470, '', {
+      .text(width / 2, height * 0.72, '', {
         fontFamily: 'Arial',
-        fontSize: '18px',
+        fontSize: '16px',
         color: '#bbbbbb',
       })
       .setOrigin(0.5);
@@ -1947,12 +2082,12 @@ class LobbyScene extends Phaser.Scene {
       this.startButton = makeButton(
         this,
         width / 2,
-        height * 0.79,
+        height * 0.81,
         'START GAME',
         '#20a060',
         19,
         300,
-        52,
+        50,
       );
 
       this.startButton.on(
@@ -1966,12 +2101,12 @@ class LobbyScene extends Phaser.Scene {
     this.leaveButton = makeButton(
       this,
       width / 2,
-      height * 0.90,
+      height * 0.91,
       'LEAVE ROOM',
       '#9b3030',
       15,
       180,
-      42,
+      40,
     );
 
     this.leaveButton.on(
@@ -2000,6 +2135,128 @@ class LobbyScene extends Phaser.Scene {
         void this.refreshLobby();
       },
     });
+  }
+
+  private renderAvatarSelector() {
+    this.avatarButtons.forEach((btn) => btn.destroy());
+    this.avatarButtons = [];
+    this.avatarSectionTitle?.destroy();
+    this.avatarSectionSubtitle?.destroy();
+
+    const { width, height } = this.scale;
+    const titleY = height * 0.47;
+    const rowY = height * 0.58;
+
+    this.avatarSectionTitle = this.add.text(width / 2, titleY, '👑 CHOOSE YOUR ANIMAL AVATAR', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '15px',
+      color: '#f2cf66',
+      fontStyle: 'bold',
+      align: 'center',
+    }).setOrigin(0.5);
+
+    this.avatarSectionSubtitle = this.add.text(width / 2, titleY + 20, 'Displayed on your battle card in combat', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '12px',
+      color: '#94a3b8',
+      align: 'center',
+    }).setOrigin(0.5);
+
+    const btnW = 84;
+    const btnH = 92;
+    const gap = 12;
+    const totalW = 5 * btnW + 4 * gap;
+    const startX = width / 2 - totalW / 2 + btnW / 2;
+
+    ANIMAL_AVATARS.forEach((av, idx) => {
+      const x = startX + idx * (btnW + gap);
+      const isSelected = av.id === this.selectedAvatar;
+      const card = this.add.container(x, rowY);
+
+      // Card background
+      const bg = this.add.rectangle(0, 0, btnW, btnH, isSelected ? 0x1e293b : 0x131b26)
+        .setStrokeStyle(isSelected ? 3 : 1.2, isSelected ? av.borderColorHex : 0x334155);
+
+      // Circular portrait ring
+      const ring = this.add.circle(0, -18, 22, isSelected ? 0x0f172a : 0x1e293b, 0.95)
+        .setStrokeStyle(isSelected ? 2 : 1, isSelected ? av.borderColorHex : 0x475569);
+
+      // Avatar image or emoji
+      let visual: Phaser.GameObjects.GameObject;
+      if (this.textures.exists(`avatar_${av.id}`)) {
+        visual = this.add.image(0, -18, `avatar_${av.id}`).setDisplaySize(38, 38);
+      } else {
+        visual = this.add.text(0, -18, av.emoji, { fontSize: '26px' }).setOrigin(0.5);
+      }
+
+      // Name & Title text
+      const nameTxt = this.add.text(0, 16, av.name.split(' ')[1] || av.name, {
+        fontFamily: 'Arial',
+        fontSize: '11px',
+        fontStyle: 'bold',
+        color: isSelected ? '#ffffff' : '#cbd5e1',
+        align: 'center',
+      }).setOrigin(0.5);
+
+      const titleTxt = this.add.text(0, 31, av.title, {
+        fontFamily: 'Arial',
+        fontSize: '10px',
+        color: isSelected ? av.color : '#64748b',
+        align: 'center',
+      }).setOrigin(0.5);
+
+      card.add([bg, ring, visual, nameTxt, titleTxt]);
+
+      // Checkmark for active selection
+      if (isSelected) {
+        const checkBg = this.add.circle(btnW / 2 - 10, -btnH / 2 + 10, 8, av.borderColorHex);
+        const checkTxt = this.add.text(btnW / 2 - 10, -btnH / 2 + 10, '✓', {
+          fontFamily: 'Arial',
+          fontSize: '10px',
+          fontStyle: 'bold',
+          color: '#000000',
+        }).setOrigin(0.5);
+        card.add([checkBg, checkTxt]);
+      }
+
+      card.setSize(btnW, btnH);
+      card.setInteractive(new Phaser.Geom.Rectangle(-btnW / 2, -btnH / 2, btnW, btnH), Phaser.Geom.Rectangle.Contains);
+
+      card.on('pointerover', () => {
+        card.setScale(1.06);
+      });
+
+      card.on('pointerout', () => {
+        card.setScale(1.0);
+      });
+
+      card.on('pointerdown', () => {
+        this.selectAvatar(av.id);
+      });
+
+      this.avatarButtons.push(card);
+    });
+  }
+
+  private selectAvatar(avatarId: AnimalAvatarId) {
+    if (this.selectedAvatar === avatarId) return;
+    this.selectedAvatar = avatarId;
+    setSelectedAvatarId(avatarId);
+    PeerankiAudio.effect('select');
+
+    // Update local player object
+    const me = players.find((p) => p.sessionId === sessionId) || (myPlayerId > 0 ? players[myPlayerId - 1] : null);
+    if (me) {
+      me.avatar = avatarId;
+    }
+
+    // Sync to Supabase
+    if (roomCode) {
+      void updatePlayerAvatar(roomCode, sessionId, avatarId);
+    }
+
+    this.renderAvatarSelector();
+    this.updateLobbyText();
   }
 
   private applyRoomState(gameState: any) {
@@ -2064,6 +2321,7 @@ class LobbyScene extends Phaser.Scene {
       `PLAYERS ${connected.length}/${maxPlayers}\n\n`;
 
     connected.forEach((player, index) => {
+      const avatarDef = getAvatarDef(player.avatar);
       const hostMark =
         player.sessionId === hostSessionId
           ? ' 👑'
@@ -2074,7 +2332,7 @@ class LobbyScene extends Phaser.Scene {
           : '';
 
       text +=
-        `${index + 1}. ${player.name}` +
+        `${index + 1}. ${avatarDef.emoji} ${player.name} [${avatarDef.title}]` +
         `${hostMark}${youMark}\n`;
     });
 
@@ -2132,6 +2390,7 @@ class LobbyScene extends Phaser.Scene {
       (player) => ({
         id: player.id,
         name: player.name,
+        avatar: player.avatar || getSelectedAvatarId(),
         stage: 0,
         alive: true,
         session_id: player.sessionId,
@@ -2257,6 +2516,9 @@ private nextStartIndex = -1;
     this.load.image('tower_one', 'assets/towers/tower_one.png');
     this.load.image('tower_destroyed', 'assets/towers/tower_destroyed.png');
     WEAPON_ORDER.forEach((weapon) => this.load.image(`weapon-${weapon}`, `assets/weapons/${weapon === 'doublePeeranki' ? 'double_peeranki' : weapon}.png`));
+    AVATAR_IDS.forEach((id) => {
+      this.load.svg(`avatar_${id}`, `assets/players/avatar_${id}.svg`, { width: 96, height: 96 });
+    });
   }
 
   create() {
@@ -2537,6 +2799,7 @@ if (offlineMode) {
     const uiPlayers: UIPlayer[] = players.slice(0, maxPlayers).map((p) => ({
       id: p.id,
       name: p.name,
+      avatar: p.avatar,
       stage: p.stage,
       alive: p.alive,
       connected: p.connected,
@@ -2698,9 +2961,9 @@ if (offlineMode) {
       );
 
       const name = this.add
-        .text(0, -48, '', {
+        .text(12, -48, '', {
           fontFamily: 'Arial',
-          fontSize: '16px',
+          fontSize: '15px',
           color: '#ffffff',
           fontStyle: 'bold',
           align: 'center',
@@ -2725,6 +2988,7 @@ if (offlineMode) {
         })
         .setOrigin(0.5);
       const inventory = this.add.container(0, 55);
+      const avatarBadge = this.add.container(-cardWidth / 2 + 20, -48);
 
       container.add([
         background,
@@ -2733,6 +2997,7 @@ if (offlineMode) {
         stage,
         slot,
         inventory,
+        avatarBadge,
       ]);
 
       container.setSize(cardWidth, 160);
@@ -2789,10 +3054,26 @@ if (offlineMode) {
       container.list[4] as Phaser.GameObjects.Text;
     const inventory =
       container.list[5] as Phaser.GameObjects.Container;
+    const avatarBadge =
+      container.list[6] as Phaser.GameObjects.Container;
+
+    const avatarDef = getAvatarDef(player.avatar);
+    avatarBadge.removeAll(true);
+    if (player.connected) {
+      const ring = this.add.circle(0, 0, 14, 0x0f172a, 0.95)
+        .setStrokeStyle(2, avatarDef.borderColorHex, 0.95);
+      let visual: Phaser.GameObjects.GameObject;
+      if (this.textures.exists(`avatar_${avatarDef.id}`)) {
+        visual = this.add.image(0, 0, `avatar_${avatarDef.id}`).setDisplaySize(24, 24);
+      } else {
+        visual = this.add.text(0, 0, avatarDef.emoji, { fontSize: '15px' }).setOrigin(0.5);
+      }
+      avatarBadge.add([ring, visual]);
+    }
 
     name.setText(
       player.connected
-        ? player.name
+        ? `${avatarDef.emoji} ${player.name}`
         : `Player ${player.id}`,
     );
 
@@ -3137,6 +3418,7 @@ if (offlineMode) {
   }
   private beginDuel() {
     if (this.duelActive || this.gameFinished) return;
+    PeerankiAudio.effect('duel_start');
     this.duelActive = true;
     this.resolvingDuel = false;
     duelRound = 1;
@@ -3184,7 +3466,10 @@ if (offlineMode) {
       RPS_CHOICES.forEach((choice, index) => {
         const button = makeButton(this, buttonXs[index], buttonY, RPS_LABELS[choice], '#34485c', 18);
         button.setPadding(18, 14, 18, 14).setDepth(50);
-        button.on('pointerdown', () => this.submitDuelChoice(choice));
+        button.on('pointerdown', () => {
+          PeerankiAudio.effect('click');
+          this.submitDuelChoice(choice);
+        });
         this.duelUi.push(button);
       });
     }
@@ -3265,7 +3550,9 @@ if (offlineMode) {
     const firstChoice = first.duelChoice!;
     const secondChoice = second.duelChoice!;
     const beats: Record<RpsChoice, RpsChoice> = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
+    PeerankiAudio.effect('rps_clash');
     if (firstChoice === secondChoice) {
+      PeerankiAudio.effect('rps_tie');
       first.duelChoice = null;
       second.duelChoice = null;
       players.forEach((player) => { player.duelChoiceRequest = null; });
@@ -3279,6 +3566,7 @@ if (offlineMode) {
       return;
     }
 
+    PeerankiAudio.effect('rps_win');
     const winner = beats[firstChoice] === secondChoice ? first : second;
     const loser = winner.id === first.id ? second : first;
     loser.alive = false;
@@ -3401,7 +3689,7 @@ this.startIndex = forcedStartIsAlive
           this.roundPhase = 'shooting';
           shootingDeadlineAt = new Date(Date.now() + ACTION_LIMIT_MS).toISOString();
           this.startActionClock();
-          PeerankiAudio.effect('select');
+          PeerankiAudio.effect('shooter_selected');
           this.shooterText?.setText(
             `🎯 Shooter: ${players[countedIndex].name}`,
           );
@@ -3437,6 +3725,7 @@ this.startIndex = forcedStartIsAlive
             );
           }
         } else {
+          PeerankiAudio.effect('count_tick');
           if (!offlineMode) {
             void syncGameState(
               countedIndex,
@@ -3474,6 +3763,9 @@ this.startIndex = forcedStartIsAlive
     if (seconds !== this.lastActionSeconds) {
       this.lastActionSeconds = seconds;
       this.countText?.setText(`ACTION ${seconds}s • choose weapon + target(s)`);
+      if (seconds <= 5 && seconds > 0) {
+        PeerankiAudio.effect('timer_tick');
+      }
       this.syncUI();
     }
     if (remaining === 0 && (offlineMode || amHost())) this.endActionOnTimeout();
@@ -3546,7 +3838,15 @@ private botShoot(shooterIndex: number) {
     `${players[shooterIndex].name} is shooting ${selectedTarget.player.name} with ${WEAPON_NAMES[botChosenWeapon]}...`,
   );
 
-  PeerankiAudio.effect('shoot');
+  if (botChosenWeapon === 'peeranki') {
+    PeerankiAudio.effect('cannon');
+  } else if (botChosenWeapon === 'doublePeeranki') {
+    PeerankiAudio.effect('double_peeranki');
+  } else if (botChosenWeapon === 'hook') {
+    PeerankiAudio.effect('hook');
+  } else {
+    PeerankiAudio.effect('shoot');
+  }
 
   this.time.delayedCall(250, () => {
     if (this.currentShooter !== shooterIndex || this.roundPhase !== 'shooting') return;
@@ -3819,6 +4119,7 @@ private shootPlayer(index: number) {
       return;
     }
     this.pendingDoubleTarget = index;
+    PeerankiAudio.effect('select');
     this.statusText?.setText(`${target.name} is the first target. Choose a different second target.`);
     this.syncUI();
     return;
@@ -3861,26 +4162,35 @@ private applyWeaponEffect(index: number, weapon: WeaponType, attackerIndex: numb
   const target = players[index];
   if (!target || !target.alive) return;
   const attacker = players[attackerIndex];
-  PeerankiAudio.effect('shoot');
 
   if (weapon === 'hook') {
+    PeerankiAudio.effect('hook');
     if (target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound) {
       target.weapons = target.weapons.filter((item) => item !== 'shield');
-      PeerankiAudio.effect('hit');
+      PeerankiAudio.effect('hook_strip');
       this.statusText?.setText(`${target.name}'s Shield was destroyed permanently!`);
       const targetCard = this.playerObjects[index];
       if (targetCard) this.tweens.add({ targets: targetCard, angle: { from: -5, to: 5 }, alpha: { from: 0.45, to: 1 }, duration: 90, yoyo: true, repeat: 2, onComplete: () => targetCard.setAngle(0) });
     } else {
       this.statusText?.setText(`${target.name} has no Shield for Hook to destroy.`);
+      PeerankiAudio.effect('hit');
     }
     this.updatePlayerVisual(index);
     this.refreshWeaponPicker();
     return;
   }
 
+  if (weapon === 'doublePeeranki') {
+    PeerankiAudio.effect('double_peeranki');
+  } else if (weapon === 'peeranki') {
+    PeerankiAudio.effect('cannon');
+  } else {
+    PeerankiAudio.effect('shoot');
+  }
+
   const hasShield = target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound;
   if (hasShield && (weapon === 'gun' || weapon === 'peeranki')) {
-    PeerankiAudio.effect('hit');
+    PeerankiAudio.effect('shield_hit');
     if (weapon === 'peeranki') {
       target.shieldDisabledRound = matchRound;
       this.statusText?.setText(`${target.name}'s Shield was destroyed for this round.`);
@@ -3896,14 +4206,15 @@ private applyWeaponEffect(index: number, weapon: WeaponType, attackerIndex: numb
   if (weapon === 'peeranki') {
     target.stage = 3;
     target.alive = false;
-    PeerankiAudio.effect('elimination');
+    PeerankiAudio.effect('tower_destroyed');
   } else {
-    PeerankiAudio.effect('hit');
     target.stage += 1;
     if (target.stage >= 3) {
       target.stage = 3;
       target.alive = false;
-      PeerankiAudio.effect('elimination');
+      PeerankiAudio.effect('tower_destroyed');
+    } else {
+      PeerankiAudio.effect('tower_damage');
     }
   }
   if (!target.alive && attacker && attacker.id !== target.id &&
@@ -4039,6 +4350,7 @@ void this.recordShot();
     const current = Math.max(0, options.indexOf(this.selectedWeapon));
     this.selectedWeapon = options[(current + direction + options.length) % options.length] ?? 'gun';
     this.pendingDoubleTarget = -1;
+    PeerankiAudio.effect('select');
     this.refreshWeaponPicker();
     this.syncUI();
   }
@@ -4079,8 +4391,10 @@ void this.recordShot();
     if (upgrade) {
       winner.weapons = normalizeWeapons([...winner.weapons, upgrade]);
       message += ` Earned ${WEAPON_LABELS[upgrade]}.`;
+      PeerankiAudio.effect('weapon_upgrade');
     } else {
       message += ' No new weapon unlocked this round.';
+      PeerankiAudio.effect('round_win');
     }
     if (WEAPON_ORDER.every((weapon) => winner.weapons.includes(weapon))) winner.hasCollectedAllWeapons = true;
     lastRoundMessage = message;
@@ -4171,15 +4485,7 @@ void this.recordShot();
   this.stopActionClock();
   shootingDeadlineAt = '';
 
-  if (!this.victoryPlayed) {
-    this.victoryPlayed = true;
-    PeerankiAudio.effect('victory');
-  }
-
-  this.gameFinished = true;
-
   const connected = connectedPlayers();
-
   const topCount =
     weaponCount ??
     Math.max(
@@ -4192,6 +4498,17 @@ void this.recordShot();
   const winners = finalists.filter(
     (player) => player.weapons.length === topCount,
   );
+
+  if (!this.victoryPlayed) {
+    this.victoryPlayed = true;
+    const localId = offlineMode ? 1 : myPlayerId;
+    const localWon = winners.some((player) => player.id === localId);
+    if (localWon) {
+      PeerankiAudio.effect('victory');
+    } else {
+      PeerankiAudio.effect('defeat');
+    }
+  }
 
   const { width, height } = this.scale;
 

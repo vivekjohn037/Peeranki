@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg-elephant" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="50%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="gold-headdress" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a"/>
+      <stop offset="40%" stop-color="#eab308"/>
+      <stop offset="100%" stop-color="#ca8a04"/>
+    </linearGradient>
+    <filter id="glow-elephant" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#38bdf8" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- Circular Base -->
+  <circle cx="64" cy="64" r="60" fill="url(#bg-elephant)" stroke="#38bdf8" stroke-width="3.5" filter="url(#glow-elephant)"/>
+  <circle cx="64" cy="64" r="54" fill="none" stroke="#fef08a" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.75"/>
+
+  <!-- Elephant Head & Ears -->
+  <g transform="translate(64, 62)">
+    <!-- Ears -->
+    <path d="M-22 -14 C-44 -18 -48 10 -30 22 C-22 26 -16 18 -16 8 Z" fill="#64748b" stroke="#334155" stroke-width="2"/>
+    <path d="M22 -14 C44 -18 48 10 30 22 C22 26 16 18 16 8 Z" fill="#64748b" stroke="#334155" stroke-width="2"/>
+    <path d="M-24 -8 C-38 -10 -40 10 -26 18 Z" fill="#94a3b8" opacity="0.6"/>
+    <path d="M24 -8 C38 -10 40 10 26 18 Z" fill="#94a3b8" opacity="0.6"/>
+
+    <!-- Head Dome -->
+    <ellipse cx="0" cy="-6" rx="24" ry="22" fill="#475569" stroke="#1e293b" stroke-width="2"/>
+
+    <!-- Royal Nettipattam (Golden Headpiece) -->
+    <path d="M-18 -14 Q0 -26 18 -14 L12 6 Q0 0 -12 6 Z" fill="url(#gold-headdress)" stroke="#78350f" stroke-width="1.5"/>
+    <circle cx="0" cy="-12" r="3.5" fill="#ef4444" stroke="#78350f" stroke-width="1"/>
+    <circle cx="-9" cy="-8" r="2.2" fill="#10b981"/>
+    <circle cx="9" cy="-8" r="2.2" fill="#10b981"/>
+    <circle cx="0" cy="-2" r="2.5" fill="#f59e0b"/>
+
+    <!-- Eyes -->
+    <circle cx="-12" cy="0" r="3" fill="#0f172a"/>
+    <circle cx="12" cy="0" r="3" fill="#0f172a"/>
+    <circle cx="-11.5" cy="-0.8" r="1.2" fill="#ffffff"/>
+    <circle cx="12.5" cy="-0.8" r="1.2" fill="#ffffff"/>
+
+    <!-- Curved White Tusks -->
+    <path d="M-10 14 C-14 26 -24 30 -22 34 C-18 34 -8 24 -6 16 Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="1"/>
+    <path d="M10 14 C14 26 24 30 22 34 C18 34 8 24 6 16 Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="1"/>
+
+    <!-- Trunk -->
+    <path d="M-7 8 C-6 20 -4 30 -2 38 C-1 42 6 42 6 36 C5 30 3 20 7 8 Z" fill="#475569" stroke="#1e293b" stroke-width="1.8"/>
+    <!-- Trunk Wrinkles -->
+    <line x1="-3" y1="16" x2="3" y2="16" stroke="#334155" stroke-width="1.2"/>
+    <line x1="-2" y1="22" x2="3" y2="22" stroke="#334155" stroke-width="1.2"/>
+    <line x1="-2" y1="28" x2="2" y2="28" stroke="#334155" stroke-width="1.2"/>
+  </g>
+</svg>

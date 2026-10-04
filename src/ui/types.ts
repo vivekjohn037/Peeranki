@@ -4,6 +4,7 @@ export type RpsChoice = 'rock' | 'paper' | 'scissors';
 export interface UIPlayer {
   id: number;
   name: string;
+  avatar?: string;
   stage: number; // 0 = Big Tower, 1 = Two Small Towers, 2 = One Tower, 3 = Destroyed
   alive: boolean;
   connected: boolean;

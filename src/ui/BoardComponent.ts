@@ -1,4 +1,5 @@
 import type { UIPlayer, UICallbacks, OrientationMode } from './types';
+import { getAvatarDef } from '../game/avatars';
 
 const STAGE_NAMES = [
   'Big Tower',
@@ -16,6 +17,7 @@ const TOWER_IMAGES = [
 
 interface PlayerCardView {
   card: HTMLDivElement;
+  avatarImg: HTMLImageElement;
   nameSpan: HTMLSpanElement;
   roleSpan: HTMLSpanElement;
   towerImg: HTMLImageElement;
@@ -27,6 +29,7 @@ interface PlayerCardView {
   isTargetable: boolean;
   weaponsKey: string;
   stageIdx: number;
+  avatarId: string;
 }
 
 export class BoardComponent {
@@ -76,12 +79,22 @@ export class BoardComponent {
         const header = document.createElement('div');
         header.className = 'pk-card-header';
 
+        const avatarImg = document.createElement('img');
+        avatarImg.className = 'pk-card-avatar-img';
+        avatarImg.style.width = '24px';
+        avatarImg.style.height = '24px';
+        avatarImg.style.borderRadius = '50%';
+        avatarImg.style.marginRight = '6px';
+        avatarImg.style.verticalAlign = 'middle';
+        avatarImg.style.display = 'inline-block';
+
         const nameSpan = document.createElement('span');
         nameSpan.className = 'pk-card-name';
 
         const roleSpan = document.createElement('span');
         roleSpan.className = 'pk-card-role-tag';
 
+        header.appendChild(avatarImg);
         header.appendChild(nameSpan);
         header.appendChild(roleSpan);
 
@@ -139,6 +152,7 @@ export class BoardComponent {
 
         view = {
           card,
+          avatarImg,
           nameSpan,
           roleSpan,
           towerImg,
@@ -150,6 +164,7 @@ export class BoardComponent {
           isTargetable: false,
           weaponsKey: '',
           stageIdx,
+          avatarId: '',
         };
 
         this.cards.set(player.id, view);
@@ -172,8 +187,18 @@ export class BoardComponent {
       view.card.classList.toggle('pk-eliminated', isEliminated);
       view.card.classList.toggle('pk-disconnected', !player.connected);
 
-      // Name & Role tags
-      const nameText = player.connected ? player.name : `Slot ${player.id} (Empty)`;
+      // Avatar & Name tags
+      const avatarDef = getAvatarDef(player.avatar);
+      if (view.avatarId !== avatarDef.id) {
+        view.avatarId = avatarDef.id;
+        view.avatarImg.src = avatarDef.svgPath;
+        view.avatarImg.alt = avatarDef.name;
+        view.avatarImg.title = `${avatarDef.name} (${avatarDef.title})`;
+        view.avatarImg.style.border = `2px solid ${avatarDef.color}`;
+      }
+      view.avatarImg.style.display = player.connected ? 'inline-block' : 'none';
+
+      const nameText = player.connected ? `${avatarDef.emoji} ${player.name}` : `Slot ${player.id} (Empty)`;
       if (view.nameSpan.textContent !== nameText) {
         view.nameSpan.textContent = nameText;
       }

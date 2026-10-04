@@ -1,7 +1,6 @@
 // Peeranki Audio System
-// Supports background music playback from public/assets/audio/ (bg_music.mp3, bg_music_1.mp3, bg_music_2.mp3)
-// and SFX from public/assets/audio/ (click.mp3, select.mp3, shoot.mp3, hit.mp3, elimination.mp3, victory.mp3).
-// Handles autoplay unlock on user interaction and provides track switching.
+// High-fidelity audio engine with zero-latency Web Audio buffer playback,
+// real-time procedural synthesizers, and HTML5 audio fallbacks.
 
 const SETTINGS_KEY = 'peeranki-settings';
 const MUTE_KEY = 'peeranki_music_muted';
@@ -40,6 +39,32 @@ export const SOUNDTRACK_TRACKS: SoundtrackTrack[] = [
     ],
   },
 ];
+
+export type PeerankiAudioEffect =
+  | 'click'
+  | 'select'
+  | 'shoot'
+  | 'cannon'
+  | 'peeranki'
+  | 'double_peeranki'
+  | 'hit'
+  | 'shield_hit'
+  | 'hook'
+  | 'hook_strip'
+  | 'tower_damage'
+  | 'tower_destroyed'
+  | 'elimination'
+  | 'count_tick'
+  | 'shooter_selected'
+  | 'timer_tick'
+  | 'duel_start'
+  | 'rps_clash'
+  | 'rps_tie'
+  | 'rps_win'
+  | 'weapon_upgrade'
+  | 'round_win'
+  | 'victory'
+  | 'defeat';
 
 function getStoredMusicVolume(): number {
   try {
@@ -94,8 +119,9 @@ export class PeerankiAudioSystem {
   private unlocked = false;
   private onTrackChangeCallbacks = new Set<() => void>();
 
-  // SFX cache for instant response
-  private sfxPool: Map<string, HTMLAudioElement[]> = new Map();
+  // Decoded Web Audio buffers for instant playback
+  private audioBufferCache: Map<string, AudioBuffer> = new Map();
+  private pendingBufferFetches: Set<string> = new Set();
 
   constructor() {
     this.currentTrackId = getStoredTrack();
@@ -113,6 +139,8 @@ export class PeerankiAudioSystem {
       // Resume Web Audio Context if suspended
       if (this.context && this.context.state === 'suspended') {
         void this.context.resume().catch(() => undefined);
+      } else if (!this.context) {
+        this.getContext();
       }
 
       // If background music should be playing, start it now that user has interacted
@@ -134,28 +162,73 @@ export class PeerankiAudioSystem {
 
   private preloadSFX() {
     if (typeof window === 'undefined') return;
-    const sfxList: Array<{ name: string; src: string; fallback: string }> = [
-      { name: 'click', src: 'assets/audio/click.mp3', fallback: 'assets/audio/click.wav' },
-      { name: 'select', src: 'assets/audio/select.mp3', fallback: 'assets/audio/select.wav' },
-      { name: 'shoot', src: 'assets/audio/shoot.mp3', fallback: 'assets/audio/shoot.wav' },
-      { name: 'hit', src: 'assets/audio/hit.mp3', fallback: 'assets/audio/hit.wav' },
-      { name: 'elimination', src: 'assets/audio/elimination.mp3', fallback: 'assets/audio/elimination.wav' },
-      { name: 'victory', src: 'assets/audio/victory.mp3', fallback: 'assets/audio/victory.wav' },
+
+    const sfxNames: PeerankiAudioEffect[] = [
+      'click',
+      'select',
+      'shoot',
+      'cannon',
+      'double_peeranki',
+      'hit',
+      'shield_hit',
+      'hook',
+      'hook_strip',
+      'tower_damage',
+      'tower_destroyed',
+      'elimination',
+      'count_tick',
+      'shooter_selected',
+      'timer_tick',
+      'duel_start',
+      'rps_clash',
+      'rps_tie',
+      'rps_win',
+      'weapon_upgrade',
+      'round_win',
+      'victory',
+      'defeat',
     ];
 
-    sfxList.forEach(({ name, src, fallback }) => {
-      const audio1 = new Audio(src);
-      audio1.preload = 'auto';
-      audio1.onerror = () => {
-        audio1.src = fallback;
-      };
-      const audio2 = new Audio(src);
-      audio2.preload = 'auto';
-      audio2.onerror = () => {
-        audio2.src = fallback;
-      };
-      this.sfxPool.set(name, [audio1, audio2]);
+    sfxNames.forEach((name) => {
+      this.loadAudioBuffer(name);
     });
+  }
+
+  private async loadAudioBuffer(name: string): Promise<AudioBuffer | null> {
+    if (this.audioBufferCache.has(name)) {
+      return this.audioBufferCache.get(name)!;
+    }
+    if (this.pendingBufferFetches.has(name)) {
+      return null;
+    }
+
+    this.pendingBufferFetches.add(name);
+    try {
+      const candidates = [
+        `assets/audio/${name}.wav`,
+        `/assets/audio/${name}.wav`,
+        `assets/audio/${name}.mp3`,
+        `/assets/audio/${name}.mp3`,
+      ];
+
+      for (const url of candidates) {
+        try {
+          const res = await fetch(url);
+          if (res.ok) {
+            const arrayBuffer = await res.arrayBuffer();
+            const ctx = this.getContext();
+            const decoded = await ctx.decodeAudioData(arrayBuffer);
+            this.audioBufferCache.set(name, decoded);
+            return decoded;
+          }
+        } catch {
+          // try next url
+        }
+      }
+    } finally {
+      this.pendingBufferFetches.delete(name);
+    }
+    return null;
   }
 
   public onTrackChange(callback: () => void): () => void {
@@ -251,7 +324,9 @@ export class PeerankiAudioSystem {
 
   private getContext(): AudioContext {
     if (!this.context) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.context = new AudioCtx();
       this.musicGain = this.context.createGain();
       this.effectsGain = this.context.createGain();
@@ -311,7 +386,7 @@ export class PeerankiAudioSystem {
   public applySettings() {
     const isMuted = this.isMuted();
     const musicVol = isMuted ? 0 : getStoredMusicVolume();
-    const sfxVol = getStoredSfxVolume();
+    const sfxVol = isMuted ? 0 : getStoredSfxVolume();
 
     // 1. Update HTML5 Audio background volume
     if (this.audioElement) {
@@ -330,7 +405,7 @@ export class PeerankiAudioSystem {
     if (this.context) {
       const now = this.context.currentTime;
       this.musicGain?.gain.setTargetAtTime((musicVol / 100) * 0.16, now, 0.04);
-      this.effectsGain?.gain.setTargetAtTime((sfxVol / 100) * 0.24, now, 0.04);
+      this.effectsGain?.gain.setTargetAtTime((sfxVol / 100) * 0.42, now, 0.04);
     }
   }
 
@@ -400,7 +475,6 @@ export class PeerankiAudioSystem {
         })
         .catch((err) => {
           if (err.name === 'NotAllowedError') {
-            // Autoplay was blocked before user interaction; wait for gesture instead of synthesized beeps
             this.hasPendingAutoplay = true;
           } else if (err.name !== 'AbortError') {
             this.tryNextSource();
@@ -429,7 +503,7 @@ export class PeerankiAudioSystem {
     }
   }
 
-  // Graceful synthesized Kerala temple ambient melody fallback (used only if all audio files fail)
+  // Kerala temple ambient melody fallback
   private startSynthesizedMusic() {
     if (this.musicTimer !== undefined) return;
     const notes = [220, 261.63, 329.63, 392, 329.63, 261.63, 196, 246.94, 293.66, 369.99, 440, 369.99, 196, 246.94, 293.66, 392];
@@ -444,95 +518,349 @@ export class PeerankiAudioSystem {
     this.musicTimer = window.setInterval(playNext, 520);
   }
 
-  public effect(name: 'click' | 'select' | 'shoot' | 'hit' | 'elimination' | 'victory') {
+  /**
+   * Main sound effect trigger. Uses instant Web Audio buffer playback,
+   * with real-time procedural audio synthesis fallback.
+   */
+  public effect(effectName: PeerankiAudioEffect) {
+    if (this.isMuted()) return;
     const sfxVol = getStoredSfxVolume();
     if (sfxVol === 0) return;
 
-    if (this.context && this.context.state === 'suspended') {
-      void this.context.resume().catch(() => undefined);
+    const ctx = this.getContext();
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(() => undefined);
     }
 
-    // Trigger music start if autoplay was pending on this user interaction
     if (this.hasPendingAutoplay && !this.isMuted()) {
       this.hasPendingAutoplay = false;
       this.startMusic();
     }
 
-    // Try pool of preloaded audio elements
-    const pool = this.sfxPool.get(name);
-    let played = false;
-    if (pool && pool.length > 0) {
-      // Find an audio element that is either paused or ended
-      let sfx = pool.find((a) => a.paused || a.ended);
-      if (!sfx) {
-        sfx = pool[0];
-        sfx.currentTime = 0;
+    // Normalize alias names
+    const resolvedName = (effectName === 'peeranki' ? 'cannon' : effectName) as string;
+
+    // 1. Try playing from preloaded decoded AudioBuffer (zero-latency sample playback)
+    const cachedBuffer = this.audioBufferCache.get(resolvedName);
+    if (cachedBuffer && this.effectsGain) {
+      try {
+        const source = ctx.createBufferSource();
+        source.buffer = cachedBuffer;
+        source.connect(this.effectsGain);
+        source.start();
+        return;
+      } catch {
+        // Fall back to synthesizer if source failed
       }
-      sfx.volume = Math.max(0, Math.min(1, (sfxVol / 100) * 0.85));
-      const p = sfx.play();
-      if (p !== undefined) {
-        p.catch(() => {
-          this.playSynthesizedEffect(name);
-        });
-      }
-      played = true;
     }
 
-    if (!played) {
-      // Direct audio load
-      const sfx = new Audio(`assets/audio/${name}.mp3`);
-      sfx.volume = Math.max(0, Math.min(1, (sfxVol / 100) * 0.85));
-      const sfxPromise = sfx.play();
-      if (sfxPromise !== undefined) {
-        sfxPromise.catch(() => {
-          this.playSynthesizedEffect(name);
+    // 2. Play using pristine real-time procedural Web Audio synthesizer
+    this.playSynthesizedEffect(resolvedName);
+
+    // Also trigger asynchronous buffer loading if not cached yet
+    if (!this.audioBufferCache.has(resolvedName)) {
+      void this.loadAudioBuffer(resolvedName);
+    }
+  }
+
+  /**
+   * Procedural synthesizer fallback for each effect: studio grade envelopes,
+   * frequency sweeps, white noise filters, and multi-harmonic chords.
+   */
+  private playSynthesizedEffect(name: string) {
+    const ctx = this.getContext();
+    if (!ctx || !this.effectsGain) return;
+    const dest = this.effectsGain;
+
+    switch (name) {
+      case 'click': {
+        // Crisp tactile UI wooden tap
+        this.tone(820, 0.045, 0.7, dest, 'triangle');
+        this.noiseBurst(0.015, 0.35, dest, 1200);
+        break;
+      }
+
+      case 'select': {
+        // Bright dual-harmonic chime (D5 & A5)
+        this.tone(587.33, 0.14, 0.5, dest, 'sine');
+        window.setTimeout(() => this.tone(880.0, 0.16, 0.45, dest, 'sine'), 30);
+        break;
+      }
+
+      case 'shoot': {
+        // Pistol gunfire snap + rapid frequency sweep
+        this.frequencySweep(480, 75, 0.16, 0.8, dest, 'sawtooth');
+        this.noiseBurst(0.06, 0.65, dest, 2400);
+        break;
+      }
+
+      case 'cannon': {
+        // Peeranki heavy cannon blast: sub-bass rumble + punchy explosion
+        this.frequencySweep(210, 36, 0.55, 0.95, dest, 'triangle');
+        this.noiseBurst(0.45, 0.85, dest, 450);
+        break;
+      }
+
+      case 'double_peeranki': {
+        // Dual cannon volley
+        this.frequencySweep(230, 40, 0.45, 0.85, dest, 'triangle');
+        this.noiseBurst(0.35, 0.8, dest, 500);
+        window.setTimeout(() => {
+          this.frequencySweep(195, 34, 0.55, 0.95, dest, 'triangle');
+          this.noiseBurst(0.45, 0.9, dest, 420);
+        }, 120);
+        break;
+      }
+
+      case 'hit': {
+        // Solid body impact thud
+        this.frequencySweep(240, 60, 0.16, 0.8, dest, 'sine');
+        this.noiseBurst(0.04, 0.45, dest, 800);
+        break;
+      }
+
+      case 'shield_hit': {
+        // Resonant metallic forcefield ping
+        this.tone(1480, 0.28, 0.6, dest, 'sine');
+        this.tone(2240, 0.22, 0.45, dest, 'triangle');
+        this.tone(880, 0.35, 0.5, dest, 'sine');
+        this.noiseBurst(0.02, 0.3, dest, 3200);
+        break;
+      }
+
+      case 'hook': {
+        // Grappling hook whoosh through air
+        this.frequencySweep(320, 950, 0.24, 0.55, dest, 'sine');
+        this.noiseBurst(0.22, 0.4, dest, 1600);
+        break;
+      }
+
+      case 'hook_strip': {
+        // Metallic chain latch clank + shield rip
+        [0, 35, 75, 120].forEach((delay) => {
+          window.setTimeout(() => {
+            this.tone(1850 - delay * 3, 0.08, 0.45, dest, 'triangle');
+          }, delay);
         });
-      } else {
-        this.playSynthesizedEffect(name);
+        this.noiseBurst(0.25, 0.6, dest, 1800);
+        break;
+      }
+
+      case 'tower_damage': {
+        // Stone fracture & cracking debris
+        this.frequencySweep(180, 50, 0.25, 0.75, dest, 'sawtooth');
+        this.noiseBurst(0.18, 0.55, dest, 950);
+        break;
+      }
+
+      case 'tower_destroyed':
+      case 'elimination': {
+        // Heavy fortress collapse with tumbling stone rubble
+        this.frequencySweep(140, 30, 0.65, 0.95, dest, 'triangle');
+        this.noiseBurst(0.55, 0.9, dest, 380);
+        [100, 240, 380].forEach((delay) => {
+          window.setTimeout(() => this.noiseBurst(0.15, 0.4, dest, 550), delay);
+        });
+        break;
+      }
+
+      case 'count_tick': {
+        // Crisp rhythmic woodblock / chenda tap
+        this.tone(740, 0.045, 0.65, dest, 'sine');
+        this.tone(1480, 0.025, 0.3, dest, 'triangle');
+        break;
+      }
+
+      case 'shooter_selected': {
+        // Triumphant brass fanfare accent
+        const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
+        notes.forEach((f, idx) => {
+          window.setTimeout(() => {
+            this.tone(f, 0.18, 0.6, dest, 'sawtooth');
+          }, idx * 85);
+        });
+        break;
+      }
+
+      case 'timer_tick': {
+        // Urgent warning pulse
+        this.tone(960, 0.05, 0.6, dest, 'sine');
+        break;
+      }
+
+      case 'duel_start': {
+        // Dramatic showdown gong ring
+        this.tone(220, 0.7, 0.6, dest, 'sine');
+        this.tone(330, 0.5, 0.4, dest, 'triangle');
+        this.tone(440, 0.4, 0.35, dest, 'sine');
+        break;
+      }
+
+      case 'rps_clash': {
+        // Blade & stone clash
+        this.tone(1350, 0.22, 0.65, dest, 'triangle');
+        this.tone(2700, 0.15, 0.45, dest, 'sine');
+        this.noiseBurst(0.04, 0.4, dest, 2800);
+        break;
+      }
+
+      case 'rps_tie': {
+        // Neutral double ping
+        this.tone(440, 0.16, 0.5, dest, 'sine');
+        window.setTimeout(() => this.tone(440, 0.18, 0.5, dest, 'sine'), 120);
+        break;
+      }
+
+      case 'rps_win': {
+        // Victorious duel flourish
+        const arpeggio = [587.33, 739.99, 880.0];
+        arpeggio.forEach((f, idx) => {
+          window.setTimeout(() => this.tone(f, 0.18, 0.55, dest, 'sine'), idx * 80);
+        });
+        break;
+      }
+
+      case 'weapon_upgrade': {
+        // Shimmering magical harp arpeggio
+        const harp = [523.25, 659.25, 783.99, 987.77, 1046.5, 1318.51];
+        harp.forEach((f, idx) => {
+          window.setTimeout(() => this.tone(f, 0.22, 0.45, dest, 'sine'), idx * 75);
+        });
+        break;
+      }
+
+      case 'round_win': {
+        // Triumphant brass round victory
+        const fanfare = [440, 554.37, 659.25, 880];
+        fanfare.forEach((f, idx) => {
+          window.setTimeout(() => this.tone(f, 0.22, 0.6, dest, 'sawtooth'), idx * 110);
+        });
+        break;
+      }
+
+      case 'victory': {
+        // Grand multi-chord victory celebration
+        const chords = [
+          { time: 0, freqs: [523.25, 659.25, 783.99] },
+          { time: 250, freqs: [587.33, 739.99, 880.0] },
+          { time: 500, freqs: [659.25, 830.61, 987.77] },
+          { time: 800, freqs: [783.99, 987.77, 1046.5, 1318.51] },
+        ];
+        chords.forEach(({ time, freqs }) => {
+          window.setTimeout(() => {
+            freqs.forEach((f) => this.tone(f, 0.4, 0.45 / freqs.length, dest, 'sine'));
+          }, time);
+        });
+        break;
+      }
+
+      case 'defeat': {
+        // Sombre minor fall
+        const defeatNotes = [440, 415.3, 392, 329.63];
+        defeatNotes.forEach((f, idx) => {
+          window.setTimeout(() => this.tone(f, 0.28, 0.5, dest, 'sine'), idx * 220);
+        });
+        break;
+      }
+
+      default: {
+        this.tone(440, 0.1, 0.5, dest, 'sine');
       }
     }
   }
 
-  private playSynthesizedEffect(name: 'click' | 'select' | 'shoot' | 'hit' | 'elimination' | 'victory') {
-    const patterns: Record<typeof name, number[]> = {
-      click: [620],
-      select: [440, 660],
-      shoot: [180, 110],
-      hit: [520, 390],
-      elimination: [330, 220, 110],
-      victory: [523.25, 659.25, 783.99, 1046.5],
-    };
-    const durations: Record<typeof name, number> = {
-      click: 0.07,
-      select: 0.11,
-      shoot: 0.13,
-      hit: 0.14,
-      elimination: 0.2,
-      victory: 0.28,
-    };
-    patterns[name].forEach((frequency, index) => {
-      window.setTimeout(
-        () => this.tone(frequency, durations[name], 0.65, this.effectsGain, name === 'shoot' ? 'sawtooth' : 'sine'),
-        index * (name === 'victory' ? 120 : 75),
-      );
-    });
-  }
-
-  private tone(frequency: number, duration: number, volume: number, destination?: GainNode, type: OscillatorType = 'sine') {
+  private tone(
+    frequency: number,
+    duration: number,
+    volume: number,
+    destination?: GainNode,
+    type: OscillatorType = 'sine',
+  ) {
     const context = this.getContext();
-    if (!context || !destination || context.state !== 'running') return;
-    const oscillator = context.createOscillator();
-    const envelope = context.createGain();
-    const start = context.currentTime;
-    oscillator.type = type;
-    oscillator.frequency.setValueAtTime(frequency, start);
-    envelope.gain.setValueAtTime(0.0001, start);
-    envelope.gain.exponentialRampToValueAtTime(volume, start + 0.015);
-    envelope.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-    oscillator.connect(envelope);
-    envelope.connect(destination);
-    oscillator.start(start);
-    oscillator.stop(start + duration + 0.02);
+    const dest = destination || this.effectsGain;
+    if (!context || !dest || context.state !== 'running') return;
+    try {
+      const oscillator = context.createOscillator();
+      const envelope = context.createGain();
+      const start = context.currentTime;
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(frequency, start);
+      envelope.gain.setValueAtTime(0.0001, start);
+      envelope.gain.exponentialRampToValueAtTime(volume, start + 0.012);
+      envelope.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+      oscillator.connect(envelope);
+      envelope.connect(dest);
+      oscillator.start(start);
+      oscillator.stop(start + duration + 0.02);
+    } catch {
+      // ignore
+    }
+  }
+
+  private frequencySweep(
+    startFreq: number,
+    endFreq: number,
+    duration: number,
+    volume: number,
+    destination: GainNode,
+    type: OscillatorType = 'sine',
+  ) {
+    const context = this.getContext();
+    if (!context || context.state !== 'running') return;
+    try {
+      const osc = context.createOscillator();
+      const gain = context.createGain();
+      const start = context.currentTime;
+      osc.type = type;
+      osc.frequency.setValueAtTime(startFreq, start);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(10, endFreq), start + duration);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(volume, start + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+      osc.connect(gain);
+      gain.connect(destination);
+      osc.start(start);
+      osc.stop(start + duration + 0.02);
+    } catch {
+      // ignore
+    }
+  }
+
+  private noiseBurst(
+    duration: number,
+    volume: number,
+    destination: GainNode,
+    filterFreq = 1000,
+  ) {
+    const context = this.getContext();
+    if (!context || context.state !== 'running') return;
+    try {
+      const bufferSize = Math.floor(context.sampleRate * duration);
+      const buffer = context.createBuffer(1, bufferSize, context.sampleRate);
+      const output = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+      const whiteNoise = context.createBufferSource();
+      whiteNoise.buffer = buffer;
+
+      const filter = context.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(filterFreq, context.currentTime);
+
+      const gain = context.createGain();
+      const start = context.currentTime;
+      gain.gain.setValueAtTime(volume, start);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+      whiteNoise.connect(filter);
+      filter.connect(gain);
+      gain.connect(destination);
+      whiteNoise.start(start);
+      whiteNoise.stop(start + duration + 0.02);
+    } catch {
+      // ignore
+    }
   }
 }
 

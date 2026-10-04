@@ -909,3 +909,466 @@
     transition: none !important;
   }
 }
+
+/* ==============================================================
+   7. HOW TO PLAY OVERLAY MODAL
+   ============================================================== */
+.pk-howtoplay-backdrop {
+  z-index: 200;
+  background: rgba(8, 12, 16, 0.88);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.pk-howtoplay-dialog {
+  background: #151c24;
+  border: 1px solid #334155;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 680px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+  animation: pk-pop-in 0.22s ease-out;
+}
+
+.pk-htp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: #1c2633;
+  border-bottom: 1px solid #2d3b4d;
+}
+
+.pk-htp-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pk-htp-icon {
+  font-size: 26px;
+}
+
+.pk-htp-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #f2cf66;
+}
+
+.pk-htp-subtitle {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.pk-htp-close-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.pk-htp-close-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+.pk-htp-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 8px 16px;
+  background: #131a22;
+  border-bottom: 1px solid #243040;
+}
+
+.pk-htp-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.pk-htp-tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #f1f5f9;
+}
+
+.pk-htp-tab.is-active {
+  background: #202b3a;
+  border-color: #3b82f6;
+  color: #60a5fa;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.pk-htp-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+  color: #e2e8f0;
+}
+
+.pk-htp-section-title {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.pk-htp-desc {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #94a3b8;
+  margin: 0 0 18px 0;
+}
+
+/* Tower Stages Grid */
+.pk-htp-tower-stages-grid {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.pk-htp-stage-card {
+  flex: 1;
+  background: #1c2633;
+  border: 1px solid #2e3e52;
+  border-radius: 12px;
+  padding: 12px 8px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 0.15s ease;
+}
+
+.pk-htp-stage-card.is-destroyed {
+  border-color: #7f1d1d;
+  background: #201518;
+}
+
+.pk-htp-img-wrap {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.pk-htp-img-wrap img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.4));
+}
+
+.pk-htp-stage-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin-bottom: 2px;
+}
+
+.pk-htp-stage-hp {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f2cf66;
+  margin-bottom: 6px;
+}
+
+.pk-htp-stage-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.35;
+}
+
+.pk-htp-stage-arrow {
+  display: flex;
+  align-items: center;
+  color: #64748b;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.pk-htp-tip-box {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+
+.pk-htp-tip-icon {
+  font-size: 18px;
+}
+
+/* Weapons List */
+.pk-htp-weapons-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pk-htp-weapon-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #1a232e;
+  border: 1px solid #2a3747;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.pk-htp-w-icon {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  background: #111822;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
+.pk-htp-w-icon img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.pk-htp-w-details {
+  flex: 1;
+}
+
+.pk-htp-w-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.pk-htp-w-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.pk-htp-w-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #253344;
+  color: #94a3b8;
+}
+
+.pk-htp-w-badge.tier-1 { color: #94a3b8; }
+.pk-htp-w-badge.tier-2 { color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+.pk-htp-w-badge.tier-3 { color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
+.pk-htp-w-badge.tier-4 { color: #ec4899; background: rgba(236, 72, 153, 0.12); }
+.pk-htp-w-badge.tier-5 { color: #10b981; background: rgba(16, 185, 129, 0.12); }
+
+.pk-htp-w-text {
+  margin: 0;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+/* RPS Duel Diagram */
+.pk-htp-duel-diagram {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.pk-htp-rps-card {
+  flex: 1;
+  background: #1c2633;
+  border: 1px solid #2e3e52;
+  border-radius: 12px;
+  padding: 16px 8px;
+  text-align: center;
+}
+
+.pk-htp-rps-emoji {
+  font-size: 34px;
+  margin-bottom: 6px;
+}
+
+.pk-htp-rps-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #f2cf66;
+  margin-bottom: 4px;
+}
+
+.pk-htp-rps-beats {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.pk-htp-duel-vs {
+  font-size: 18px;
+  color: #64748b;
+}
+
+.pk-htp-duel-rules-box {
+  background: #17202b;
+  border: 1px solid #283748;
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pk-htp-rule-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12.5px;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.pk-htp-bullet {
+  background: #3b82f6;
+  color: #ffffff;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* Flow Steps */
+.pk-htp-flow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pk-htp-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: #1a232e;
+  border: 1px solid #293849;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.pk-htp-step-num {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  background: #2563eb;
+  color: #ffffff;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.pk-htp-step-content h4 {
+  margin: 0 0 4px 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.pk-htp-step-content p {
+  margin: 0;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
+.pk-htp-footer {
+  padding: 14px 20px;
+  background: #17202b;
+  border-top: 1px solid #2a3747;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pk-htp-confirm-btn {
+  padding: 10px 22px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.pk-btn-help {
+  font-size: 16px;
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 640px) {
+  .pk-howtoplay-dialog {
+    max-height: 94vh;
+  }
+  .pk-htp-tabs {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .pk-htp-tower-stages-grid {
+    flex-direction: column;
+  }
+  .pk-htp-stage-arrow {
+    justify-content: center;
+    transform: rotate(90deg);
+  }
+  .pk-htp-duel-diagram {
+    flex-direction: column;
+  }
+  .pk-htp-duel-vs {
+    display: none;
+  }
+}
+

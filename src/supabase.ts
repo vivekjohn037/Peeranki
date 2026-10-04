@@ -704,3 +704,41 @@ export function subscribeToGameState(
     },
   };
 }
+
+export async function updatePlayerAvatar(
+  roomCode: string,
+  sessionId: string,
+  avatar: string,
+) {
+  const cleanCode = roomCode.trim().toUpperCase();
+  if (!cleanCode || !sessionId) return;
+
+  if (realClient) {
+    try {
+      const room = await fetchGameRoom(cleanCode);
+      if (room && Array.isArray(room.players)) {
+        const updated = room.players.map((p: any) =>
+          p.session_id === sessionId ? { ...p, avatar } : p,
+        );
+        await realClient
+          .from('game_states')
+          .update({ players: updated, updated_at: new Date().toISOString() })
+          .eq('room_code', cleanCode);
+      }
+    } catch (err) {
+      console.warn('[Peeranki] Failed to update player avatar in Supabase:', err);
+    }
+  }
+
+  // Update in local mock storage
+  const mock = getStoredRoom(cleanCode);
+  if (mock && Array.isArray(mock.players)) {
+    mock.players = mock.players.map((p: any) =>
+      p.session_id === sessionId ? { ...p, avatar } : p,
+    );
+    mock.updated_at = new Date().toISOString();
+    persistMockRoom(mock);
+    notifyRoomListeners(cleanCode, mock, true);
+  }
+}
+
