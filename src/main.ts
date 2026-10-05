@@ -3158,10 +3158,11 @@ class GameScene extends Phaser.Scene {
   private lastActionSeconds = -1;
   private lastMatchSeconds = -1;
 
- private currentShooter = -1;
-private startIndex = -1;
-private countNumber = 0;
-private nextStartIndex = -1;
+  private currentShooter = -1;
+  private lastMarkedShooterIndex = -2;
+  private startIndex = -1;
+  private countNumber = 0;
+  private nextStartIndex = -1;
 
   private countingTimer?: Phaser.Time.TimerEvent;
   private nextRoundTimer?: Phaser.Time.TimerEvent;
@@ -3655,6 +3656,7 @@ if (offlineMode) {
     );
 
     this.playerObjects = [];
+    this.lastMarkedShooterIndex = -2;
 
     const columns = maxPlayers <= 6 ? 3 : 5;
     const rows = Math.ceil(maxPlayers / columns);
@@ -3768,11 +3770,13 @@ if (offlineMode) {
       });
 
       this.playerObjects.push(container);
-      this.updatePlayerVisual(index);
+      this.updatePlayerVisual(index, false);
     });
+
+    this.syncUI();
   }
 
-  private updatePlayerVisual(index: number) {
+  private updatePlayerVisual(index: number, syncAfterUpdate = true) {
     const player = players[index];
     const container =
       this.playerObjects[index];
@@ -3935,17 +3939,36 @@ if (offlineMode) {
     container.setInteractive(
       player.connected && player.alive,
     );
-    this.syncUI();
+    if (syncAfterUpdate) this.syncUI();
   }
 
   private markShooter() {
-    for (
-      let index = 0;
-      index < this.playerObjects.length;
-      index += 1
-    ) {
-      this.updatePlayerVisual(index);
+    if (this.lastMarkedShooterIndex !== this.currentShooter) {
+      const changedIndexes = new Set<number>();
+      if (this.lastMarkedShooterIndex >= 0) changedIndexes.add(this.lastMarkedShooterIndex);
+      if (this.currentShooter >= 0) changedIndexes.add(this.currentShooter);
+
+      changedIndexes.forEach((index) => {
+        const player = players[index];
+        const container = this.playerObjects[index];
+        if (!player || !container) return;
+
+        const background = container.list[0] as Phaser.GameObjects.Rectangle;
+        const isShooter = index === this.currentShooter && player.connected && player.alive;
+        background.setStrokeStyle(isShooter ? 3 : 2, isShooter ? 0x4da3ff : 0x444c55);
+
+        this.tweens.killTweensOf(container);
+        if (isShooter) {
+          this.tweens.add({ targets: container, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
+        } else {
+          container.setScale(1);
+        }
+      });
+
+      this.lastMarkedShooterIndex = this.currentShooter;
     }
+
+    this.syncUI();
   }
 
   private startRealtimeSync() {
@@ -3979,15 +4002,20 @@ if (offlineMode) {
       const prevPlayers = players.map((p) => ({
         id: p.id,
         name: p.name,
+        avatar: p.avatar,
         stage: p.stage,
         alive: p.alive,
         weapons: [...p.weapons],
+        hasCollectedAllWeapons: p.hasCollectedAllWeapons,
+        eliminationPoints: p.eliminationPoints,
         shieldDisabledRound: p.shieldDisabledRound,
         connected: p.connected,
       }));
+      const previousMatchRound = matchRound;
 
       loadPlayersFromRoom(gameState.players);
-      this.refreshWeaponPicker();
+      this.refreshWeaponPicker(false);
+      const roundChanged = previousMatchRound !== matchRound;
 
       // Non-host (and host client) rich combat audio & visual feedbacks
       if (this.initialized && prevPlayers.length > 0) {
@@ -4045,9 +4073,19 @@ if (offlineMode) {
         if (this.playerObjects.length !== maxPlayers) {
           this.renderPlayers();
         } else {
+          players.slice(0, maxPlayers).forEach((p, idx) => {
+            const prev = prevPlayers[idx];
+            const weaponsChanged = !prev || prev.weapons.length !== p.weapons.length ||
+              prev.weapons.some((weapon, weaponIndex) => weapon !== p.weapons[weaponIndex]);
+            const visualChanged = roundChanged || !prev || prev.id !== p.id || prev.name !== p.name ||
+              prev.avatar !== p.avatar || prev.stage !== p.stage || prev.alive !== p.alive ||
+              prev.connected !== p.connected || prev.hasCollectedAllWeapons !== p.hasCollectedAllWeapons ||
+              prev.eliminationPoints !== p.eliminationPoints || prev.shieldDisabledRound !== p.shieldDisabledRound ||
+              weaponsChanged;
+            if (visualChanged) this.updatePlayerVisual(idx, false);
+          });
           this.markShooter();
         }
-        this.syncUI();
       }
     }
 
@@ -5183,14 +5221,14 @@ void this.recordShot();
     );
   }
 
-  private refreshWeaponPicker() {
+  private refreshWeaponPicker(syncAfterUpdate = true) {
     const localIndex = offlineMode ? 0 : myPlayerId - 1;
     const owned = players[localIndex]?.weapons ?? ['gun'];
     const options = ACTIVE_WEAPONS.filter((weapon) => owned.includes(weapon));
     if (!options.includes(this.selectedWeapon)) this.selectedWeapon = options[0] ?? 'gun';
     this.weaponImage?.setTexture(`weapon-${this.selectedWeapon}`);
     this.weaponText?.setText(WEAPON_NAMES[this.selectedWeapon]);
-    this.syncUI();
+    if (syncAfterUpdate) this.syncUI();
   }
 
   private refreshPreviousRoundText() {
