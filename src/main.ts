@@ -5328,13 +5328,23 @@ void this.recordShot();
     const winnerIndex = players.findIndex((player) => player.id === winner.id);
     const winnerCard = this.playerObjects[winnerIndex];
     if (winnerCard) this.tweens.add({ targets: winnerCard, scale: { from: 1, to: 1.12 }, duration: 300, yoyo: true, repeat: 2, ease: 'Back.Out' });
-    if (!offlineMode) await syncGameState(null, 0, 'round_won');
     this.markShooter();
     if (!this.nextRoundTimer) {
       this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
         this.nextRoundTimer = undefined;
         this.startCounting();
       });
+    }
+    // Keep the local round clock independent from the Supabase response. The
+    // previous ordering could leave the host stuck here forever when the
+    // update committed but its HTTP response was delayed or lost.
+    if (!offlineMode) {
+      try {
+        await syncGameState(null, 0, 'round_won');
+      } catch (error) {
+        console.error('Failed to sync round result:', error);
+        this.uiManager.showToast('Connection issue: continuing the next round…', 'alert');
+      }
     }
   }
 

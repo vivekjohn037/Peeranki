@@ -527,6 +527,8 @@ export async function saveGameState(
 
   if (hasAnySupabaseConfiguration) {
     const client = configuredClient();
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8_000);
     try {
       const { error } = await client
         .from('game_states')
@@ -538,13 +540,16 @@ export async function saveGameState(
           game_status: gameStatus,
           updated_at: new Date().toISOString(),
         })
-        .eq('room_code', cleanCode);
+        .eq('room_code', cleanCode)
+        .abortSignal(controller.signal);
 
       if (error) {
         throw error;
       }
     } catch (err) {
       throw new Error(`Supabase could not save game state: ${errorMessage(err)}`, { cause: err });
+    } finally {
+      window.clearTimeout(timeout);
     }
     return;
   }
