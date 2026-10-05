@@ -301,6 +301,7 @@ let maxPlayers = MIN_PLAYERS;
 let isPublicRoom = false;
 let hostSessionId = '';
 let players: Player[] = [];
+let gameStateWriteQueue: Promise<void> = Promise.resolve();
 
 const sessionId = getOrCreateSessionId();
 const previousRoomCleanup = cleanupPreviousSession();
@@ -565,14 +566,18 @@ async function syncGameState(
       shooting_deadline_at: shootingDeadlineAt,
     }));
 
-  await saveGameState(
+  // Serialize host snapshots so a delayed earlier write cannot overwrite a
+  // newer phase after the host has already advanced the local round.
+  const write = gameStateWriteQueue.then(() => saveGameState(
     roomCode,
     connected,
     maxPlayers,
     currentShooter,
     countNumber,
     gameStatus,
-  );
+  ));
+  gameStateWriteQueue = write.catch(() => undefined);
+  await write;
 }
 
 function startRoomHeartbeat() {
@@ -4050,6 +4055,20 @@ if (offlineMode) {
     await this.realtimeChannel.sendEvent(event, payload);
   }
 
+  private scheduleNextRoundAfterShot() {
+    if (!amHost() || this.nextRoundTimer || this.countingTimer) return;
+    this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
+      this.nextRoundTimer = undefined;
+      const nextStartIndex = this.nextStartIndex;
+      this.nextStartIndex = -1;
+      if (this.isGameFinished()) {
+        void this.finishRound();
+      } else {
+        this.startCounting(nextStartIndex >= 0 ? nextStartIndex : undefined);
+      }
+    });
+  }
+
   private applyRemoteGameState(gameState: any) {
     if (!gameState) {
       return;
@@ -4314,30 +4333,7 @@ if (offlineMode) {
       );
       this.markShooter();
 
-      if (
-  amHost() &&
-  !this.nextRoundTimer &&
-  !this.countingTimer
-) {
-  this.nextRoundTimer =
-    this.time.delayedCall(
-      NEXT_ROUND_DELAY,
-      () => {
-        this.nextRoundTimer = undefined;
-
-        const nextStartIndex =
-          this.nextStartIndex;
-
-        this.nextStartIndex = -1;
-
-        if (this.isGameFinished()) {
-          void this.finishRound();
-        } else {
-          this.startCounting(nextStartIndex >= 0 ? nextStartIndex : undefined);
-        }
-      },
-    );
-}
+      this.scheduleNextRoundAfterShot();
 
       return;
     }
@@ -5310,6 +5306,8 @@ this.time.delayedCall(1200, () => {
 // Online mode
 this.nextStartIndex =
   this.getNextCountingStartIndex(index);
+// Do not wait for the database to echo the host's own write before advancing.
+this.scheduleNextRoundAfterShot();
 
 void this.recordShot();
 }
