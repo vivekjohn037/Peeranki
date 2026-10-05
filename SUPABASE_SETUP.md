@@ -14,9 +14,11 @@ Online rooms require the `public.game_states` table and these public RPCs:
 - `leave_room(p_room_code, p_session_id)`
 
 Enable Supabase Realtime for `public.game_states` so lobby and game state
-updates reach other players. The repository does not include a database schema
-migration; provision the table, RPCs, access policies, and Realtime publication
-in the Supabase project before deploying multiplayer.
+updates reach other players. In-game shots and duel choices use Realtime
+broadcasts on the room channel; the host validates those messages and is the
+only client that saves the shared match snapshot. The repository does not
+include a database schema migration; provision the table, RPCs, access policies,
+and Realtime publication in the Supabase project before deploying multiplayer.
 
 If both environment variables are absent, Peeranki deliberately uses local
 in-memory/session-storage rooms and `BroadcastChannel` for same-browser

@@ -17,6 +17,7 @@ import {
   saveGameState,
   touchPlayer,
   leaveRoom,
+  subscribeToGameState,
 } from '../src/supabase.ts';
 
 test('1. WEAPON DEFINITIONS & SEQUENCING', async (t) => {
@@ -199,4 +200,33 @@ test('5. SUPABASE MULTIPLAYER ROOM LIFECYCLE', async (t) => {
     const guest = updated.players.find(p => p.session_id === sessionIdGuest);
     assert.equal(guest === undefined || guest.connected === false, true, 'Guest is removed from lobby or disconnected');
   });
+});
+
+test('6. ROOM ACTION EVENTS REACH PEERS WITHOUT ECHOING TO THE SENDER', async () => {
+  const roomCode = 'EVENT1';
+  const receivedByHost = [];
+  const receivedByOtherPlayer = [];
+  const receivedBySender = [];
+  const host = subscribeToGameState(roomCode, () => {}, (event, payload) => {
+    receivedByHost.push({ event, payload });
+  });
+  const otherPlayer = subscribeToGameState(roomCode, () => {}, (event, payload) => {
+    receivedByOtherPlayer.push({ event, payload });
+  });
+  const sender = subscribeToGameState(roomCode, () => {}, (event, payload) => {
+    receivedBySender.push({ event, payload });
+  });
+  const actionRequest = {
+    sessionId: 'player-three-session',
+    request: { nonce: 'shot-1', shooterId: 3, weapon: 'gun', targetIds: [1] },
+  };
+
+  try {
+    await sender.sendEvent('player_action_request', actionRequest);
+    assert.deepEqual(receivedByHost, [{ event: 'player_action_request', payload: actionRequest }]);
+    assert.deepEqual(receivedByOtherPlayer, [{ event: 'player_action_request', payload: actionRequest }]);
+    assert.deepEqual(receivedBySender, []);
+  } finally {
+    await Promise.all([host.unsubscribe(), otherPlayer.unsubscribe(), sender.unsubscribe()]);
+  }
 });

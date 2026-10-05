@@ -530,6 +530,9 @@ async function syncGameState(
   countNumber: number,
   gameStatus: string,
 ) {
+  // The host is the sole writer of the shared snapshot. Player clients send
+  // their actions as room events so stale local state cannot replace the match.
+  if (!offlineMode && !amHost()) return;
   if (!roomCode || players.length === 0) {
     return;
   }
@@ -670,16 +673,27 @@ function positionHtmlInput(
   gameY: number,
   width = 300,
 ) {
-  const canvas = scene.game.canvas;
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = rect.width / scene.scale.width;
-  const scaleY = rect.height / scene.scale.height;
+  const canvas = scene.game?.canvas;
+  const rect = canvas?.getBoundingClientRect();
+  const scaleWidth = scene.scale?.width;
+  const scaleHeight = scene.scale?.height;
+  const dimensions = [rect?.left, rect?.top, rect?.width, rect?.height, scaleWidth, scaleHeight, gameX, gameY, width];
+  if (!canvas || !rect || !canvas.isConnected || !input.isConnected ||
+      !dimensions.every((value) => Number.isFinite(value)) ||
+      rect.width <= 0 || rect.height <= 0 || scaleWidth <= 0 || scaleHeight <= 0 || width <= 0) {
+    input.style.visibility = 'hidden';
+    return;
+  }
+
+  const scaleX = rect.width / scaleWidth;
+  const scaleY = rect.height / scaleHeight;
   const cssWidth = Math.min(
     width * scaleX,
     rect.width * 0.88,
   );
 
   input.style.position = 'fixed';
+  input.style.visibility = 'visible';
   input.style.left = `${rect.left + gameX * scaleX}px`;
   input.style.top = `${rect.top + gameY * scaleY}px`;
   input.style.transform = 'translate(-50%, -50%)';
@@ -810,6 +824,8 @@ class MenuScene extends Phaser.Scene {
   private nameInputX = 0;
   private nameInputY = 0;
   private nameInputW = 300;
+  private backgroundResizeHandler?: (gameSize: Phaser.Structs.Size) => void;
+  private menuUiResizeHandler?: (gameSize: Phaser.Structs.Size) => void;
   private resizeHandler = () => {
     if (this.nameInput) {
       positionHtmlInput(this, this.nameInput, this.nameInputX, this.nameInputY, this.nameInputW);
@@ -847,12 +863,14 @@ class MenuScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(-5);
 
-      this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      this.backgroundResizeHandler = (gameSize: Phaser.Structs.Size) => {
+        if (!bg.active || !overlay.active) return;
         bg.setPosition(gameSize.width / 2, gameSize.height / 2);
         bg.setScale(Math.max(gameSize.width / bg.width, gameSize.height / bg.height));
         overlay.setPosition(gameSize.width / 2, gameSize.height / 2);
         overlay.setSize(gameSize.width, gameSize.height);
-      });
+      };
+      this.scale.on('resize', this.backgroundResizeHandler);
     }
 
     const isLandscape = width >= 640 && width > height * 1.12;
@@ -1192,7 +1210,7 @@ class MenuScene extends Phaser.Scene {
       this.scene.restart();
     });
 
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+    this.menuUiResizeHandler = (gameSize: Phaser.Structs.Size) => {
       const resizeTopY = Math.max(26, Math.min(34, Math.round(gameSize.height * 0.045)));
       muteButton.setPosition(30, resizeTopY);
       rightTopBtn.setPosition(gameSize.width - 44, resizeTopY);
@@ -1200,7 +1218,8 @@ class MenuScene extends Phaser.Scene {
       if (this.nameInput) {
         positionHtmlInput(this, this.nameInput, this.nameInputX, this.nameInputY, this.nameInputW);
       }
-    });
+    };
+    this.scale.on('resize', this.menuUiResizeHandler);
 
     rightTopBtn.on('pointerdown', () => {
       PeerankiAudio.effect('select');
@@ -1210,6 +1229,14 @@ class MenuScene extends Phaser.Scene {
 
   private cleanup() {
     window.removeEventListener('resize', this.resizeHandler);
+    if (this.backgroundResizeHandler) {
+      this.scale.off('resize', this.backgroundResizeHandler);
+      this.backgroundResizeHandler = undefined;
+    }
+    if (this.menuUiResizeHandler) {
+      this.scale.off('resize', this.menuUiResizeHandler);
+      this.menuUiResizeHandler = undefined;
+    }
     this.nameInput?.remove();
     this.nameInput = undefined;
     removePeerankiInputs();
@@ -3175,6 +3202,7 @@ class GameScene extends Phaser.Scene {
   private duelActive = false;
   private resolvingDuel = false;
   private processingDuelChoices = false;
+  private processingOnlineAction = false;
   private duelUi: Phaser.GameObjects.GameObject[] = [];
   private duelPrompt?: Phaser.GameObjects.Text;
   private duelBotTimer?: Phaser.Time.TimerEvent;
@@ -3184,6 +3212,9 @@ class GameScene extends Phaser.Scene {
   private pingTimer?: Phaser.Time.TimerEvent;
   private lastAnnouncedRoundMessage = '';
   private lastAnnouncedDuelRound = 1;
+  private gameResizeHandler = (gameSize: Phaser.Structs.Size) => {
+    this.leaveButton?.setPosition(gameSize.width - 54, 32);
+  };
 
   constructor() {
     super('GameScene');
@@ -3210,6 +3241,7 @@ class GameScene extends Phaser.Scene {
     this.duelActive = false;
     this.resolvingDuel = false;
     this.processingDuelChoices = false;
+    this.processingOnlineAction = false;
     this.clearDuelControls();
     this.roundPhase = 'waiting';
     this.currentShooter = -1;
@@ -3276,6 +3308,7 @@ class GameScene extends Phaser.Scene {
     });
 
     this.events.once('shutdown', () => {
+      this.scale.off('resize', this.gameResizeHandler);
       this.uiManager.unmount();
       canvas.style.opacity = '1';
       canvas.style.pointerEvents = 'auto';
@@ -3388,9 +3421,7 @@ if (offlineMode) {
       .setInteractive({ useHandCursor: true });
 
     // Keep the touch target inside the visible game area as Phaser FIT resizes.
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      this.leaveButton?.setPosition(gameSize.width - 54, 32);
-    });
+    this.scale.on('resize', this.gameResizeHandler);
 
     this.leaveButton.on(
       'pointerdown',
@@ -3977,7 +4008,39 @@ if (offlineMode) {
       (gameState) => {
         this.applyRemoteGameState(gameState);
       },
+      (event, payload) => this.handleRoomEvent(event, payload),
     );
+  }
+
+  private handleRoomEvent(event: string, payload: any) {
+    if (!amHost() || !payload || typeof payload.sessionId !== 'string') return;
+    const owner = players.find((player) => player.connected && player.sessionId === payload.sessionId);
+    if (!owner) return;
+
+    if (event === 'player_action_request') {
+      const request = normalizeOnlineAction(payload.request);
+      if (!request || request.shooterId !== owner.id || owner.actionRequest) return;
+      owner.actionRequest = request;
+      void this.processPendingAction();
+      return;
+    }
+
+    if (event === 'duel_choice_request') {
+      const request = normalizeDuelChoiceRequest(payload.request);
+      const contestants = activePlayers().filter((player) => player.alive);
+      if (!request || !this.duelActive || this.roundPhase !== 'duel' || contestants.length !== 2 ||
+          request.playerId !== owner.id || request.round !== duelRound || !owner.alive ||
+          owner.duelChoice || owner.duelChoiceRequest) return;
+      owner.duelChoiceRequest = request;
+      void this.processPendingDuelChoices();
+    }
+  }
+
+  private async sendRoomEvent(event: string, payload: any) {
+    if (typeof this.realtimeChannel?.sendEvent !== 'function') {
+      throw new Error('The room connection is not ready. Please try again.');
+    }
+    await this.realtimeChannel.sendEvent(event, payload);
   }
 
   private applyRemoteGameState(gameState: any) {
@@ -4380,16 +4443,24 @@ if (offlineMode) {
       return;
     }
 
-    player.duelChoiceRequest = {
+    const request: OnlineDuelChoiceRequest = {
       nonce: `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       playerId,
       round: duelRound,
       choice,
     };
+    player.duelChoiceRequest = request;
     this.statusText?.setText('Choice sent. Waiting for both players...');
     this.renderDuelControls();
-    void syncGameState(null, 0, 'duel').then(() => {
-      if (amHost()) return this.processPendingDuelChoices();
+    if (amHost()) {
+      void this.processPendingDuelChoices();
+      return;
+    }
+    void this.sendRoomEvent('duel_choice_request', { sessionId, request }).catch((error) => {
+      if (player.duelChoiceRequest?.nonce === request.nonce) player.duelChoiceRequest = null;
+      console.error('[Peeranki] Could not send duel choice:', error);
+      this.statusText?.setText('Could not send your choice. Check your connection and try again.');
+      this.renderDuelControls();
     });
   }
 
@@ -4411,21 +4482,27 @@ if (offlineMode) {
     if (!amHost() || !this.duelActive || this.processingDuelChoices || this.gameFinished) return;
     this.processingDuelChoices = true;
     try {
-      let changed = false;
-      players.forEach((owner) => {
-        const request = owner.duelChoiceRequest;
-        if (!request) return;
-        owner.duelChoiceRequest = null;
-        changed = true;
-        if (request.playerId === owner.id && request.round === duelRound && owner.connected && owner.alive &&
-            !owner.duelChoice && normalizeRpsChoice(request.choice)) {
-          owner.duelChoice = request.choice;
-        }
-      });
-      if (changed) await syncGameState(null, 0, 'duel');
+      while (amHost() && this.duelActive && !this.gameFinished) {
+        let changed = false;
+        players.forEach((owner) => {
+          const request = owner.duelChoiceRequest;
+          if (!request) return;
+          owner.duelChoiceRequest = null;
+          changed = true;
+          if (request.playerId === owner.id && request.round === duelRound && owner.connected && owner.alive &&
+              !owner.duelChoice && normalizeRpsChoice(request.choice)) {
+            owner.duelChoice = request.choice;
+          }
+        });
+        if (!changed) break;
+        await syncGameState(null, 0, 'duel');
+      }
       await this.resolveDuelIfReady();
     } finally {
       this.processingDuelChoices = false;
+      if (amHost() && this.duelActive && players.some((player) => player.duelChoiceRequest)) {
+        void this.processPendingDuelChoices();
+      }
     }
   }
 
@@ -4877,62 +4954,81 @@ private async requestHostAction(targetIds: number[]) {
   const shooter = players[myPlayerId - 1];
   if (!shooter || !ACTIVE_WEAPONS.includes(this.selectedWeapon) ||
       !shootingDeadlineAt || !Number.isFinite(Date.parse(shootingDeadlineAt))) return;
-  const nonce = `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-  shooter.actionRequest = {
-    nonce,
+  const request: OnlineAction = {
+    nonce: `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
     shooterId: shooter.id,
     weapon: this.selectedWeapon,
     targetIds: targetIds.map((id) => id + 1),
   };
+  shooter.actionRequest = request;
   this.statusText?.setText('Sending action to the host...');
-  await syncGameState(this.currentShooter, this.countNumber, 'action_requested');
+  try {
+    if (amHost()) {
+      await this.processPendingAction();
+    } else {
+      await this.sendRoomEvent('player_action_request', { sessionId, request });
+    }
+  } catch (error) {
+    if (shooter.actionRequest?.nonce === request.nonce) shooter.actionRequest = null;
+    console.error('[Peeranki] Could not send shot to the host:', error);
+    this.statusText?.setText('Could not send your shot. Check your connection and try again.');
+    this.scheduleUiSync();
+  }
 }
 
 private async processPendingAction() {
-  if (!amHost() || this.gameFinished || this.matchTimeExpired()) return;
-  const requestOwner = players.find((player) => player.actionRequest !== null);
-  const action = requestOwner?.actionRequest;
-  if (!requestOwner || !action) return;
-  requestOwner.actionRequest = null;
-  if (processedOnlineActionNonces.has(action.nonce)) {
-    await syncGameState(this.currentShooter, this.countNumber, this.roundPhase === 'shooting' ? 'shooting' : 'shot');
-    return;
-  }
-  processedOnlineActionNonces.add(action.nonce);
+  if (!amHost() || this.gameFinished || this.matchTimeExpired() || this.processingOnlineAction) return;
+  this.processingOnlineAction = true;
+  try {
+    const requestOwner = players.find((player) => player.actionRequest !== null);
+    const action = requestOwner?.actionRequest;
+    if (!requestOwner || !action) return;
+    requestOwner.actionRequest = null;
+    if (processedOnlineActionNonces.has(action.nonce)) {
+      await syncGameState(this.currentShooter, this.countNumber, this.roundPhase === 'shooting' ? 'shooting' : 'shot');
+      return;
+    }
+    processedOnlineActionNonces.add(action.nonce);
 
-  const shooterIndex = action.shooterId - 1;
-  const shooter = players[shooterIndex];
-  const targetIndexes = action.targetIds.map((id) => id - 1);
-  const uniqueTargets = new Set(targetIndexes);
-  const validWeapon = ACTIVE_WEAPONS.includes(action.weapon) && shooter?.weapons.includes(action.weapon);
-  const expectedTargets = action.weapon === 'doublePeeranki' ? 2 : 1;
-  const validTargets = targetIndexes.length === expectedTargets && uniqueTargets.size === expectedTargets &&
-    targetIndexes.every((index) => index >= 0 && index < players.length && index !== shooterIndex && players[index].connected && players[index].alive);
-  const authorized = shooter?.sessionId === requestOwner.sessionId && shooterIndex === this.currentShooter && shooter.alive && shooter.connected;
-  const withinDeadline = Boolean(shootingDeadlineAt) && Date.now() < Date.parse(shootingDeadlineAt);
-  const validHook = action.weapon !== 'hook' || targetIndexes.length === 1 && players[targetIndexes[0]]?.weapons.includes('shield') && players[targetIndexes[0]]?.shieldDisabledRound !== matchRound;
-  if (this.roundPhase !== 'shooting') {
-    await syncGameState(
-      this.currentShooter >= 0 ? this.currentShooter : null,
-      this.countNumber,
-      this.roundPhase === 'finished' ? 'finished' : 'shot',
-    );
-    return;
-  }
-  if (!withinDeadline) {
-    this.endActionOnTimeout();
-    return;
-  }
+    const shooterIndex = action.shooterId - 1;
+    const shooter = players[shooterIndex];
+    const targetIndexes = action.targetIds.map((id) => id - 1);
+    const uniqueTargets = new Set(targetIndexes);
+    const validWeapon = ACTIVE_WEAPONS.includes(action.weapon) && shooter?.weapons.includes(action.weapon);
+    const expectedTargets = action.weapon === 'doublePeeranki' ? 2 : 1;
+    const validTargets = targetIndexes.length === expectedTargets && uniqueTargets.size === expectedTargets &&
+      targetIndexes.every((index) => index >= 0 && index < players.length && index !== shooterIndex && players[index].connected && players[index].alive);
+    const authorized = shooter?.sessionId === requestOwner.sessionId && shooterIndex === this.currentShooter && shooter.alive && shooter.connected;
+    const withinDeadline = Boolean(shootingDeadlineAt) && Date.now() < Date.parse(shootingDeadlineAt);
+    const validHook = action.weapon !== 'hook' || targetIndexes.length === 1 && players[targetIndexes[0]]?.weapons.includes('shield') && players[targetIndexes[0]]?.shieldDisabledRound !== matchRound;
+    if (this.roundPhase !== 'shooting') {
+      await syncGameState(
+        this.currentShooter >= 0 ? this.currentShooter : null,
+        this.countNumber,
+        this.roundPhase === 'finished' ? 'finished' : 'shot',
+      );
+      return;
+    }
+    if (!withinDeadline) {
+      this.endActionOnTimeout();
+      return;
+    }
 
-  if (!authorized || !validWeapon || !validTargets || !validHook || this.matchTimeExpired()) {
-    this.statusText?.setText('The host rejected an invalid or expired action.');
-    await syncGameState(this.currentShooter, this.countNumber, 'shooting');
-    return;
-  }
+    if (!authorized || !validWeapon || !validTargets || !validHook || this.matchTimeExpired()) {
+      this.statusText?.setText('The host rejected an invalid or expired action.');
+      await syncGameState(this.currentShooter, this.countNumber, 'shooting');
+      return;
+    }
 
-  this.applyWeaponEffect(targetIndexes[0], action.weapon === 'doublePeeranki' ? 'peeranki' : action.weapon, shooterIndex);
-  if (action.weapon === 'doublePeeranki') this.applyWeaponEffect(targetIndexes[1], 'gun', shooterIndex);
-  this.completePlayerShot(targetIndexes[targetIndexes.length - 1]);
+    this.applyWeaponEffect(targetIndexes[0], action.weapon === 'doublePeeranki' ? 'peeranki' : action.weapon, shooterIndex);
+    if (action.weapon === 'doublePeeranki') this.applyWeaponEffect(targetIndexes[1], 'gun', shooterIndex);
+    this.completePlayerShot(targetIndexes[targetIndexes.length - 1]);
+  } finally {
+    this.processingOnlineAction = false;
+    if (amHost() && players.some((player) => player.actionRequest)) {
+      void this.processPendingAction();
+    }
+  }
 }
 
 private shootPlayer(index: number) {
@@ -5698,6 +5794,7 @@ void this.recordShot();
   this.markShooter();
 }
   shutdown() {
+    this.scale.off('resize', this.gameResizeHandler);
     this.countingTimer?.remove(false);
     this.countingTimer = undefined;
     this.matchTimer?.remove(false);

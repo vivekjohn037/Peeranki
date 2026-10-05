@@ -68,16 +68,20 @@ interface MockRoomRecord {
 const STORAGE_PREFIX = 'peeranki_room_';
 const mockRoomsMemory = new Map<string, MockRoomRecord>();
 const listenersByRoom = new Map<string, Set<(state: any) => void>>();
+const roomEventListenersByRoom = new Map<string, Set<(event: string, payload: any) => void>>();
+const ROOM_EVENT_NAMES = new Set(['player_action_request', 'duel_choice_request']);
 
 let broadcastChannel: BroadcastChannel | null = null;
 try {
   if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
     broadcastChannel = new BroadcastChannel('peeranki_room_sync');
     broadcastChannel.onmessage = (event) => {
-      const { type, roomCode, data } = event.data || {};
+      const { type, roomCode, data, event: roomEvent, payload } = event.data || {};
       if (type === 'ROOM_UPDATE' && roomCode && data) {
         mockRoomsMemory.set(roomCode, data);
         notifyRoomListeners(roomCode, data, false);
+      } else if (type === 'ROOM_EVENT' && roomCode && ROOM_EVENT_NAMES.has(roomEvent)) {
+        notifyRoomEventListeners(roomCode, roomEvent, payload);
       }
     };
   }
@@ -132,6 +136,24 @@ function notifyRoomListeners(roomCode: string, state: any, broadcast: boolean) {
       // ignore
     }
   }
+}
+
+function notifyRoomEventListeners(
+  roomCode: string,
+  event: string,
+  payload: any,
+  except?: (event: string, payload: any) => void,
+) {
+  const listeners = roomEventListenersByRoom.get(roomCode);
+  if (!listeners) return;
+  listeners.forEach((listener) => {
+    if (listener === except) return;
+    try {
+      listener(event, payload);
+    } catch (err) {
+      console.error('[Peeranki] Room event listener error:', err);
+    }
+  });
 }
 
 function updateMockRoomPartial(code: string, updates: Partial<MockRoomRecord>) {
@@ -698,15 +720,22 @@ export function leaveRoomBestEffort(roomCode: string, sessionId: string) {
 export function subscribeToGameState(
   roomCode: string,
   callback: (gameState: any) => void,
+  onRoomEvent?: (event: string, payload: any) => void,
 ) {
   const cleanCode = roomCode.trim().toUpperCase();
 
   let realChannel: any = null;
+  let realtimeStatus = 'CLOSED';
+  if (onRoomEvent) {
+    if (!roomEventListenersByRoom.has(cleanCode)) roomEventListenersByRoom.set(cleanCode, new Set());
+    roomEventListenersByRoom.get(cleanCode)!.add(onRoomEvent);
+  }
+
   if (hasAnySupabaseConfiguration) {
     try {
       const client = configuredClient();
       realChannel = client
-        .channel(`peeranki-room-${cleanCode}`)
+        .channel(`peeranki-room-${cleanCode}`, { config: { broadcast: { self: false, ack: true } } })
         .on(
           'postgres_changes',
           {
@@ -719,7 +748,14 @@ export function subscribeToGameState(
             callback(payload.new ?? null);
           },
         )
-        .subscribe((_status, error) => {
+        .on('broadcast', { event: 'player_action_request' }, ({ payload }) => {
+          onRoomEvent?.('player_action_request', payload);
+        })
+        .on('broadcast', { event: 'duel_choice_request' }, ({ payload }) => {
+          onRoomEvent?.('duel_choice_request', payload);
+        })
+        .subscribe((status, error) => {
+          realtimeStatus = status;
           if (error) {
             console.error('[Peeranki] Supabase realtime error:', error);
           }
@@ -734,8 +770,45 @@ export function subscribeToGameState(
   }
 
   return {
+    sendEvent: async (event: string, payload: any) => {
+      if (!ROOM_EVENT_NAMES.has(event)) {
+        throw new Error(`Unsupported room event: ${event}`);
+      }
+
+      if (hasAnySupabaseConfiguration) {
+        if (!realChannel || realtimeStatus !== 'SUBSCRIBED') {
+          throw new Error(`The online room connection is not ready (${realtimeStatus}). Please try again.`);
+        }
+        try {
+          const status = await realChannel.send({ type: 'broadcast', event, payload });
+          if (status !== 'ok') {
+            throw new Error(`Realtime returned ${status}`);
+          }
+        } catch (err) {
+          throw new Error(`Supabase could not send the room action: ${errorMessage(err)}`, { cause: err });
+        }
+        return;
+      }
+
+      const peerListeners = roomEventListenersByRoom.get(cleanCode);
+      const hasLocalPeer = Boolean(peerListeners && [...peerListeners].some((listener) => listener !== onRoomEvent));
+      if (!broadcastChannel && !hasLocalPeer) {
+        throw new Error('Cross-device online play requires Supabase to be configured.');
+      }
+      notifyRoomEventListeners(cleanCode, event, payload, onRoomEvent);
+      if (broadcastChannel) {
+        try {
+          broadcastChannel.postMessage({ type: 'ROOM_EVENT', roomCode: cleanCode, event, payload });
+        } catch (err) {
+          throw new Error(`Could not send the local room action: ${errorMessage(err)}`, { cause: err });
+        }
+      }
+    },
     unsubscribe: async () => {
       listenersByRoom.get(cleanCode)?.delete(callback);
+      if (onRoomEvent) {
+        roomEventListenersByRoom.get(cleanCode)?.delete(onRoomEvent);
+      }
       if (realChannel) {
         try {
           await realChannel.unsubscribe();
