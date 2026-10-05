@@ -1,5 +1,6 @@
 import type { HUDState, UICallbacks, WeaponType } from './types';
 import { showHowToPlayModal } from './HowToPlayModalComponent';
+import { addFastTapListener } from './touchUtils';
 
 const WEAPON_INFO: Record<WeaponType, { label: string; icon: string; desc: string }> = {
   gun: { label: 'Gun', icon: 'assets/weapons/gun.png', desc: 'Standard single shot' },
@@ -19,6 +20,9 @@ export class HUDComponent {
   private timerValEl!: HTMLElement;
   private roundValEl!: HTMLElement;
   private audioBtnEl!: HTMLButtonElement;
+  private netBadgeEl!: HTMLButtonElement;
+  private toastContainer!: HTMLElement;
+  private currentRoomCode: string | null = null;
   private announcerTextEl!: HTMLElement;
   private promptTextEl!: HTMLElement;
   private promptSubtextEl!: HTMLElement;
@@ -41,6 +45,10 @@ export class HUDComponent {
         <span class="pk-topbar-title">PEERANKI</span>
       </div>
       <div class="pk-topbar-meta">
+        <button type="button" class="pk-net-status-badge" aria-label="Multiplayer Network Status">
+          <span class="pk-net-dot">🟢</span>
+          <span class="pk-net-label">SYNCED</span>
+        </button>
         <div class="pk-match-timer-badge">
           <span aria-hidden="true">⏱️</span>
           <span class="pk-timer-display">05:00</span>
@@ -66,9 +74,25 @@ export class HUDComponent {
     this.timerValEl = this.topbarEl.querySelector('.pk-timer-display')!;
     this.roundValEl = this.topbarEl.querySelector('.pk-match-round-text')!;
     this.audioBtnEl = this.topbarEl.querySelector('.pk-audio-btn')!;
+    this.netBadgeEl = this.topbarEl.querySelector<HTMLButtonElement>('.pk-net-status-badge')!;
+
+    this.toastContainer = document.createElement('div');
+    this.toastContainer.className = 'pk-hud-toast-container';
+    this.topbarEl.appendChild(this.toastContainer);
+
+    addFastTapListener(this.netBadgeEl, async () => {
+      if (this.currentRoomCode) {
+        try {
+          await navigator.clipboard.writeText(this.currentRoomCode);
+          this.showToast(`📋 Room Code ${this.currentRoomCode} copied!`, 'success');
+        } catch {
+          this.showToast(`Room: ${this.currentRoomCode}`, 'info');
+        }
+      }
+    });
     const fullscreenBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-btn-fullscreen');
-    const helpBtn = this.topbarEl.querySelector('.pk-btn-help');
-    const leaveBtn = this.topbarEl.querySelector('.pk-btn-leave')!;
+    const helpBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-btn-help');
+    const leaveBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-btn-leave')!;
 
     if (fullscreenBtn) {
       const updateFsIcon = () => {
@@ -77,7 +101,7 @@ export class HUDComponent {
         fullscreenBtn.title = isFs ? 'Exit Fullscreen' : 'Enter Fullscreen';
       };
 
-      fullscreenBtn.addEventListener('click', () => {
+      addFastTapListener(fullscreenBtn, () => {
         try {
           if (!document.fullscreenElement && !(document as any).webkitFullscreenElement) {
             if (document.documentElement.requestFullscreen) {
@@ -101,9 +125,11 @@ export class HUDComponent {
       document.addEventListener('webkitfullscreenchange', updateFsIcon);
     }
 
-    helpBtn?.addEventListener('click', () => {
-      showHowToPlayModal();
-    });
+    if (helpBtn) {
+      addFastTapListener(helpBtn, () => {
+        showHowToPlayModal();
+      });
+    }
 
     // Initialize initial mute state from global storage
     try {
@@ -113,12 +139,12 @@ export class HUDComponent {
       // ignore
     }
 
-    this.audioBtnEl.addEventListener('click', () => {
+    addFastTapListener(this.audioBtnEl, () => {
       const isMuted = this.callbacks.onToggleAudio();
       this.updateAudioButtonState(isMuted);
     });
 
-    leaveBtn.addEventListener('click', () => {
+    addFastTapListener(leaveBtn, () => {
       this.callbacks.onLeaveGame();
     });
 
@@ -164,8 +190,8 @@ export class HUDComponent {
     const prevBtn = this.bottombarEl.querySelector('.pk-cycle-prev')!;
     const nextBtn = this.bottombarEl.querySelector('.pk-cycle-next')!;
 
-    prevBtn.addEventListener('click', () => this.callbacks.onCycleWeapon(-1));
-    nextBtn.addEventListener('click', () => this.callbacks.onCycleWeapon(1));
+    addFastTapListener(prevBtn as HTMLElement, () => this.callbacks.onCycleWeapon(-1));
+    addFastTapListener(nextBtn as HTMLElement, () => this.callbacks.onCycleWeapon(1));
   }
 
   public getTopBar(): HTMLElement {
@@ -196,6 +222,22 @@ export class HUDComponent {
     }
   }
 
+  public showToast(message: string, type: 'info' | 'success' | 'alert' = 'info') {
+    // Keep max 3 toasts visible at once to avoid screen clutter on mobile
+    while (this.toastContainer.children.length >= 3) {
+      this.toastContainer.firstElementChild?.remove();
+    }
+    const toast = document.createElement('div');
+    toast.className = `pk-hud-toast pk-toast-${type}`;
+    toast.textContent = message;
+    this.toastContainer.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transition = 'opacity 0.25s ease';
+      setTimeout(() => toast.remove(), 250);
+    }, 3200);
+  }
+
   public update(state: HUDState) {
     // 1. Update Match Timer
     const mins = Math.floor(state.remainingSeconds / 60);
@@ -206,9 +248,32 @@ export class HUDComponent {
     // Audio status
     this.updateAudioButtonState(state.isMuted);
 
+    // Network Status Badge
+    if (state.isOffline) {
+      this.currentRoomCode = null;
+      this.netBadgeEl.className = 'pk-net-status-badge';
+      this.netBadgeEl.innerHTML = `<span class="pk-net-dot">🤖</span><span class="pk-net-label">BOTS</span>`;
+      this.netBadgeEl.title = 'Offline Practice Match';
+    } else {
+      this.currentRoomCode = state.roomCode ?? null;
+      this.netBadgeEl.className = 'pk-net-status-badge is-online';
+      const pingText = typeof state.latencyMs === 'number' ? ` • ${state.latencyMs}ms` : '';
+      this.netBadgeEl.innerHTML = `<span class="pk-net-dot">🟢</span><span class="pk-net-label">${state.roomCode ? `ROOM ${state.roomCode}` : 'ONLINE'}${pingText}</span><span class="pk-net-copy-hint">📋</span>`;
+      this.netBadgeEl.title = state.roomCode ? `Room Code: ${state.roomCode} (Tap to copy)` : 'Connected to Online Match';
+    }
+
     // 2. Announcer Banner
     let bannerText = state.statusMessage;
-    if (state.announcementMessage) {
+    if (state.roundPhase === 'shooting') {
+      const shooterName = state.currentShooterName ?? (state.currentShooterIndex >= 0 ? `Player ${state.currentShooterIndex + 1}` : 'Shooter');
+      const timeTag = state.actionSecondsLeft !== undefined ? ` (⏱️ ${state.actionSecondsLeft}s)` : '';
+
+      if (state.isMyTurn) {
+        bannerText = `🎯 YOUR TURN TO FIRE!${timeTag}`;
+      } else {
+        bannerText = `⏳ Waiting for ${shooterName} to fire...${timeTag}`;
+      }
+    } else if (state.announcementMessage) {
       bannerText = state.announcementMessage;
     } else if (state.previousRoundMessage) {
       bannerText = state.previousRoundMessage;
@@ -286,7 +351,7 @@ export class HUDComponent {
         <span>${WEAPON_INFO[weapon].label}</span>
       `;
 
-      chip.addEventListener('click', () => {
+      addFastTapListener(chip, () => {
         this.callbacks.onSelectWeapon(weapon);
       });
 

@@ -1,4 +1,5 @@
 import type { GameOverState, UICallbacks } from './types';
+import { addFastTapListener } from './touchUtils';
 
 const CONFETTI_COUNT = 44;
 const CONFETTI_COLORS = [
@@ -119,11 +120,11 @@ export class GameOverModalComponent {
     const playAgainBtn = this.dialogEl.querySelector('.pk-btn-play-again')!;
     const mainMenuBtn = this.dialogEl.querySelector('.pk-btn-main-menu')!;
 
-    playAgainBtn.addEventListener('click', () => {
+    addFastTapListener(playAgainBtn as HTMLElement, () => {
       this.callbacks.onPlayAgain();
     });
 
-    mainMenuBtn.addEventListener('click', () => {
+    addFastTapListener(mainMenuBtn as HTMLElement, () => {
       this.callbacks.onLeaveGame();
     });
   }

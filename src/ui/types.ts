@@ -23,6 +23,8 @@ export interface HUDState {
   gameStatus: string;
   roundPhase: 'counting' | 'shooting' | 'duel' | 'waiting' | 'finished';
   currentShooterIndex: number;
+  currentShooterName?: string;
+  actionSecondsLeft?: number;
   isMyTurn: boolean;
   countNumber: number;
   statusMessage: string;
@@ -34,6 +36,10 @@ export interface HUDState {
   isOffline: boolean;
   isHost: boolean;
   isMuted: boolean;
+  roomCode?: string;
+  latencyMs?: number;
+  connectedCount?: number;
+  maxPlayers?: number;
 }
 
 export interface DuelState {
@@ -47,6 +53,8 @@ export interface DuelState {
   opponentSubmitted: boolean;
   opponentChoice?: RpsChoice | null;
   resultMessage?: string;
+  winnerName?: string;
+  isTie?: boolean;
 }
 
 export interface GameOverState {

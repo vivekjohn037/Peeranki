@@ -3,6 +3,7 @@
 // Tower destruction stages, Weapons arsenal & counters, RPS duels, and turn rules.
 
 import { PeerankiAudio } from '../audio/PeerankiAudio';
+import { addFastTapListener } from './touchUtils';
 
 export interface GuideTab {
   id: 'towers' | 'weapons' | 'duels' | 'rules';
@@ -114,14 +115,14 @@ export class HowToPlayModalComponent {
 
     // Event Listeners
     const closeBtn = this.dialogEl.querySelector('.pk-htp-close-btn')!;
-    closeBtn.addEventListener('click', () => this.close());
+    addFastTapListener(closeBtn as HTMLElement, () => this.close());
 
     const confirmBtn = this.dialogEl.querySelector('.pk-htp-confirm-btn')!;
-    confirmBtn.addEventListener('click', () => this.close());
+    addFastTapListener(confirmBtn as HTMLElement, () => this.close());
 
     const tabButtons = this.dialogEl.querySelectorAll<HTMLButtonElement>('.pk-htp-tab');
     tabButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
+      addFastTapListener(btn, () => {
         const tab = btn.getAttribute('data-tab') as 'towers' | 'weapons' | 'duels' | 'rules';
         if (tab) this.setTab(tab);
       });

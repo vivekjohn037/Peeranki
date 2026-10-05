@@ -27,7 +27,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  font-family: Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   color: var(--pk-text-primary);
   background-color: var(--pk-bg-base);
   background-image: radial-gradient(circle at 50% 10%, rgba(40, 120, 255, 0.12) 0%, transparent 60%),
@@ -124,6 +126,134 @@
   color: var(--pk-text-secondary);
 }
 
+/* Network status indicator badge in HUD topbar */
+.pk-net-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--pk-bg-surface-elevated);
+  border: 1px solid var(--pk-border-subtle);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--pk-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.pk-net-status-badge:hover {
+  border-color: var(--pk-accent-blue);
+  color: #ffffff;
+}
+
+.pk-net-status-badge.is-online {
+  border-color: rgba(56, 224, 141, 0.4);
+  color: #38e08d;
+}
+
+.pk-net-status-badge .pk-net-dot {
+  font-size: 9px;
+  line-height: 1;
+}
+
+.pk-net-copy-hint {
+  font-size: 11px;
+  opacity: 0.8;
+  margin-left: 2px;
+}
+
+/* Floating HUD Toast Notification Container */
+.pk-hud-toast-container {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 1000;
+  width: 90%;
+  max-width: 440px;
+}
+
+.pk-hud-toast {
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid var(--pk-accent-blue);
+  border-radius: 20px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: pk-toast-slide-down 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.pk-hud-toast.pk-toast-success {
+  border-color: #20a060;
+  color: #a7f3d0;
+}
+
+.pk-hud-toast.pk-toast-alert {
+  border-color: #ef4444;
+  color: #fca5a5;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.4);
+}
+
+/* Screen Damage Vignette when player is struck */
+.pk-damage-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  box-shadow: inset 0 0 90px rgba(239, 68, 68, 0.85);
+  animation: pk-vignette-fade 0.8s ease-out forwards;
+}
+
+@keyframes pk-vignette-fade {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Card damage flash */
+.pk-player-card.pk-card-damage-flash {
+  animation: pk-damage-flash 0.6s ease-out;
+}
+
+@keyframes pk-damage-flash {
+  0% {
+    background-color: rgba(239, 68, 68, 0.45);
+    border-color: #ef4444;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.7);
+  }
+  50% {
+    background-color: rgba(239, 68, 68, 0.2);
+  }
+  100% {
+    background-color: var(--pk-bg-surface);
+  }
+}
+
+@keyframes pk-toast-slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .pk-topbar-actions {
   flex: 1;
   display: flex;
@@ -202,18 +332,35 @@
   background: rgba(16, 20, 24, 0.6);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   font-size: 13px;
+  line-height: 1.35;
   font-weight: 600;
   color: var(--pk-text-secondary);
   flex-shrink: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  word-break: break-word;
 }
 
 .pk-announcer-banner.pk-alert-turn {
-  background: rgba(40, 120, 255, 0.2);
-  color: #7ab3ff;
-  border-bottom-color: rgba(40, 120, 255, 0.4);
+  background: rgba(40, 120, 255, 0.35);
+  color: #ffffff;
+  border-bottom: 2px solid #38bdf8;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  animation: pk-banner-turn-pulse 1.2s infinite alternate;
+}
+
+@keyframes pk-banner-turn-pulse {
+  0% {
+    background: rgba(40, 120, 255, 0.25);
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+  }
+  100% {
+    background: rgba(40, 120, 255, 0.5);
+    box-shadow: 0 0 20px rgba(56, 189, 248, 0.55);
+  }
 }
 
 .pk-announcer-banner.pk-alert-notice {
@@ -339,13 +486,18 @@
   width: 100%;
   margin-bottom: 4px;
   font-size: 11px;
+  line-height: 1.2;
   color: var(--pk-text-muted);
   gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .pk-card-name {
-  flex: 1;
-  font-size: 12px;
+  flex: 1 1 0%;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.25;
   font-weight: 700;
   color: var(--pk-text-primary);
   white-space: nowrap;
@@ -356,9 +508,11 @@
 
 .pk-card-role-tag {
   font-size: 10px;
+  line-height: 1;
   font-weight: 700;
   color: var(--pk-accent-gold);
   flex-shrink: 0;
+  white-space: nowrap;
   text-align: right;
 }
 
@@ -399,9 +553,14 @@
 /* Card Footer */
 .pk-card-stage-name {
   font-size: 11px;
+  line-height: 1.2;
   font-weight: 600;
   color: var(--pk-text-secondary);
   margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .pk-card-weapons-row {
@@ -420,24 +579,28 @@
 
 .pk-card-points {
   font-size: 10px;
+  line-height: 1.2;
   font-weight: 600;
   color: var(--pk-accent-gold);
   margin-top: 3px;
+  white-space: nowrap;
 }
 
 .pk-target-hint {
   position: absolute;
-  bottom: 6px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: -8px;
+  right: -4px;
   background: var(--pk-accent-green);
   color: #ffffff;
-  font-size: 9px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
   white-space: nowrap;
   pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  animation: pk-pulse-target 1s infinite alternate;
+  z-index: 10;
 }
 
 /* ==============================================================
@@ -721,6 +884,99 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--pk-text-secondary);
+  min-height: 22px;
+}
+
+/* Duel Versus Bar */
+.pk-duel-versus-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--pk-bg-surface-elevated);
+  border: 1px solid var(--pk-border-subtle);
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.pk-duel-fighter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.pk-fighter-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--pk-text-primary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pk-fighter-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--pk-text-secondary);
+  transition: all 0.2s ease;
+}
+
+.pk-duel-fighter.is-ready .pk-fighter-badge {
+  background: rgba(32, 160, 96, 0.25);
+  color: #38e08d;
+  border: 1px solid rgba(56, 224, 141, 0.4);
+  box-shadow: 0 0 10px rgba(56, 224, 141, 0.25);
+}
+
+.pk-duel-vs-divider {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--pk-accent-gold);
+  padding: 0 4px;
+}
+
+/* Duel Reveal Clash Box */
+.pk-duel-clash-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  margin-bottom: 14px;
+  padding: 12px;
+  background: rgba(10, 16, 24, 0.7);
+  border-radius: 12px;
+  border: 1px solid var(--pk-border-subtle);
+}
+
+.pk-clash-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.pk-clash-icon {
+  font-size: 38px;
+  animation: pk-pop-in 0.22s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+
+.pk-clash-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--pk-text-secondary);
+}
+
+.pk-clash-vs-text {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--pk-accent-gold);
 }
 
 /* ==============================================================
@@ -934,7 +1190,7 @@
   transform: scale(0.96);
 }
 
-/* Touch target expansion via transparent padding (meets >=44px/48px standard with zero margin bloat) */
+/* Touch-friendly button hit configuration (direct touch targets without overlapping pseudo-element overlays) */
 .pk-btn-icon,
 .pk-btn-leave,
 .pk-weapon-cycle-btn,
@@ -945,23 +1201,22 @@
 .pk-htp-close-btn,
 .pk-htp-tab {
   position: relative;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.pk-btn-icon::after,
-.pk-btn-leave::after,
-.pk-weapon-cycle-btn::after,
-.pk-weapon-chip::after,
-.pk-rps-choice-btn::after,
-.pk-btn-primary::after,
-.pk-btn-secondary::after,
-.pk-htp-close-btn::after,
-.pk-htp-tab::after {
-  content: '';
-  position: absolute;
-  inset: -6px;
-  border-radius: inherit;
-  background: transparent;
-  pointer-events: auto;
+/* Ensure inner contents (icons, emojis, labels) pass pointer events to the button container */
+.pk-weapon-chip *,
+.pk-rps-choice-btn *,
+.pk-btn-icon *,
+.pk-btn-leave *,
+.pk-btn-primary *,
+.pk-btn-secondary *,
+.pk-htp-tab *,
+.pk-htp-close-btn * {
+  pointer-events: none;
 }
 
 /* ==============================================================
@@ -970,11 +1225,12 @@
 
 /* --- PORTRAIT ORIENTATION (Mobile phones held vertically) --- */
 #game-ui-root.pk-orientation-portrait .pk-board-grid {
-  grid-template-columns: repeat(auto-fit, minmax(130px, 165px));
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   justify-content: center;
   align-content: center;
   gap: 10px;
-  max-width: 440px;
+  width: 100%;
+  max-width: 100%;
 }
 
 #game-ui-root.pk-orientation-portrait .pk-player-card {
@@ -1004,11 +1260,12 @@
 
 /* --- LANDSCAPE ORIENTATION (Mobile phones held horizontally or Desktop) --- */
 #game-ui-root.pk-orientation-landscape .pk-board-grid {
-  grid-template-columns: repeat(auto-fit, minmax(130px, 160px));
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   justify-content: center;
   align-content: center;
   gap: 12px;
-  max-width: 920px;
+  width: 100%;
+  max-width: 100%;
 }
 
 #game-ui-root.pk-orientation-landscape .pk-player-card {
@@ -1527,8 +1784,78 @@
   font-size: 16px;
 }
 
-/* Mobile responsive adjustments */
+/* Mobile responsive adjustments for Android and small touch screens */
 @media (max-width: 640px) {
+  .pk-hud-topbar {
+    padding: 6px 8px;
+    gap: 6px;
+    min-height: 48px;
+  }
+  .pk-topbar-title {
+    display: none;
+  }
+  .pk-topbar-meta {
+    gap: 8px;
+    flex-shrink: 1;
+  }
+  .pk-match-round-text {
+    display: none;
+  }
+  .pk-match-timer-badge {
+    font-size: 13px;
+    gap: 4px;
+  }
+  .pk-net-status-badge {
+    padding: 2px 6px;
+    font-size: 10px;
+    gap: 3px;
+  }
+  .pk-topbar-actions {
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .pk-btn-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+  }
+  .pk-btn-leave {
+    min-height: 36px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+  .pk-action-prompt-row {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 2px;
+  }
+  .pk-action-prompt-text {
+    font-size: 12px;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
+  }
+  .pk-action-prompt-subtext {
+    font-size: 11px;
+    color: var(--pk-text-secondary);
+  }
+  .pk-card-name {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  .pk-card-stage-name {
+    font-size: 10px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .pk-card-points {
+    font-size: 9px;
+    line-height: 1.1;
+  }
   .pk-howtoplay-dialog {
     max-height: 94vh;
   }
@@ -1548,5 +1875,134 @@
   .pk-htp-duel-vs {
     display: none;
   }
+}
+
+/* ==============================================================
+   7. EXIT CONFIRMATION MODAL & WARNING STYLES
+   ============================================================== */
+.pk-exit-dialog {
+  background: var(--pk-bg-surface);
+  border: 1px solid var(--pk-border-strong);
+  border-radius: 16px;
+  padding: 22px 20px;
+  width: 90%;
+  max-width: 400px;
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75);
+  animation: pk-pop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
+  position: relative;
+  z-index: 1001;
+}
+
+.pk-exit-icon-badge {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.15);
+  border: 2px solid rgba(239, 68, 68, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+}
+
+.pk-exit-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 10px;
+  letter-spacing: 0.5px;
+}
+
+.pk-exit-warning-card {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.pk-exit-warning-card span.pk-warning-symbol {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.pk-exit-warning-text {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #fca5a5;
+  margin: 0;
+  font-weight: 500;
+}
+
+.pk-exit-desc {
+  font-size: 13px;
+  color: var(--pk-text-secondary);
+  line-height: 1.45;
+  margin-bottom: 18px;
+}
+
+.pk-exit-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.pk-btn-exit-cancel {
+  flex: 1;
+  min-height: 44px;
+  background: var(--pk-bg-surface-elevated);
+  border: 1px solid var(--pk-border-subtle);
+  border-radius: 10px;
+  color: var(--pk-text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pk-btn-exit-cancel:hover {
+  background: var(--pk-bg-surface-hover);
+}
+
+.pk-btn-exit-cancel:active {
+  transform: scale(0.96);
+}
+
+.pk-btn-exit-confirm {
+  flex: 1;
+  min-height: 44px;
+  background: #dc2626;
+  border: 1px solid #ef4444;
+  border-radius: 10px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
+  transition: all 0.15s ease;
+}
+
+.pk-btn-exit-confirm:hover {
+  background: #b91c1c;
+}
+
+.pk-btn-exit-confirm:active {
+  transform: scale(0.96);
+}
+
+.pk-exit-closed-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
 }
 

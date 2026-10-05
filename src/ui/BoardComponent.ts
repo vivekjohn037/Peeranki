@@ -81,10 +81,11 @@ export class BoardComponent {
 
         const avatarImg = document.createElement('img');
         avatarImg.className = 'pk-card-avatar-img';
-        avatarImg.style.width = '24px';
-        avatarImg.style.height = '24px';
+        avatarImg.style.width = '22px';
+        avatarImg.style.height = '22px';
+        avatarImg.style.flexShrink = '0';
         avatarImg.style.borderRadius = '50%';
-        avatarImg.style.marginRight = '6px';
+        avatarImg.style.marginRight = '5px';
         avatarImg.style.verticalAlign = 'middle';
         avatarImg.style.display = 'inline-block';
 
@@ -310,6 +311,20 @@ export class BoardComponent {
       if (!players.some((p) => p.id === id)) {
         view.card.remove();
         this.cards.delete(id);
+      }
+    }
+  }
+
+  public triggerDamageFlash(targetIndex: number) {
+    for (const view of this.cards.values()) {
+      if (view.targetIndex === targetIndex) {
+        view.card.classList.remove('pk-card-damage-flash');
+        void view.card.offsetWidth;
+        view.card.classList.add('pk-card-damage-flash');
+        view.towerImg.classList.remove('pk-tower-shake');
+        void view.towerImg.offsetWidth;
+        view.towerImg.classList.add('pk-tower-shake');
+        break;
       }
     }
   }

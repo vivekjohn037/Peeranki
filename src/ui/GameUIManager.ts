@@ -193,6 +193,27 @@ export class GameUIManager {
     }
   }
 
+  public showToast(message: string, type: 'info' | 'success' | 'alert' = 'info') {
+    this.hud?.showToast(message, type);
+  }
+
+  public triggerDamageFlash(targetIndex: number, isLocalPlayer = false) {
+    this.board?.triggerDamageFlash(targetIndex);
+    if (isLocalPlayer) {
+      this.triggerDamageVignette();
+    }
+  }
+
+  public triggerDamageVignette() {
+    if (!this.rootEl) return;
+    const vignette = document.createElement('div');
+    vignette.className = 'pk-damage-vignette';
+    this.rootEl.appendChild(vignette);
+    setTimeout(() => {
+      vignette.remove();
+    }, 850);
+  }
+
   public unmount() {
     if (this.rafId !== null) {
       window.cancelAnimationFrame(this.rafId);
