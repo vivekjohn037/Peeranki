@@ -36,6 +36,47 @@ export const RPS_BEATS: Record<RpsChoice, RpsChoice> = {
 
 export const MATCH_DURATIONS = [3, 5, 10, 15] as const;
 
+export interface CountablePlayer {
+  stage: number;
+  alive: boolean;
+  connected?: boolean;
+}
+
+/** Return the zero-based player selected by a one-based tower count (1–10). */
+export function getCountedPlayerIndex(
+  players: readonly CountablePlayer[],
+  startIndex: number,
+  count: number,
+): number {
+  if (!Number.isInteger(count) || count < 1 || count > 10) return -1;
+  const alive = players
+    .map((player, index) => ({ player, index }))
+    .filter(({ player }) => player.alive && player.connected !== false && player.stage < 3);
+  if (alive.length === 0) return -1;
+
+  const startPosition = alive.findIndex(({ index }) => index === startIndex);
+  const rotated = startPosition < 0
+    ? alive
+    : [...alive.slice(startPosition), ...alive.slice(0, startPosition)];
+  const sequence: number[] = [];
+  rotated.forEach(({ player, index }) => {
+    const towers = player.stage === 1 ? 2 : player.stage === 0 || player.stage === 2 ? 1 : 0;
+    for (let tower = 0; tower < towers; tower += 1) sequence.push(index);
+  });
+  if (sequence.length === 0) return -1;
+  return sequence[(count - 1) % sequence.length] ?? -1;
+}
+
+export function hasAllWeapons(weapons: readonly WeaponType[]): boolean {
+  return WEAPON_ORDER.every((weapon) => weapons.includes(weapon));
+}
+
+export function findMatchWinners<T extends { weapons: readonly WeaponType[] }>(players: readonly T[]): T[] {
+  if (players.length === 0) return [];
+  const highestCount = Math.max(...players.map((player) => player.weapons.length));
+  return players.filter((player) => player.weapons.length === highestCount);
+}
+
 export function resolveRpsWinner(c1: RpsChoice, c2: RpsChoice): 'first' | 'second' | 'tie' {
   if (c1 === c2) return 'tie';
   return RPS_BEATS[c1] === c2 ? 'first' : 'second';
@@ -92,7 +133,8 @@ export function calculateHitResult(
   const hasShield = target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound;
 
   if (weapon === 'hook') {
-    if (hasShield) {
+    // Hook removes the Shield itself, even if Peeranki disabled it for this round.
+    if (target.weapons.includes('shield')) {
       return {
         action: 'shield_destroyed_permanently',
         shieldRemoved: true,

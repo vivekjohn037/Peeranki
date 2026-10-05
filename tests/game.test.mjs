@@ -8,6 +8,9 @@ import {
   resolveRpsWinner,
   calculateHitResult,
   MATCH_DURATIONS,
+  getCountedPlayerIndex,
+  hasAllWeapons,
+  findMatchWinners,
 } from '../src/game/rules.ts';
 import {
   createPrivateRoom,
@@ -119,12 +122,56 @@ test('2. COMBAT & SHIELD DAMAGE MECHANICS', async (t) => {
     assert.equal(res.alive, true);
   });
 
+  await t.test('Hook strips a shield even after Peeranki disabled it this round', () => {
+    const target = { stage: 1, alive: true, weapons: ['gun', 'shield'], shieldDisabledRound: 1 };
+    const res = calculateHitResult(target, 'hook', 1);
+    assert.equal(res.action, 'shield_destroyed_permanently');
+    assert.equal(res.shieldRemoved, true);
+    assert.equal(res.newStage, 1);
+    assert.equal(res.alive, true);
+  });
+
   await t.test('Hook fails harmlessly if target has no shield', () => {
     const target = { stage: 0, alive: true, weapons: ['gun'], shieldDisabledRound: -1 };
     const res = calculateHitResult(target, 'hook', 1);
     assert.equal(res.action, 'no_shield_for_hook');
     assert.equal(res.shieldRemoved, false);
   });
+});
+
+test('COUNTING SELECTS ONLY LIVING PLAYERS’ TOWERS AND STOPS AT TEN', () => {
+  const players = [
+    { stage: 0, alive: true, connected: true }, // one tower
+    { stage: 1, alive: true, connected: true }, // two towers
+    { stage: 2, alive: true, connected: true }, // one tower
+    { stage: 3, alive: false, connected: true },
+    { stage: 0, alive: true, connected: false },
+  ];
+
+  assert.deepEqual(
+    Array.from({ length: 4 }, (_, index) => getCountedPlayerIndex(players, 0, index + 1)),
+    [0, 1, 1, 2],
+  );
+  assert.deepEqual(
+    Array.from({ length: 4 }, (_, index) => getCountedPlayerIndex(players, 1, index + 1)),
+    [1, 1, 2, 0],
+  );
+  assert.equal(getCountedPlayerIndex(players, 0, 10), 1);
+  assert.equal(getCountedPlayerIndex(players, 0, 11), -1);
+  assert.equal(getCountedPlayerIndex(players, 0, 0), -1);
+  assert.equal(getCountedPlayerIndex([], 0, 1), -1);
+});
+
+test('MATCH SCORE KEEPS TIES AND RECOGNIZES THE FULL WEAPON SET', () => {
+  const allWeapons = ['gun', 'peeranki', 'shield', 'hook', 'doublePeeranki'];
+  assert.equal(hasAllWeapons(allWeapons), true);
+  assert.equal(hasAllWeapons(allWeapons.slice(0, 4)), false);
+  const players = [
+    { name: 'A', weapons: ['gun', 'peeranki'] },
+    { name: 'B', weapons: ['gun', 'peeranki'] },
+    { name: 'C', weapons: ['gun'] },
+  ];
+  assert.deepEqual(findMatchWinners(players).map((player) => player.name), ['A', 'B']);
 });
 
 test('3. ROCK-PAPER-SCISSORS DUEL ENGINE', async (t) => {
@@ -220,11 +267,19 @@ test('6. ROOM ACTION EVENTS REACH PEERS WITHOUT ECHOING TO THE SENDER', async ()
     sessionId: 'player-three-session',
     request: { nonce: 'shot-1', shooterId: 3, weapon: 'gun', targetIds: [1] },
   };
+  const countTick = { count: 6, shooterId: 2, round: 4 };
 
   try {
     await sender.sendEvent('player_action_request', actionRequest);
-    assert.deepEqual(receivedByHost, [{ event: 'player_action_request', payload: actionRequest }]);
-    assert.deepEqual(receivedByOtherPlayer, [{ event: 'player_action_request', payload: actionRequest }]);
+    await sender.sendEvent('game_count_tick', countTick);
+    assert.deepEqual(receivedByHost, [
+      { event: 'player_action_request', payload: actionRequest },
+      { event: 'game_count_tick', payload: countTick },
+    ]);
+    assert.deepEqual(receivedByOtherPlayer, [
+      { event: 'player_action_request', payload: actionRequest },
+      { event: 'game_count_tick', payload: countTick },
+    ]);
     assert.deepEqual(receivedBySender, []);
   } finally {
     await Promise.all([host.unsubscribe(), otherPlayer.unsubscribe(), sender.unsubscribe()]);

@@ -69,7 +69,7 @@ const STORAGE_PREFIX = 'peeranki_room_';
 const mockRoomsMemory = new Map<string, MockRoomRecord>();
 const listenersByRoom = new Map<string, Set<(state: any) => void>>();
 const roomEventListenersByRoom = new Map<string, Set<(event: string, payload: any) => void>>();
-const ROOM_EVENT_NAMES = new Set(['player_action_request', 'duel_choice_request']);
+const ROOM_EVENT_NAMES = new Set(['player_action_request', 'duel_choice_request', 'game_count_tick']);
 const realtimeChannelsByRoom = new Map<string, Set<{ channel: any; getStatus: () => string }>>();
 
 let broadcastChannel: BroadcastChannel | null = null;
