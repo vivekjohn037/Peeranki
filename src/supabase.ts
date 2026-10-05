@@ -70,6 +70,7 @@ const mockRoomsMemory = new Map<string, MockRoomRecord>();
 const listenersByRoom = new Map<string, Set<(state: any) => void>>();
 const roomEventListenersByRoom = new Map<string, Set<(event: string, payload: any) => void>>();
 const ROOM_EVENT_NAMES = new Set(['player_action_request', 'duel_choice_request']);
+const realtimeChannelsByRoom = new Map<string, Set<{ channel: any; getStatus: () => string }>>();
 
 let broadcastChannel: BroadcastChannel | null = null;
 try {
@@ -551,6 +552,7 @@ export async function saveGameState(
     const client = configuredClient();
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8_000);
+    const updatedAt = new Date().toISOString();
     try {
       const { error } = await client
         .from('game_states')
@@ -560,13 +562,42 @@ export async function saveGameState(
           current_shooter: currentShooter,
           countdown: countNumber,
           game_status: gameStatus,
-          updated_at: new Date().toISOString(),
+          updated_at: updatedAt,
         })
         .eq('room_code', cleanCode)
         .abortSignal(controller.signal);
 
       if (error) {
         throw error;
+      }
+
+      // Postgres change feeds can be disabled for game_states or delayed by the
+      // project's Realtime configuration. Broadcast the host's canonical state
+      // directly to every connected peer as well, while keeping the database
+      // update as the durable source of truth.
+      const subscribers = realtimeChannelsByRoom.get(cleanCode);
+      const publisher = subscribers && [...subscribers].find((entry) => entry.getStatus() === 'SUBSCRIBED');
+      if (publisher) {
+        try {
+          const status = await publisher.channel.send({
+            type: 'broadcast',
+            event: 'game_state_update',
+            payload: {
+              room_code: cleanCode,
+              players,
+              max_players: maxPlayers,
+              current_shooter: currentShooter,
+              countdown: countNumber,
+              game_status: gameStatus,
+              updated_at: updatedAt,
+            },
+          });
+          if (status !== 'ok') {
+            console.warn(`[Peeranki] Realtime game-state broadcast returned ${status}; database change feed remains available as fallback.`);
+          }
+        } catch (broadcastError) {
+          console.warn('[Peeranki] Realtime game-state broadcast failed; database change feed remains available as fallback:', broadcastError);
+        }
       }
     } catch (err) {
       throw new Error(`Supabase could not save game state: ${errorMessage(err)}`, { cause: err });
@@ -748,6 +779,9 @@ export function subscribeToGameState(
             callback(payload.new ?? null);
           },
         )
+        .on('broadcast', { event: 'game_state_update' }, ({ payload }) => {
+          callback(payload ?? null);
+        })
         .on('broadcast', { event: 'player_action_request' }, ({ payload }) => {
           onRoomEvent?.('player_action_request', payload);
         })
@@ -760,6 +794,9 @@ export function subscribeToGameState(
             console.error('[Peeranki] Supabase realtime error:', error);
           }
         });
+      if (!realtimeChannelsByRoom.has(cleanCode)) realtimeChannelsByRoom.set(cleanCode, new Set());
+      const subscription = { channel: realChannel, getStatus: () => realtimeStatus };
+      realtimeChannelsByRoom.get(cleanCode)!.add(subscription);
     } catch (err) {
       console.error('[Peeranki] Failed to subscribe to Supabase realtime:', err);
     }
@@ -810,6 +847,13 @@ export function subscribeToGameState(
         roomEventListenersByRoom.get(cleanCode)?.delete(onRoomEvent);
       }
       if (realChannel) {
+        const subscriptions = realtimeChannelsByRoom.get(cleanCode);
+        if (subscriptions) {
+          for (const subscription of subscriptions) {
+            if (subscription.channel === realChannel) subscriptions.delete(subscription);
+          }
+          if (subscriptions.size === 0) realtimeChannelsByRoom.delete(cleanCode);
+        }
         try {
           await realChannel.unsubscribe();
         } catch (err) {
