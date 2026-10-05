@@ -4466,7 +4466,8 @@ if (offlineMode) {
     void this.sendRoomEvent('duel_choice_request', { sessionId, request }).catch((error) => {
       if (player.duelChoiceRequest?.nonce === request.nonce) player.duelChoiceRequest = null;
       console.error('[Peeranki] Could not send duel choice:', error);
-      this.statusText?.setText('Could not send your choice. Check your connection and try again.');
+      const reason = error instanceof Error ? error.message : String(error);
+      this.statusText?.setText(`Choice failed: ${reason.slice(0, 100)}`);
       this.renderDuelControls();
     });
   }

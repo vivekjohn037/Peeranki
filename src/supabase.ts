@@ -766,7 +766,9 @@ export function subscribeToGameState(
     try {
       const client = configuredClient();
       realChannel = client
-        .channel(`peeranki-room-${cleanCode}`, { config: { broadcast: { self: false, ack: true } } })
+        .channel(`peeranki-room-${cleanCode}`, {
+          config: { broadcast: { self: false, ack: true }, private: false },
+        })
         .on(
           'postgres_changes',
           {
@@ -816,26 +818,35 @@ export function subscribeToGameState(
         if (!realChannel) {
           throw new Error('The online room connection is unavailable. Please reconnect and try again.');
         }
-        const readyDeadline = Date.now() + 4_000;
-        while (realtimeStatus !== 'SUBSCRIBED' && Date.now() < readyDeadline) {
-          await new Promise((resolve) => window.setTimeout(resolve, 100));
-        }
-        if (realtimeStatus !== 'SUBSCRIBED') {
-          throw new Error(`The online room connection is not ready (${realtimeStatus}). Please reconnect and try again.`);
+        let lastError: unknown;
+        if (realtimeStatus === 'SUBSCRIBED') {
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+              const status = await realChannel.send({ type: 'broadcast', event, payload });
+              if (status === 'ok') return;
+              lastError = new Error(`Realtime returned ${status}`);
+            } catch (err) {
+              lastError = err;
+            }
+            if (attempt === 0) {
+              await new Promise((resolve) => window.setTimeout(resolve, 150));
+            }
+          }
         }
 
-        let lastError: unknown;
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          try {
-            const status = await realChannel.send({ type: 'broadcast', event, payload });
-            if (status === 'ok') return;
-            lastError = new Error(`Realtime returned ${status}`);
-          } catch (err) {
-            lastError = err;
-          }
-          if (attempt < 2) {
-            await new Promise((resolve) => window.setTimeout(resolve, 150 * (attempt + 1)));
-          }
+        // Mobile browsers can keep HTTP alive while suspending or dropping the
+        // Realtime WebSocket. Retry room actions through Supabase's HTTP
+        // Broadcast endpoint without waiting for the socket to reconnect.
+        try {
+          const result = await realChannel.httpSend(event, payload, { timeout: 5_000 });
+          if (result.success) return;
+          lastError = new Error(`Realtime HTTP returned ${result.status}: ${result.error}`);
+        } catch (err) {
+          lastError = err;
+        }
+
+        if (realtimeStatus !== 'SUBSCRIBED') {
+          throw new Error(`The room connection is unavailable (${realtimeStatus}). ${errorMessage(lastError)}`, { cause: lastError });
         }
         throw new Error(`Supabase could not send the room action: ${errorMessage(lastError)}`, { cause: lastError });
       }
