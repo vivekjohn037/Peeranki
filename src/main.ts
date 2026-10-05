@@ -3196,6 +3196,7 @@ class GameScene extends Phaser.Scene {
   private realtimeChannel: any;
   private applyingRemoteState = false;
   private initialized = false;
+  private remoteStateRefreshInFlight = false;
   private gameFinished = false;
   private victoryPlayed = false;
   private roundPhase: 'counting' | 'shooting' | 'duel' | 'waiting' | 'finished' = 'waiting';
@@ -3477,18 +3478,24 @@ if (offlineMode) {
 
   private startLatencyPing() {
     this.pingTimer = this.time.addEvent({
-      delay: 4500,
+      // Realtime remains the fast path. Polling is a lightweight recovery path
+      // for mobile networks that suspend or drop WebSocket subscriptions.
+      delay: amHost() ? 4500 : 1500,
       loop: true,
       callback: async () => {
-        if (this.gameFinished || offlineMode) return;
+        if (this.gameFinished || offlineMode || this.remoteStateRefreshInFlight) return;
+        this.remoteStateRefreshInFlight = true;
         const t0 = performance.now();
         try {
-          await fetchGameRoom(roomCode);
+          const room = await fetchGameRoom(roomCode);
+          if (!amHost() && room) this.applyRemoteGameState(room);
           const rtt = Math.round(performance.now() - t0);
           this.currentLatencyMs = Math.max(12, Math.min(999, rtt));
           this.scheduleUiSync();
         } catch {
           // ignore
+        } finally {
+          this.remoteStateRefreshInFlight = false;
         }
       },
     });

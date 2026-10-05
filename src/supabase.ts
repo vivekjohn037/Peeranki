@@ -813,18 +813,31 @@ export function subscribeToGameState(
       }
 
       if (hasAnySupabaseConfiguration) {
-        if (!realChannel || realtimeStatus !== 'SUBSCRIBED') {
-          throw new Error(`The online room connection is not ready (${realtimeStatus}). Please try again.`);
+        if (!realChannel) {
+          throw new Error('The online room connection is unavailable. Please reconnect and try again.');
         }
-        try {
-          const status = await realChannel.send({ type: 'broadcast', event, payload });
-          if (status !== 'ok') {
-            throw new Error(`Realtime returned ${status}`);
+        const readyDeadline = Date.now() + 4_000;
+        while (realtimeStatus !== 'SUBSCRIBED' && Date.now() < readyDeadline) {
+          await new Promise((resolve) => window.setTimeout(resolve, 100));
+        }
+        if (realtimeStatus !== 'SUBSCRIBED') {
+          throw new Error(`The online room connection is not ready (${realtimeStatus}). Please reconnect and try again.`);
+        }
+
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const status = await realChannel.send({ type: 'broadcast', event, payload });
+            if (status === 'ok') return;
+            lastError = new Error(`Realtime returned ${status}`);
+          } catch (err) {
+            lastError = err;
           }
-        } catch (err) {
-          throw new Error(`Supabase could not send the room action: ${errorMessage(err)}`, { cause: err });
+          if (attempt < 2) {
+            await new Promise((resolve) => window.setTimeout(resolve, 150 * (attempt + 1)));
+          }
         }
-        return;
+        throw new Error(`Supabase could not send the room action: ${errorMessage(lastError)}`, { cause: lastError });
       }
 
       const peerListeners = roomEventListenersByRoom.get(cleanCode);
