@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import './style.css';
+import { injectSpeedInsights } from '@vercel/speed-insights';
 import { GameUIManager } from './ui/GameUIManager';
 import type { HUDState, UIPlayer, DuelState, GameOverState } from './ui/types';
 import { PeerankiAudio } from './audio/PeerankiAudio';
@@ -26,6 +27,10 @@ import {
   cleanupStalePlayers,
   supabase,
 } from './supabase';
+
+// Initialize Vercel Speed Insights
+injectSpeedInsights();
+
 
 interface Player {
   id: number;
