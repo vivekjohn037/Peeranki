@@ -4979,7 +4979,8 @@ private async requestHostAction(targetIds: number[]) {
   } catch (error) {
     if (shooter.actionRequest?.nonce === request.nonce) shooter.actionRequest = null;
     console.error('[Peeranki] Could not send shot to the host:', error);
-    this.statusText?.setText('Could not send your shot. Check your connection and try again.');
+    const reason = error instanceof Error ? error.message : String(error);
+    this.statusText?.setText(`Shot failed: ${reason.slice(0, 100)}`);
     this.scheduleUiSync();
   }
 }
@@ -5040,6 +5041,15 @@ private async processPendingAction() {
 }
 
 private shootPlayer(index: number) {
+  if (!offlineMode && !this.gameFinished &&
+      (this.roundPhase !== 'shooting' || !shootingDeadlineAt)) {
+    this.statusText?.setText('Syncing the current turn. Please try again in a moment.');
+    void fetchGameRoom(roomCode)
+      .then((room) => { if (room) this.applyRemoteGameState(room); })
+      .catch((error) => console.error('[Peeranki] Could not refresh the current turn:', error));
+    return;
+  }
+
   if (
     this.applyingRemoteState ||
     this.gameFinished ||
