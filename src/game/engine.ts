@@ -13,6 +13,35 @@ export interface EnginePlayer extends TargetState {
   eliminationPoints: number;
 }
 
+export type GamePhase = 'waiting' | 'counting' | 'shooting' | 'duel' | 'finished';
+
+/** Mutable match state owned by the engine; scenes render it and dispatch actions. */
+export interface GameState<TPlayer extends EnginePlayer> {
+  players: TPlayer[];
+  phase: GamePhase;
+  currentCount: number;
+  currentShooterIndex: number;
+  round: number;
+  countingStartIndex: number;
+  nextCountingStartIndex: number;
+  roundWinnerId: number;
+  matchOver: boolean;
+}
+
+export function createGameState<TPlayer extends EnginePlayer>(players: TPlayer[] = []): GameState<TPlayer> {
+  return {
+    players,
+    phase: 'waiting',
+    currentCount: 0,
+    currentShooterIndex: -1,
+    round: 1,
+    countingStartIndex: -1,
+    nextCountingStartIndex: -1,
+    roundWinnerId: 0,
+    matchOver: false,
+  };
+}
+
 export interface ResolvedHit {
   targetIndex: number;
   weapon: WeaponType;
