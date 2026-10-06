@@ -12,7 +12,9 @@ import {
   hasAllWeapons,
   findMatchWinners,
 } from '../src/game/rules.ts';
+import { chooseBotAction, resolvePlayerAction } from '../src/game/engine.ts';
 import {
+  broadcastRoomStateDelta,
   createPrivateRoom,
   joinRoom,
   findOrCreateRandomRoom,
@@ -174,6 +176,69 @@ test('MATCH SCORE KEEPS TIES AND RECOGNIZES THE FULL WEAPON SET', () => {
   assert.deepEqual(findMatchWinners(players).map((player) => player.name), ['A', 'B']);
 });
 
+test('HUMAN AND BOT ACTIONS USE THE SAME VALIDATED RESOLVER', () => {
+  const makePlayer = (id, options = {}) => ({
+    id,
+    stage: 0,
+    alive: true,
+    connected: true,
+    weapons: ['gun'],
+    shieldDisabledRound: -1,
+    eliminationPoints: 0,
+    ...options,
+  });
+  const players = [
+    makePlayer(1, { weapons: ['gun', 'shield', 'hook', 'doublePeeranki'] }),
+    makePlayer(2, { weapons: ['gun', 'shield'], shieldDisabledRound: 3 }),
+    makePlayer(3, { weapons: ['gun', 'shield'] }),
+  ];
+
+  const botAction = chooseBotAction(players, 0, 3, () => 0);
+  assert.deepEqual(botAction, { shooterId: 1, weapon: 'hook', targetIds: [2] });
+  const botResult = resolvePlayerAction(players, botAction, 0, 3);
+  assert.equal(botResult.accepted, true);
+  assert.equal(players[1].weapons.includes('shield'), false, 'Hook strips even a currently disabled Shield');
+
+  const humanResult = resolvePlayerAction(players, {
+    shooterId: 1,
+    weapon: 'doublePeeranki',
+    targetIds: [2, 3],
+  }, 0, 3);
+  assert.equal(humanResult.accepted, true);
+  assert.deepEqual(humanResult.hits.map((hit) => hit.weapon), ['peeranki', 'gun']);
+  assert.equal(players[1].alive, false, 'the first Double Peeranki hit applies Peeranki rules');
+  assert.equal(players[2].stage, 0, 'the second Gun is blocked by that target’s active Shield');
+
+  const duplicateTargetResult = resolvePlayerAction(players, {
+    shooterId: 1,
+    weapon: 'doublePeeranki',
+    targetIds: [3, 3],
+  }, 0, 3);
+  assert.deepEqual(duplicateTargetResult, { accepted: false, reason: 'invalid_targets' });
+});
+
+test('OFFLINE BOT ACTIONS STAY LEGAL FOR EVERY SUPPORTED PLAYER COUNT', () => {
+  for (let playerCount = 3; playerCount <= 10; playerCount += 1) {
+    const players = Array.from({ length: playerCount }, (_, index) => ({
+      id: index + 1,
+      stage: index % 3,
+      alive: true,
+      connected: true,
+      weapons: index === playerCount - 1 ? ['gun', 'peeranki', 'shield', 'hook', 'doublePeeranki'] : ['gun'],
+      shieldDisabledRound: -1,
+      eliminationPoints: 0,
+    }));
+    const botIndex = playerCount - 1;
+    const action = chooseBotAction(players, botIndex, 1, () => 0);
+    assert.ok(action, `${playerCount} player game supplies a bot action`);
+    assert.equal(action.shooterId, playerCount);
+    assert.equal(action.targetIds.includes(playerCount), false);
+    assert.equal(new Set(action.targetIds).size, action.targetIds.length);
+    assert.equal(action.targetIds.length, action.weapon === 'doublePeeranki' ? 2 : 1);
+    assert.equal(resolvePlayerAction(players, action, botIndex, 1).accepted, true);
+  }
+});
+
 test('3. ROCK-PAPER-SCISSORS DUEL ENGINE', async (t) => {
   await t.test('Rock beats Scissors, Scissors beats Paper, Paper beats Rock', () => {
     assert.equal(resolveRpsWinner('rock', 'scissors'), 'first');
@@ -249,39 +314,25 @@ test('5. SUPABASE MULTIPLAYER ROOM LIFECYCLE', async (t) => {
   });
 });
 
-test('6. ROOM ACTION EVENTS REACH PEERS WITHOUT ECHOING TO THE SENDER', async () => {
-  const roomCode = 'EVENT1';
-  const receivedByHost = [];
-  const receivedByOtherPlayer = [];
-  const receivedBySender = [];
-  const host = subscribeToGameState(roomCode, () => {}, (event, payload) => {
-    receivedByHost.push({ event, payload });
-  });
-  const otherPlayer = subscribeToGameState(roomCode, () => {}, (event, payload) => {
-    receivedByOtherPlayer.push({ event, payload });
-  });
-  const sender = subscribeToGameState(roomCode, () => {}, (event, payload) => {
-    receivedBySender.push({ event, payload });
-  });
-  const actionRequest = {
-    sessionId: 'player-three-session',
-    request: { nonce: 'shot-1', shooterId: 3, weapon: 'gun', targetIds: [1] },
-  };
-  const countTick = { count: 6, shooterId: 2, round: 4 };
+test('6. ROOM STATE UPDATES REACH LOCAL SUBSCRIBERS', async () => {
+  const room = await createPrivateRoom(3, 'state-host', 'Host');
+  const observed = [];
+  const subscriber = subscribeToGameState(room.room_code, (state) => observed.push(state));
 
   try {
-    await sender.sendEvent('player_action_request', actionRequest);
-    await sender.sendEvent('game_count_tick', countTick);
-    assert.deepEqual(receivedByHost, [
-      { event: 'player_action_request', payload: actionRequest },
-      { event: 'game_count_tick', payload: countTick },
-    ]);
-    assert.deepEqual(receivedByOtherPlayer, [
-      { event: 'player_action_request', payload: actionRequest },
-      { event: 'game_count_tick', payload: countTick },
-    ]);
-    assert.deepEqual(receivedBySender, []);
+    await saveGameState(room.room_code, room.players, room.max_players, 0, 4, 'counting');
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].game_status, 'counting');
+    assert.equal(observed[0].countdown, 4);
+    await broadcastRoomStateDelta(room.room_code, {
+      current_shooter: 1,
+      countdown: 5,
+      game_status: 'counting',
+    });
+    assert.equal(observed.length, 2);
+    assert.equal(observed[1].countdown, 5);
+    assert.equal(observed[1].current_shooter, 1);
   } finally {
-    await Promise.all([host.unsubscribe(), otherPlayer.unsubscribe(), sender.unsubscribe()]);
+    await subscriber.unsubscribe();
   }
 });

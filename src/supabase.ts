@@ -732,6 +732,49 @@ export async function saveGameState(
   }
 }
 
+/** Send transient authoritative turn/count fields without persisting a database write per tick. */
+export async function broadcastRoomStateDelta(
+  roomCode: string,
+  delta: { current_shooter: number | null; countdown: number; game_status: string },
+) {
+  const cleanCode = roomCode.trim().toUpperCase();
+  if (!cleanCode) return;
+  const seq = ++roomSequenceCounter;
+  const state = {
+    room_code: cleanCode,
+    ...delta,
+    updated_at: new Date().toISOString(),
+    state_seq: seq,
+  };
+  lastRoomStateSeq.set(cleanCode, seq);
+  lastRoomUpdatedAt.set(cleanCode, Date.parse(state.updated_at));
+
+  const channel = activeRealtimeChannels.get(cleanCode);
+  if (channel) {
+    try {
+      const status = await channel.send({ type: 'broadcast', event: 'state_delta', payload: state });
+      if (status === 'ok') return;
+    } catch {
+      // Fall through to the HTTP broadcast path.
+    }
+    try {
+      const result = await channel.httpSend('state_delta', state, { timeout: 5_000 });
+      if (result?.success) return;
+    } catch {
+      // A count animation is best effort; durable game state is written at phase changes.
+    }
+  }
+
+  notifyRoomListeners(cleanCode, state, false);
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({ type: 'ROOM_UPDATE', roomCode: cleanCode, data: state });
+    } catch {
+      // Best-effort local room synchronization.
+    }
+  }
+}
+
 export async function touchPlayer(roomCode: string, sessionId: string) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !sessionId) return null;

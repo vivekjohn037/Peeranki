@@ -12,8 +12,28 @@ import {
   getAvatarDef,
   getBotAvatarId,
 } from './game/avatars';
+import { chooseBotAction, resolvePlayerAction } from './game/engine';
+import type { ActionResolution, PlayerAction } from './game/engine';
+import {
+  ACTIVE_WEAPONS,
+  findMatchWinners,
+  getCountedPlayerIndex,
+  hasAllWeapons,
+  MATCH_DURATIONS,
+  nextWeaponUpgrade,
+  normalizeRpsChoice,
+  normalizeWeapons,
+  resolveRpsWinner,
+  RPS_CHOICES,
+  RPS_LABELS,
+  WEAPON_LABELS,
+  WEAPON_NAMES,
+  WEAPON_ORDER,
+} from './game/rules';
+import type { RpsChoice, WeaponType } from './game/rules';
 
 import {
+  broadcastRoomStateDelta,
   saveGameState,
   subscribeToGameState,
   createPrivateRoom,
@@ -52,9 +72,7 @@ interface Player {
   duelChoiceRequest: OnlineDuelChoiceRequest | null;
 }
 
-type WeaponType = 'gun' | 'peeranki' | 'shield' | 'hook' | 'doublePeeranki';
-type RpsChoice = 'rock' | 'paper' | 'scissors';
-type OnlineAction = { nonce: string; shooterId: number; weapon: WeaponType; targetIds: number[] };
+type OnlineAction = PlayerAction & { nonce: string };
 type OnlineDuelChoiceRequest = { nonce: string; playerId: number; round: number; choice: RpsChoice };
 
 function normalizeOnlineAction(value: unknown): OnlineAction | null {
@@ -67,52 +85,8 @@ function normalizeOnlineAction(value: unknown): OnlineAction | null {
   return { nonce: raw.nonce, shooterId: raw.shooterId as number, weapon: raw.weapon as WeaponType, targetIds: raw.targetIds as number[] };
 }
 
-const WEAPON_ORDER: WeaponType[] = ['gun', 'peeranki', 'shield', 'hook', 'doublePeeranki'];
-const ACTIVE_WEAPONS: WeaponType[] = ['gun', 'peeranki', 'hook', 'doublePeeranki'];
-const WEAPON_LABELS: Record<WeaponType, string> = {
-  gun: '🔫 Gun', peeranki: '⚡ Peeranki', shield: '🛡️ Shield',
-  hook: '🪝 Hook', doublePeeranki: '💥 Double Peeranki',
-};
-const WEAPON_NAMES: Record<WeaponType, string> = {
-  gun: 'Gun', peeranki: 'Peeranki', shield: 'Shield', hook: 'Hook', doublePeeranki: 'Double Peeranki',
-};
-const RPS_CHOICES: RpsChoice[] = ['rock', 'paper', 'scissors'];
-const RPS_LABELS: Record<RpsChoice, string> = {
-  rock: '🪨 Rock', paper: '📄 Paper', scissors: '✂️ Scissors',
-};
-const MATCH_DURATIONS = [3, 5, 10, 15] as const;
 let matchDurationMinutes: (typeof MATCH_DURATIONS)[number] = 5;
 const matchDurationMs = () => matchDurationMinutes * 60 * 1000;
-
-function normalizeWeapons(value: unknown): WeaponType[] {
-  if (!Array.isArray(value)) return ['gun'];
-  const valid = value.filter((weapon): weapon is WeaponType =>
-    typeof weapon === 'string' && WEAPON_ORDER.includes(weapon as WeaponType));
-  const available = new Set<WeaponType>(valid);
-  const normalized: WeaponType[] = ['gun'];
-  WEAPON_ORDER.slice(1).forEach((weapon, index) => {
-    const prerequisites = WEAPON_ORDER.slice(1, index + 1);
-    if (available.has(weapon) && prerequisites.every((prerequisite) => normalized.includes(prerequisite))) {
-      normalized.push(weapon);
-    }
-  });
-  return normalized;
-}
-
-function nextWeaponUpgrade(weapons: WeaponType[], round: number): WeaponType | undefined {
-  const eligible = WEAPON_ORDER.slice(1, Math.min(round, WEAPON_ORDER.length - 1) + 1);
-  return eligible.find((weapon) => {
-    const index = WEAPON_ORDER.indexOf(weapon);
-    const prerequisites = WEAPON_ORDER.slice(1, index);
-    return !weapons.includes(weapon) && prerequisites.every((prerequisite) => weapons.includes(prerequisite));
-  });
-}
-
-function normalizeRpsChoice(value: unknown): RpsChoice | null {
-  return typeof value === 'string' && RPS_CHOICES.includes(value as RpsChoice)
-    ? value as RpsChoice
-    : null;
-}
 
 function normalizeDuelChoiceRequest(value: unknown): OnlineDuelChoiceRequest | null {
   if (!value || typeof value !== 'object') return null;
@@ -473,7 +447,7 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
           : '',
       weapons: normalizeWeapons(rawPlayer?.weapons),
       hasCollectedAllWeapons: rawPlayer?.all_weapons_collected === true ||
-        WEAPON_ORDER.every((weapon) => normalizeWeapons(rawPlayer?.weapons).includes(weapon)),
+        hasAllWeapons(normalizeWeapons(rawPlayer?.weapons)),
       eliminationPoints: Number.isInteger(rawPlayer?.elimination_points) && Number(rawPlayer.elimination_points) >= 0
         ? Number(rawPlayer.elimination_points) : 0,
       shieldDisabledRound: Number.isInteger(rawPlayer?.shield_disabled_round)
@@ -3607,8 +3581,7 @@ if (offlineMode) {
     };
 
     const connected = connectedPlayers();
-    const topCount = Math.max(0, ...connected.map((p) => p.weapons.length));
-    const winners = connected.filter((p) => p.weapons.length === topCount);
+    const winners = findMatchWinners(connected);
 
     const gameOverState: GameOverState = {
       active: this.gameFinished,
@@ -4201,37 +4174,6 @@ if (offlineMode) {
         'The 10th tower will select the shooter.',
       );
 
-      // Smooth client-side counting animation for non-host players so counting feels real-time without freezing
-      if (!amHost() && !this.countingTimer && countingStartIndex >= 0) {
-        this.startIndex = countingStartIndex;
-        this.countNumber = 0;
-        this.countingTimer = this.time.addEvent({
-          delay: COUNTING_SPEED,
-          repeat: COUNT_TO - 1,
-          callback: () => {
-            if (this.roundPhase !== 'counting') {
-              this.countingTimer?.remove(false);
-              this.countingTimer = undefined;
-              return;
-            }
-            this.countNumber += 1;
-            const countedIndex = this.getCountedPlayerIndex(this.startIndex, this.countNumber);
-            if (countedIndex === -1) return;
-            this.currentShooter = countedIndex;
-            this.countText?.setText(`Count ${this.countNumber} / ${COUNT_TO}`);
-            this.statusText?.setText(`${this.countNumber}. ${players[countedIndex].name}`);
-            if (this.countNumber === COUNT_TO) {
-              PeerankiAudio.effect('shooter_selected');
-              this.countingTimer = undefined;
-            } else {
-              PeerankiAudio.effect('count_tick');
-            }
-            this.markShooter();
-          },
-          callbackScope: this,
-        });
-      }
-
       this.markShooter();
       return;
     }
@@ -4472,9 +4414,9 @@ if (offlineMode) {
     const [first, second] = contestants as [Player, Player];
     const firstChoice = first.duelChoice!;
     const secondChoice = second.duelChoice!;
-    const beats: Record<RpsChoice, RpsChoice> = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
+    const duelResult = resolveRpsWinner(firstChoice, secondChoice);
     PeerankiAudio.effect('rps_clash');
-    if (firstChoice === secondChoice) {
+    if (duelResult === 'tie') {
       PeerankiAudio.effect('rps_tie');
       this.uiManager?.showToast(`🤝 Tie! Both chose ${RPS_LABELS[firstChoice]}! Choose again.`, 'info');
       first.duelChoice = null;
@@ -4491,7 +4433,7 @@ if (offlineMode) {
     }
 
     PeerankiAudio.effect('rps_win');
-    const winner = beats[firstChoice] === secondChoice ? first : second;
+    const winner = duelResult === 'first' ? first : second;
     const loser = winner.id === first.id ? second : first;
     const winnerChoice = winner.id === first.id ? firstChoice : secondChoice;
     const loserChoice = winner.id === first.id ? secondChoice : firstChoice;
@@ -4587,13 +4529,15 @@ this.startIndex = forcedStartIsAlive
       repeat: COUNT_TO - 1,
 
       callback: () => {
-        this.countNumber += 1;
+        if (this.roundPhase !== 'counting' || this.countNumber >= COUNT_TO) {
+          this.countingTimer?.remove(false);
+          this.countingTimer = undefined;
+          return;
+        }
+        this.countNumber = Math.min(COUNT_TO, this.countNumber + 1);
 
         const countedIndex =
-          this.getCountedPlayerIndex(
-            this.startIndex,
-            this.countNumber,
-          );
+          getCountedPlayerIndex(players, this.startIndex, this.countNumber);
 
         if (countedIndex === -1) {
           return;
@@ -4653,6 +4597,13 @@ this.startIndex = forcedStartIsAlive
           }
         } else {
           PeerankiAudio.effect('count_tick');
+          if (!offlineMode) {
+            void broadcastRoomStateDelta(roomCode, {
+              current_shooter: countedIndex,
+              countdown: this.countNumber,
+              game_status: 'counting',
+            }).catch((error) => console.warn('[Peeranki] Count display sync failed:', error));
+          }
         }
 
         this.markShooter();
@@ -4729,153 +4680,20 @@ private botShoot(shooterIndex: number) {
   if (!offlineMode) {
     return;
   }
-
-  const possibleTargets = players
-    .map((player, index) => ({
-      player,
-      index,
-    }))
-    .filter(
-      ({ player, index }) =>
-        player.alive &&
-        index !== shooterIndex,
-    );
-
-  if (possibleTargets.length === 0) {
+  const action = chooseBotAction(players, shooterIndex, matchRound, Math.random);
+  if (!action) {
     void this.finishRound();
     return;
   }
-
-  // Bots use any weapon they own, with targets chosen from living players.
-  const botWeapons = ACTIVE_WEAPONS.filter((weapon) =>
-    players[shooterIndex].weapons.includes(weapon) &&
-    (weapon !== 'hook' || possibleTargets.some(({ player }) => player.weapons.includes('shield') && player.shieldDisabledRound !== matchRound)) &&
-    (weapon !== 'doublePeeranki' || possibleTargets.length >= 2));
-  const botChosenWeapon: WeaponType = Phaser.Utils.Array.GetRandom(botWeapons.length ? botWeapons : ['gun']);
-  const selectedTarget = Phaser.Utils.Array.GetRandom(possibleTargets);
-
-  this.statusText?.setText(
-    `${players[shooterIndex].name} is shooting ${selectedTarget.player.name} with ${WEAPON_NAMES[botChosenWeapon]}...`,
-  );
-
-  if (botChosenWeapon === 'peeranki') {
-    PeerankiAudio.effect('cannon');
-  } else if (botChosenWeapon === 'doublePeeranki') {
-    PeerankiAudio.effect('double_peeranki');
-  } else if (botChosenWeapon === 'hook') {
-    PeerankiAudio.effect('hook');
-  } else {
-    PeerankiAudio.effect('shoot');
-  }
-
-  this.time.delayedCall(250, () => {
-    if (this.currentShooter !== shooterIndex || this.roundPhase !== 'shooting') return;
-    this.applyOfflineShot(
-      shooterIndex,
-      selectedTarget.index,
-      botChosenWeapon,
-    );
+  this.statusText?.setText(`${players[shooterIndex].name} is thinking...`);
+  this.time.delayedCall(Phaser.Math.Between(500, 1_200), () => {
+    if (this.currentShooter !== shooterIndex || this.roundPhase !== 'shooting' || this.gameFinished) return;
+    const targetNames = action.targetIds
+      .map((id) => players.find((player) => player.id === id)?.name)
+      .filter((name): name is string => Boolean(name));
+    this.statusText?.setText(`${players[shooterIndex].name} uses ${WEAPON_NAMES[action.weapon]} on ${targetNames.join(' and ')}.`);
+    this.runPlayerAction(action);
   });
-}
-
-private applyOfflineShot(
-  _shooterIndex: number,
-  targetIndex: number,
-  botWeapon?: WeaponType,
-) {
-  if (!offlineMode || this.gameFinished || this.matchTimeExpired()) return;
-  const target = players[targetIndex];
-  if (!target || !target.alive) return;
-
-  const weapon = botWeapon ?? 'gun';
-  if (!players[_shooterIndex]?.weapons.includes(weapon)) return;
-  if (weapon === 'hook' && (!target.weapons.includes('shield') || target.shieldDisabledRound === matchRound)) return;
-  if (weapon === 'doublePeeranki' && players.filter((player, index) => player.connected && player.alive && index !== _shooterIndex).length < 2) return;
-  this.applyWeaponEffect(targetIndex, weapon === 'doublePeeranki' ? 'peeranki' : weapon, _shooterIndex);
-  let completedTarget = targetIndex;
-  if (weapon === 'doublePeeranki') {
-    const secondTargets = players
-      .map((player, index) => ({ player, index }))
-      .filter(({ player, index }) => player.alive && index !== targetIndex && index !== _shooterIndex);
-    const secondTarget = Phaser.Utils.Array.GetRandom(secondTargets);
-    if (!secondTarget) return;
-    this.applyWeaponEffect(secondTarget.index, 'gun', _shooterIndex);
-    completedTarget = secondTarget.index;
-  }
-  this.completePlayerShot(completedTarget);
-}
-
-  private getCountedPlayerIndex(
-  startIndex: number,
-  count: number,
-) {
-  const aliveIndexes = activePlayers()
-    .map((player) => player.id - 1)
-    .filter(
-      (index) =>
-        players[index]?.alive === true,
-    );
-
-  if (aliveIndexes.length === 0) {
-    return -1;
-  }
-
-  // Build the counting sequence using towers.
-  // Stage 0 = 1 tower
-  // Stage 1 = 2 towers
-  // Stage 2 = 1 tower
-  const countingSequence: number[] = [];
-
-  const startPosition =
-    aliveIndexes.indexOf(startIndex);
-
-  const safeStartPosition =
-    startPosition >= 0
-      ? startPosition
-      : 0;
-
-  for (
-    let offset = 0;
-    offset < aliveIndexes.length;
-    offset += 1
-  ) {
-    const position =
-      (safeStartPosition + offset) %
-      aliveIndexes.length;
-
-    const playerIndex =
-      aliveIndexes[position];
-
-    const player =
-      players[playerIndex];
-
-    if (!player) {
-      continue;
-    }
-
-    const towerCount =
-      player.stage === 1
-        ? 2
-        : 1;
-
-    for (
-      let tower = 0;
-      tower < towerCount;
-      tower += 1
-    ) {
-      countingSequence.push(playerIndex);
-    }
-  }
-
-  if (countingSequence.length === 0) {
-    return -1;
-  }
-
-  const sequencePosition =
-    (count - 1) %
-    countingSequence.length;
-
-  return countingSequence[sequencePosition];
 }
 
 private getNextCountingStartIndex(
@@ -4908,17 +4726,12 @@ private getNextCountingStartIndex(
   return -1;
 }
 
-private async requestHostAction(targetIds: number[]) {
-  const shooter = players[myPlayerId - 1];
-  if (!shooter || !ACTIVE_WEAPONS.includes(this.selectedWeapon) ||
+private async requestHostAction(action: PlayerAction) {
+  const shooter = players[action.shooterId - 1];
+  if (!shooter || action.shooterId !== this.currentShooter + 1 || action.weapon !== this.selectedWeapon ||
       !shootingDeadlineAt || !Number.isFinite(Date.parse(shootingDeadlineAt))) return;
   const nonce = `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-  shooter.actionRequest = {
-    nonce,
-    shooterId: shooter.id,
-    weapon: this.selectedWeapon,
-    targetIds: targetIds.map((id) => id + 1),
-  };
+  shooter.actionRequest = { ...action, nonce };
   this.statusText?.setText('Sending action to the host...');
   await syncGameState(this.currentShooter, this.countNumber, 'action_requested');
 }
@@ -4935,17 +4748,8 @@ private async processPendingAction() {
   }
   processedOnlineActionNonces.add(action.nonce);
 
-  const shooterIndex = action.shooterId - 1;
-  const shooter = players[shooterIndex];
-  const targetIndexes = action.targetIds.map((id) => id - 1);
-  const uniqueTargets = new Set(targetIndexes);
-  const validWeapon = ACTIVE_WEAPONS.includes(action.weapon) && shooter?.weapons.includes(action.weapon);
-  const expectedTargets = action.weapon === 'doublePeeranki' ? 2 : 1;
-  const validTargets = targetIndexes.length === expectedTargets && uniqueTargets.size === expectedTargets &&
-    targetIndexes.every((index) => index >= 0 && index < players.length && index !== shooterIndex && players[index].connected && players[index].alive);
-  const authorized = shooter?.sessionId === requestOwner.sessionId && shooterIndex === this.currentShooter && shooter.alive && shooter.connected;
-  const withinDeadline = Boolean(shootingDeadlineAt) && Date.now() < Date.parse(shootingDeadlineAt);
-  const validHook = action.weapon !== 'hook' || targetIndexes.length === 1 && players[targetIndexes[0]]?.weapons.includes('shield') && players[targetIndexes[0]]?.shieldDisabledRound !== matchRound;
+  const shooter = players[action.shooterId - 1];
+  const authorized = shooter?.sessionId === requestOwner.sessionId && shooter.id === this.currentShooter + 1 && shooter.alive && shooter.connected;
   if (this.roundPhase !== 'shooting') {
     await syncGameState(
       this.currentShooter >= 0 ? this.currentShooter : null,
@@ -4954,20 +4758,15 @@ private async processPendingAction() {
     );
     return;
   }
-  if (!withinDeadline) {
+  if (!shootingDeadlineAt || Date.now() >= Date.parse(shootingDeadlineAt)) {
     this.endActionOnTimeout();
     return;
   }
 
-  if (!authorized || !validWeapon || !validTargets || !validHook || this.matchTimeExpired()) {
+  if (!authorized || !this.runPlayerAction(action)) {
     this.statusText?.setText('The host rejected an invalid or expired action.');
     await syncGameState(this.currentShooter, this.countNumber, 'shooting');
-    return;
   }
-
-  this.applyWeaponEffect(targetIndexes[0], action.weapon === 'doublePeeranki' ? 'peeranki' : action.weapon, shooterIndex);
-  if (action.weapon === 'doublePeeranki') this.applyWeaponEffect(targetIndexes[1], 'gun', shooterIndex);
-  this.completePlayerShot(targetIndexes[targetIndexes.length - 1]);
 }
 
 private shootPlayer(index: number) {
@@ -5020,24 +4819,7 @@ private shootPlayer(index: number) {
     return;
   }
 
-  const shooter = players[this.currentShooter];
-  if (!ACTIVE_WEAPONS.includes(this.selectedWeapon) || !shooter?.weapons.includes(this.selectedWeapon)) {
-    this.statusText?.setText('You do not own that weapon.');
-    this.pendingDoubleTarget = -1;
-    this.refreshWeaponPicker();
-    return;
-  }
-  if (this.selectedWeapon === 'hook' && (!target.weapons.includes('shield') || target.shieldDisabledRound === matchRound)) {
-    this.statusText?.setText('Hook requires a target with a Shield.');
-    return;
-  }
-
   if (this.selectedWeapon === 'doublePeeranki' && this.pendingDoubleTarget < 0) {
-    const validTargets = players.filter((player, targetIndex) => player.connected && player.alive && targetIndex !== this.currentShooter);
-    if (validTargets.length < 2) {
-      this.statusText?.setText('Double Peeranki needs two different living targets.');
-      return;
-    }
     this.pendingDoubleTarget = index;
     PeerankiAudio.effect('select');
     this.statusText?.setText(`${target.name} is the first target. Choose a different second target.`);
@@ -5050,114 +4832,113 @@ private shootPlayer(index: number) {
       this.statusText?.setText('Choose a different second target.');
       return;
     }
-    const first = players[this.pendingDoubleTarget];
-    if (!first?.connected || !first.alive || !target.connected || !target.alive) {
-      this.pendingDoubleTarget = -1;
-      this.statusText?.setText('The targets changed. Select two living targets again.');
-      this.syncUI();
-      return;
-    }
     const firstTarget = this.pendingDoubleTarget;
     this.pendingDoubleTarget = -1;
-    if (!offlineMode && !amHost()) {
-      void this.requestHostAction([firstTarget, index]);
-      return;
-    }
-    this.applyWeaponEffect(firstTarget, 'peeranki', this.currentShooter);
-    this.applyWeaponEffect(index, 'gun', this.currentShooter);
-    this.completePlayerShot(index);
+    this.submitPlayerAction({
+      shooterId: this.currentShooter + 1,
+      weapon: this.selectedWeapon,
+      targetIds: [players[firstTarget].id, target.id],
+    }, target);
     return;
   }
 
+  this.submitPlayerAction({
+    shooterId: this.currentShooter + 1,
+    weapon: this.selectedWeapon,
+    targetIds: [target.id],
+  }, target);
+}
+
+private submitPlayerAction(action: PlayerAction, previewTarget?: Player) {
   if (!offlineMode && !amHost()) {
-    this.statusText?.setText(`Firing at ${target.name}...`);
-    PeerankiAudio.effect(this.selectedWeapon === 'peeranki' ? 'cannon' : this.selectedWeapon === 'hook' ? 'hook' : 'shoot');
+    this.statusText?.setText(`Firing ${WEAPON_NAMES[action.weapon]}...`);
+    if (action.weapon === 'peeranki') PeerankiAudio.effect('cannon');
+    else if (action.weapon === 'hook') PeerankiAudio.effect('hook');
+    else if (action.weapon === 'doublePeeranki') PeerankiAudio.effect('double_peeranki');
+    else PeerankiAudio.effect('shoot');
     // Immediate visual recoil so non-host player feels zero latency
-    this.uiManager.triggerDamageFlash(index, false);
-    const targetCard = this.playerObjects[index];
+    if (previewTarget) this.uiManager.triggerDamageFlash(previewTarget.id - 1, false);
+    const targetCard = previewTarget ? this.playerObjects[previewTarget.id - 1] : undefined;
     if (targetCard) {
       this.tweens.add({ targets: targetCard, scale: 1.08, duration: 80, yoyo: true, repeat: 1 });
     }
     this.scheduleUiSync();
-    void this.requestHostAction([index]);
+    void this.requestHostAction(action);
     return;
   }
 
-  this.applyWeaponEffect(index, this.selectedWeapon, this.currentShooter);
-  this.completePlayerShot(index);
+  this.runPlayerAction(action);
 }
 
-private applyWeaponEffect(index: number, weapon: WeaponType, attackerIndex: number) {
-  const target = players[index];
-  if (!target || !target.alive) return;
-  const attacker = players[attackerIndex];
+private runPlayerAction(action: PlayerAction): boolean {
+  if (this.gameFinished || this.roundPhase !== 'shooting' || (!offlineMode && !amHost())) return false;
+  if (this.matchTimeExpired()) {
+    if (offlineMode || amHost()) void this.finishMatch();
+    return false;
+  }
+  if (!shootingDeadlineAt || Date.now() >= Date.parse(shootingDeadlineAt)) {
+    if (offlineMode || amHost()) this.endActionOnTimeout();
+    return false;
+  }
 
-  if (weapon === 'hook') {
-    PeerankiAudio.effect('hook');
-    if (target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound) {
-      target.weapons = target.weapons.filter((item) => item !== 'shield');
+  const resolution = resolvePlayerAction(players, action, this.currentShooter, matchRound);
+  if (!resolution.accepted) {
+    const messages: Record<typeof resolution.reason, string> = {
+      wrong_shooter: 'The selected shooter changed. Please wait for the next turn.',
+      unavailable_weapon: 'The shooter does not own that weapon.',
+      invalid_targets: 'Choose living, connected players other than the shooter.',
+      needs_two_targets: 'Double Peeranki needs two different living targets.',
+      hook_requires_shield: 'Hook requires a target with a Shield.',
+    };
+    this.statusText?.setText(messages[resolution.reason]);
+    this.syncUI();
+    return false;
+  }
+
+  this.presentActionResolution(action, resolution);
+  this.completePlayerShot(resolution.lastTargetIndex);
+  return true;
+}
+
+private presentActionResolution(action: PlayerAction, resolution: Extract<ActionResolution, { accepted: true }>) {
+  const attacker = players[resolution.shooterIndex];
+  if (action.weapon === 'doublePeeranki') PeerankiAudio.effect('double_peeranki');
+  else if (action.weapon === 'hook') PeerankiAudio.effect('hook');
+  else if (action.weapon === 'peeranki') PeerankiAudio.effect('cannon');
+  else PeerankiAudio.effect('shoot');
+
+  resolution.hits.forEach((hit) => {
+    const target = players[hit.targetIndex];
+    if (!target) return;
+    if (hit.action === 'shield_absorbed') {
+      PeerankiAudio.effect('shield_hit');
+      this.statusText?.setText(`${target.name}'s Shield blocked the Gun shot.`);
+      this.uiManager?.showToast(`🛡️ ${target.name}'s Shield blocked ${attacker?.name ?? 'Attacker'}'s Gun shot!`, 'info');
+    } else if (hit.action === 'shield_destroyed_for_round') {
+      PeerankiAudio.effect('shield_hit');
+      this.statusText?.setText(`${target.name}'s Shield was disabled for this round.`);
+      this.uiManager?.showToast(`🛡️💥 ${target.name}'s Shield was disabled for this round!`, 'alert');
+      const targetCard = this.playerObjects[hit.targetIndex];
+      if (targetCard) this.tweens.add({ targets: targetCard, alpha: { from: 0.35, to: 1 }, duration: 110, yoyo: true, repeat: 2 });
+    } else if (hit.shieldRemoved) {
       PeerankiAudio.effect('hook_strip');
       this.statusText?.setText(`${target.name}'s Shield was destroyed permanently!`);
       this.uiManager?.showToast(`🪝 ${attacker?.name ?? 'Attacker'} stripped ${target.name}'s Shield permanently!`, 'alert');
-      const targetCard = this.playerObjects[index];
+      const targetCard = this.playerObjects[hit.targetIndex];
       if (targetCard) this.tweens.add({ targets: targetCard, angle: { from: -5, to: 5 }, alpha: { from: 0.45, to: 1 }, duration: 90, yoyo: true, repeat: 2, onComplete: () => targetCard.setAngle(0) });
-    } else {
-      this.statusText?.setText(`${target.name} has no Shield for Hook to destroy.`);
-      PeerankiAudio.effect('hit');
-    }
-    this.updatePlayerVisual(index);
-    this.refreshWeaponPicker();
-    return;
-  }
-
-  if (weapon === 'doublePeeranki') {
-    PeerankiAudio.effect('double_peeranki');
-  } else if (weapon === 'peeranki') {
-    PeerankiAudio.effect('cannon');
-  } else {
-    PeerankiAudio.effect('shoot');
-  }
-
-  const hasShield = target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound;
-  if (hasShield && (weapon === 'gun' || weapon === 'peeranki')) {
-    PeerankiAudio.effect('shield_hit');
-    if (weapon === 'peeranki') {
-      target.shieldDisabledRound = matchRound;
-      this.statusText?.setText(`${target.name}'s Shield was destroyed for this round.`);
-      this.uiManager?.showToast(`🛡️💥 ${target.name}'s Shield shattered for this round!`, 'alert');
-      const targetCard = this.playerObjects[index];
-      if (targetCard) this.tweens.add({ targets: targetCard, alpha: { from: 0.35, to: 1 }, duration: 110, yoyo: true, repeat: 2 });
-    } else {
-      this.statusText?.setText(`${target.name}'s Shield blocked the Gun shot.`);
-      this.uiManager?.showToast(`🛡️ ${target.name}'s Shield blocked ${attacker?.name ?? 'Attacker'}'s Gun shot!`, 'info');
-    }
-    this.updatePlayerVisual(index);
-    return;
-  }
-
-  if (weapon === 'peeranki') {
-    target.stage = 3;
-    target.alive = false;
-    PeerankiAudio.effect('tower_destroyed');
-    this.uiManager?.showToast(`⚡ ${target.name}'s Tower was demolished by Peeranki! Eliminated!`, 'alert');
-  } else {
-    target.stage += 1;
-    if (target.stage >= 3) {
-      target.stage = 3;
-      target.alive = false;
+    } else if (hit.eliminated) {
       PeerankiAudio.effect('tower_destroyed');
-      this.uiManager?.showToast(`⚡ ${target.name}'s Tower fell! Eliminated!`, 'alert');
+      const attack = hit.weapon === 'peeranki' ? ' was demolished by Peeranki' : ' fell';
+      this.uiManager?.showToast(`⚡ ${target.name}'s Tower${attack}! Eliminated!`, 'alert');
     } else {
       PeerankiAudio.effect('tower_damage');
       this.uiManager?.showToast(`💥 ${target.name}'s Tower took damage (Stage ${target.stage})!`, 'alert');
     }
-  }
-  if (!target.alive && attacker && attacker.id !== target.id &&
-      (attacker.hasCollectedAllWeapons || WEAPON_ORDER.every((ownedWeapon) => attacker.weapons.includes(ownedWeapon)))) {
-    attacker.eliminationPoints += 1;
-    this.updatePlayerVisual(attackerIndex);
-  }
-  this.updatePlayerVisual(index);
+    this.updatePlayerVisual(hit.targetIndex);
+  });
+
+  if (attacker) this.updatePlayerVisual(resolution.shooterIndex);
+  if (action.weapon === 'hook') this.refreshWeaponPicker();
 }
 
 private completePlayerShot(index: number) {
@@ -5331,7 +5112,7 @@ void this.recordShot();
       message += ' No new weapon unlocked this round.';
       PeerankiAudio.effect('round_win');
     }
-    if (WEAPON_ORDER.every((weapon) => winner.weapons.includes(weapon))) winner.hasCollectedAllWeapons = true;
+    if (hasAllWeapons(winner.weapons)) winner.hasCollectedAllWeapons = true;
     lastRoundMessage = message;
     this.refreshPreviousRoundText();
     roundWinnerId = winner.id;
@@ -5395,8 +5176,9 @@ void this.recordShot();
     this.countingTimer = undefined;
     this.nextRoundTimer?.remove(false);
     this.nextRoundTimer = undefined;
-    const topCount = Math.max(0, ...connectedPlayers().map((player) => player.weapons.length));
-    const winners = connectedPlayers().filter((player) => player.weapons.length === topCount);
+    const eligiblePlayers = connectedPlayers();
+    const winners = findMatchWinners(eligiblePlayers);
+    const topCount = winners[0]?.weapons.length ?? 0;
     if (!offlineMode) await syncGameState(this.currentShooter >= 0 ? this.currentShooter : null, this.countNumber, 'finished');
     this.showFinishedState(winners, topCount);
   }
@@ -5421,18 +5203,10 @@ void this.recordShot();
   shootingDeadlineAt = '';
 
   const connected = connectedPlayers();
-  const topCount =
-    weaponCount ??
-    Math.max(
-      0,
-      ...connected.map(
-        (player) => player.weapons.length,
-      ),
-    );
-
-  const winners = finalists.filter(
-    (player) => player.weapons.length === topCount,
-  );
+  const winners = weaponCount === undefined
+    ? findMatchWinners(finalists)
+    : finalists.filter((player) => player.weapons.length === weaponCount);
+  const topCount = winners[0]?.weapons.length ?? 0;
 
   if (!this.victoryPlayed) {
     this.victoryPlayed = true;
