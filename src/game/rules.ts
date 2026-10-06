@@ -67,6 +67,21 @@ export function getCountedPlayerIndex(
   return sequence[(count - 1) % sequence.length] ?? -1;
 }
 
+/** Continue after the target that was shot, skipping it only if it is no longer active. */
+export function getNextCountingStartIndex(
+  players: readonly CountablePlayer[],
+  targetIndex: number,
+): number {
+  const target = players[targetIndex];
+  if (target?.alive && target.connected !== false) return targetIndex;
+  for (let offset = 1; offset < players.length; offset += 1) {
+    const index = (targetIndex + offset + players.length) % players.length;
+    const candidate = players[index];
+    if (candidate?.alive && candidate.connected !== false) return index;
+  }
+  return -1;
+}
+
 export function hasAllWeapons(weapons: readonly WeaponType[]): boolean {
   return WEAPON_ORDER.every((weapon) => weapons.includes(weapon));
 }

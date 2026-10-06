@@ -9,6 +9,7 @@ import {
   calculateHitResult,
   MATCH_DURATIONS,
   getCountedPlayerIndex,
+  getNextCountingStartIndex,
   hasAllWeapons,
   findMatchWinners,
 } from '../src/game/rules.ts';
@@ -162,6 +163,40 @@ test('COUNTING SELECTS ONLY LIVING PLAYERS’ TOWERS AND STOPS AT TEN', () => {
   assert.equal(getCountedPlayerIndex(players, 0, 11), -1);
   assert.equal(getCountedPlayerIndex(players, 0, 0), -1);
   assert.equal(getCountedPlayerIndex([], 0, 1), -1);
+  assert.equal(getNextCountingStartIndex(players, 0), 0, 'a living shot target gets the next count');
+  assert.equal(getNextCountingStartIndex(players, 3), 0, 'eliminated and disconnected players are skipped');
+  assert.equal(getNextCountingStartIndex(players.slice(3), 0), -1, 'no eligible player returns -1');
+});
+
+test('ELIMINATION BONUS IS AWARDED ONCE ONLY AFTER ALL FIVE WEAPONS', () => {
+  const makePlayer = (id, options = {}) => ({
+    id,
+    stage: 0,
+    alive: true,
+    connected: true,
+    weapons: ['gun'],
+    shieldDisabledRound: -1,
+    eliminationPoints: 0,
+    ...options,
+  });
+  const fullSet = ['gun', 'peeranki', 'shield', 'hook', 'doublePeeranki'];
+  const players = [
+    makePlayer(1, { weapons: fullSet }),
+    makePlayer(2, { stage: 2 }),
+    makePlayer(3, { stage: 2 }),
+  ];
+
+  const firstShot = resolvePlayerAction(players, { shooterId: 1, weapon: 'gun', targetIds: [2] }, 0, 5);
+  assert.equal(firstShot.accepted, true);
+  assert.equal(players[0].eliminationPoints, 1);
+  const repeatedShot = resolvePlayerAction(players, { shooterId: 1, weapon: 'gun', targetIds: [2] }, 0, 5);
+  assert.equal(repeatedShot.accepted, false);
+  assert.equal(players[0].eliminationPoints, 1, 'the same elimination cannot be scored twice');
+
+  const partialPlayers = [makePlayer(1), makePlayer(2, { stage: 2 })];
+  const partialShot = resolvePlayerAction(partialPlayers, { shooterId: 1, weapon: 'gun', targetIds: [2] }, 0, 5);
+  assert.equal(partialShot.accepted, true);
+  assert.equal(partialPlayers[0].eliminationPoints, 0);
 });
 
 test('MATCH SCORE KEEPS TIES AND RECOGNIZES THE FULL WEAPON SET', () => {

@@ -18,6 +18,7 @@ import {
   ACTIVE_WEAPONS,
   findMatchWinners,
   getCountedPlayerIndex,
+  getNextCountingStartIndex,
   hasAllWeapons,
   MATCH_DURATIONS,
   nextWeaponUpgrade,
@@ -4659,7 +4660,7 @@ this.startIndex = forcedStartIsAlive
     shootingDeadlineAt = '';
     this.pendingDoubleTarget = -1;
     players.forEach((player) => { player.actionRequest = null; });
-    this.nextStartIndex = this.getNextCountingStartIndex(shooterIndex);
+    this.nextStartIndex = getNextCountingStartIndex(players, shooterIndex);
     this.roundPhase = 'waiting';
     this.statusText?.setText('Time is up. Starting the next tower count...');
     this.countText?.setText('ACTION TIME UP');
@@ -4694,36 +4695,6 @@ private botShoot(shooterIndex: number) {
     this.statusText?.setText(`${players[shooterIndex].name} uses ${WEAPON_NAMES[action.weapon]} on ${targetNames.join(' and ')}.`);
     this.runPlayerAction(action);
   });
-}
-
-private getNextCountingStartIndex(
-  targetIndex: number,
-) {
-  if (players[targetIndex]?.alive) {
-    return targetIndex;
-  }
-
-  for (
-    let offset = 1;
-    offset < players.length;
-    offset += 1
-  ) {
-    const candidateIndex =
-      (targetIndex + offset) %
-      players.length;
-
-    const candidate =
-      players[candidateIndex];
-
-    if (
-      candidate?.alive &&
-      candidate.connected
-    ) {
-      return candidateIndex;
-    }
-  }
-
-  return -1;
 }
 
 private async requestHostAction(action: PlayerAction) {
@@ -5002,7 +4973,7 @@ if (offlineMode) {
     }
 
     const nextStartIndex =
-  this.getNextCountingStartIndex(index);
+  getNextCountingStartIndex(players, index);
 
 this.time.delayedCall(1200, () => {
   this.startCounting(
@@ -5017,7 +4988,7 @@ this.time.delayedCall(1200, () => {
 
 // Online mode
 this.nextStartIndex =
-  this.getNextCountingStartIndex(index);
+getNextCountingStartIndex(players, index);
 
 void this.recordShot();
 }
