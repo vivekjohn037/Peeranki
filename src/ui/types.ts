@@ -38,6 +38,7 @@ export interface HUDState {
   isMuted: boolean;
   roomCode?: string;
   latencyMs?: number;
+  serverRegionName?: string;
   connectedCount?: number;
   maxPlayers?: number;
 }

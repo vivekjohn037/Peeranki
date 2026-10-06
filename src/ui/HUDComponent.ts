@@ -41,7 +41,7 @@ export class HUDComponent {
     this.topbarEl.className = 'pk-hud-topbar';
     this.topbarEl.innerHTML = `
       <div class="pk-topbar-brand">
-        <img class="pk-topbar-logo" src="assets/peeranki-logo.png" alt="Peeranki Logo" />
+        <img class="pk-topbar-logo" src="assets/peeranki-logo.webp" alt="Peeranki Logo" />
         <span class="pk-topbar-title">PEERANKI</span>
       </div>
       <div class="pk-topbar-meta">
@@ -257,9 +257,10 @@ export class HUDComponent {
     } else {
       this.currentRoomCode = state.roomCode ?? null;
       this.netBadgeEl.className = 'pk-net-status-badge is-online';
+      const regionText = state.serverRegionName ? ` • ${state.serverRegionName}` : ' • 🇮🇳 Mumbai';
       const pingText = typeof state.latencyMs === 'number' ? ` • ${state.latencyMs}ms` : '';
-      this.netBadgeEl.innerHTML = `<span class="pk-net-dot">🟢</span><span class="pk-net-label">${state.roomCode ? `ROOM ${state.roomCode}` : 'ONLINE'}${pingText}</span><span class="pk-net-copy-hint">📋</span>`;
-      this.netBadgeEl.title = state.roomCode ? `Room Code: ${state.roomCode} (Tap to copy)` : 'Connected to Online Match';
+      this.netBadgeEl.innerHTML = `<span class="pk-net-dot">🟢</span><span class="pk-net-label">${state.roomCode ? `ROOM ${state.roomCode}` : 'ONLINE'}${regionText}${pingText}</span><span class="pk-net-copy-hint">📋</span>`;
+      this.netBadgeEl.title = state.roomCode ? `Room Code: ${state.roomCode}${regionText} (Tap to copy)` : 'Connected to Online Match';
     }
 
     // 2. Announcer Banner

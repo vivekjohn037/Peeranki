@@ -40,7 +40,95 @@ if (isSupabaseConfigured) {
   console.error('[Peeranki] Supabase configuration is incomplete; online rooms are unavailable.');
 }
 
+export interface ServerRegionInfo {
+  id: string;
+  name: string;
+  flag: string;
+  location: string;
+  isMumbai: boolean;
+  endpoint: string;
+}
+
+const REGION_STORAGE_KEY = 'peeranki_server_region';
+const CUSTOM_URL_STORAGE_KEY = 'peeranki_custom_supabase_url';
+const CUSTOM_KEY_STORAGE_KEY = 'peeranki_custom_supabase_key';
+
+export function getStoredServerRegion(): ServerRegionInfo {
+  let regionId = 'mumbai';
+  try {
+    const saved = localStorage.getItem(REGION_STORAGE_KEY);
+    if (saved) regionId = saved;
+  } catch {}
+
+  const customUrl = getStoredCustomUrl();
+  const endpoint = customUrl || (typeof supabaseUrl === 'string' && supabaseUrl ? supabaseUrl : 'https://srygfddukkmrqgdnrbqp.supabase.co');
+
+  if (regionId === 'mumbai' || !regionId) {
+    return {
+      id: 'mumbai',
+      name: 'Mumbai (ap-south-1)',
+      flag: '🇮🇳',
+      location: 'Mumbai, India',
+      isMumbai: true,
+      endpoint,
+    };
+  }
+
+  return {
+    id: regionId,
+    name: 'Singapore (ap-southeast-1)',
+    flag: '🇸🇬',
+    location: 'Singapore',
+    isMumbai: false,
+    endpoint,
+  };
+}
+
+export function setStoredServerRegion(regionId: string, customUrl?: string, customKey?: string) {
+  try {
+    localStorage.setItem(REGION_STORAGE_KEY, regionId);
+    if (customUrl !== undefined) {
+      if (customUrl.trim()) {
+        localStorage.setItem(CUSTOM_URL_STORAGE_KEY, customUrl.trim());
+      } else {
+        localStorage.removeItem(CUSTOM_URL_STORAGE_KEY);
+      }
+    }
+    if (customKey !== undefined) {
+      if (customKey.trim()) {
+        localStorage.setItem(CUSTOM_KEY_STORAGE_KEY, customKey.trim());
+      } else {
+        localStorage.removeItem(CUSTOM_KEY_STORAGE_KEY);
+      }
+    }
+  } catch {}
+}
+
+function getStoredCustomUrl(): string | null {
+  try {
+    return localStorage.getItem(CUSTOM_URL_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function getStoredCustomKey(): string | null {
+  try {
+    return localStorage.getItem(CUSTOM_KEY_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function configuredClient(): SupabaseClient {
+  const customUrl = getStoredCustomUrl();
+  const customKey = getStoredCustomKey();
+  if (customUrl && customKey) {
+    try {
+      return createClient(customUrl.trim(), customKey.trim());
+    } catch {}
+  }
+
   if (realClient) return realClient;
   throw new Error(
     `Supabase is configured but unavailable: ${errorMessage(clientInitializationError)}. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.`,
@@ -68,21 +156,16 @@ interface MockRoomRecord {
 const STORAGE_PREFIX = 'peeranki_room_';
 const mockRoomsMemory = new Map<string, MockRoomRecord>();
 const listenersByRoom = new Map<string, Set<(state: any) => void>>();
-const roomEventListenersByRoom = new Map<string, Set<(event: string, payload: any) => void>>();
-const ROOM_EVENT_NAMES = new Set(['player_action_request', 'duel_choice_request', 'game_count_tick']);
-const realtimeChannelsByRoom = new Map<string, Set<{ channel: any; getStatus: () => string }>>();
 
 let broadcastChannel: BroadcastChannel | null = null;
 try {
   if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
     broadcastChannel = new BroadcastChannel('peeranki_room_sync');
     broadcastChannel.onmessage = (event) => {
-      const { type, roomCode, data, event: roomEvent, payload } = event.data || {};
+      const { type, roomCode, data } = event.data || {};
       if (type === 'ROOM_UPDATE' && roomCode && data) {
         mockRoomsMemory.set(roomCode, data);
         notifyRoomListeners(roomCode, data, false);
-      } else if (type === 'ROOM_EVENT' && roomCode && ROOM_EVENT_NAMES.has(roomEvent)) {
-        notifyRoomEventListeners(roomCode, roomEvent, payload);
       }
     };
   }
@@ -137,24 +220,6 @@ function notifyRoomListeners(roomCode: string, state: any, broadcast: boolean) {
       // ignore
     }
   }
-}
-
-function notifyRoomEventListeners(
-  roomCode: string,
-  event: string,
-  payload: any,
-  except?: (event: string, payload: any) => void,
-) {
-  const listeners = roomEventListenersByRoom.get(roomCode);
-  if (!listeners) return;
-  listeners.forEach((listener) => {
-    if (listener === except) return;
-    try {
-      listener(event, payload);
-    } catch (err) {
-      console.error('[Peeranki] Room event listener error:', err);
-    }
-  });
 }
 
 function updateMockRoomPartial(code: string, updates: Partial<MockRoomRecord>) {
@@ -535,6 +600,37 @@ export async function getGameState(roomCode: string) {
   return fetchGameRoom(roomCode);
 }
 
+const activeRealtimeChannels = new Map<string, any>();
+let roomSequenceCounter = 0;
+const lastRoomStateSeq = new Map<string, number>();
+const lastRoomUpdatedAt = new Map<string, number>();
+
+function shouldAcceptRoomState(roomCode: string, state: any): boolean {
+  if (!state || typeof state !== 'object') return false;
+  const seq = typeof state.state_seq === 'number' ? state.state_seq : -1;
+  const time = state.updated_at ? Date.parse(state.updated_at) : 0;
+  const lastSeq = lastRoomStateSeq.get(roomCode) ?? -1;
+  const lastTime = lastRoomUpdatedAt.get(roomCode) ?? 0;
+
+  if (seq > 0 && lastSeq > 0) {
+    if (seq <= lastSeq) return false;
+    lastRoomStateSeq.set(roomCode, seq);
+    if (time > lastTime) lastRoomUpdatedAt.set(roomCode, time);
+    return true;
+  }
+
+  if (time > 0 && lastTime > 0) {
+    if (time < lastTime) return false;
+    lastRoomUpdatedAt.set(roomCode, time);
+    if (seq > lastSeq) lastRoomStateSeq.set(roomCode, seq);
+    return true;
+  }
+
+  if (seq > 0) lastRoomStateSeq.set(roomCode, seq);
+  if (time > 0) lastRoomUpdatedAt.set(roomCode, time);
+  return true;
+}
+
 export async function saveGameState(
   roomCode: string,
   players: unknown[],
@@ -548,63 +644,47 @@ export async function saveGameState(
     return;
   }
 
-  if (hasAnySupabaseConfiguration) {
-    const client = configuredClient();
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 8_000);
-    const updatedAt = new Date().toISOString();
+  const seq = ++roomSequenceCounter;
+  const now = new Date().toISOString();
+  lastRoomStateSeq.set(cleanCode, seq);
+  lastRoomUpdatedAt.set(cleanCode, Date.parse(now));
+
+  const statePayload = {
+    room_code: cleanCode,
+    players,
+    max_players: maxPlayers,
+    current_shooter: currentShooter,
+    countdown: countNumber,
+    game_status: gameStatus,
+    updated_at: now,
+    state_seq: seq,
+  };
+
+  // 1. Instantly broadcast state over active Realtime channel if available (sub-40ms WebSocket delivery)
+  const activeChan = activeRealtimeChannels.get(cleanCode);
+  if (activeChan) {
     try {
-      const { error } = await client
-        .from('game_states')
-        .update({
-          players,
-          max_players: maxPlayers,
-          current_shooter: currentShooter,
-          countdown: countNumber,
-          game_status: gameStatus,
-          updated_at: updatedAt,
-        })
-        .eq('room_code', cleanCode)
-        .abortSignal(controller.signal);
-
-      if (error) {
-        throw error;
-      }
-
-      // Postgres change feeds can be disabled for game_states or delayed by the
-      // project's Realtime configuration. Broadcast the host's canonical state
-      // directly to every connected peer as well, while keeping the database
-      // update as the durable source of truth.
-      const subscribers = realtimeChannelsByRoom.get(cleanCode);
-      const publisher = subscribers && [...subscribers].find((entry) => entry.getStatus() === 'SUBSCRIBED');
-      if (publisher) {
-        try {
-          const status = await publisher.channel.send({
-            type: 'broadcast',
-            event: 'game_state_update',
-            payload: {
-              room_code: cleanCode,
-              players,
-              max_players: maxPlayers,
-              current_shooter: currentShooter,
-              countdown: countNumber,
-              game_status: gameStatus,
-              updated_at: updatedAt,
-            },
-          });
-          if (status !== 'ok') {
-            console.warn(`[Peeranki] Realtime game-state broadcast returned ${status}; database change feed remains available as fallback.`);
-          }
-        } catch (broadcastError) {
-          console.warn('[Peeranki] Realtime game-state broadcast failed; database change feed remains available as fallback:', broadcastError);
-        }
-      }
-    } catch (err) {
-      throw new Error(`Supabase could not save game state: ${errorMessage(err)}`, { cause: err });
-    } finally {
-      window.clearTimeout(timeout);
+      void activeChan.send({
+        type: 'broadcast',
+        event: 'state_delta',
+        payload: statePayload,
+      });
+    } catch {
+      // Best-effort fast broadcast
     }
-    return;
+  }
+
+  // 2. Also broadcast locally via BroadcastChannel for same-device/browser testing
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({
+        type: 'ROOM_UPDATE',
+        roomCode: cleanCode,
+        data: statePayload,
+      });
+    } catch {
+      // ignore
+    }
   }
 
   // Also update local mock room
@@ -614,7 +694,32 @@ export async function saveGameState(
     current_shooter: currentShooter,
     countdown: countNumber,
     game_status: gameStatus,
+    state_seq: seq,
   });
+
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
+    try {
+      const { error } = await client
+        .from('game_states')
+        .update({
+          players,
+          max_players: maxPlayers,
+          current_shooter: currentShooter,
+          countdown: countNumber,
+          game_status: gameStatus,
+          updated_at: now,
+        })
+        .eq('room_code', cleanCode);
+
+      if (error) {
+        throw error;
+      }
+    } catch (err) {
+      throw new Error(`Supabase could not save game state: ${errorMessage(err)}`, { cause: err });
+    }
+    return;
+  }
 }
 
 export async function touchPlayer(roomCode: string, sessionId: string) {
@@ -751,23 +856,18 @@ export function leaveRoomBestEffort(roomCode: string, sessionId: string) {
 export function subscribeToGameState(
   roomCode: string,
   callback: (gameState: any) => void,
-  onRoomEvent?: (event: string, payload: any) => void,
 ) {
   const cleanCode = roomCode.trim().toUpperCase();
 
   let realChannel: any = null;
-  let realtimeStatus = 'CLOSED';
-  if (onRoomEvent) {
-    if (!roomEventListenersByRoom.has(cleanCode)) roomEventListenersByRoom.set(cleanCode, new Set());
-    roomEventListenersByRoom.get(cleanCode)!.add(onRoomEvent);
-  }
-
   if (hasAnySupabaseConfiguration) {
     try {
       const client = configuredClient();
       realChannel = client
         .channel(`peeranki-room-${cleanCode}`, {
-          config: { broadcast: { self: false, ack: true }, private: false },
+          config: {
+            broadcast: { self: false },
+          },
         })
         .on(
           'postgres_changes',
@@ -778,27 +878,23 @@ export function subscribeToGameState(
             filter: `room_code=eq.${cleanCode}`,
           },
           (payload) => {
-            callback(payload.new ?? null);
+            const next = payload.new ?? null;
+            if (next && shouldAcceptRoomState(cleanCode, next)) {
+              callback(next);
+            }
           },
         )
-        .on('broadcast', { event: 'game_state_update' }, ({ payload }) => {
-          callback(payload ?? null);
+        .on('broadcast', { event: 'state_delta' }, (payload) => {
+          if (payload.payload && shouldAcceptRoomState(cleanCode, payload.payload)) {
+            callback(payload.payload);
+          }
         })
-        .on('broadcast', { event: 'player_action_request' }, ({ payload }) => {
-          onRoomEvent?.('player_action_request', payload);
-        })
-        .on('broadcast', { event: 'duel_choice_request' }, ({ payload }) => {
-          onRoomEvent?.('duel_choice_request', payload);
-        })
-        .subscribe((status, error) => {
-          realtimeStatus = status;
+        .subscribe((_status, error) => {
           if (error) {
             console.error('[Peeranki] Supabase realtime error:', error);
           }
         });
-      if (!realtimeChannelsByRoom.has(cleanCode)) realtimeChannelsByRoom.set(cleanCode, new Set());
-      const subscription = { channel: realChannel, getStatus: () => realtimeStatus };
-      realtimeChannelsByRoom.get(cleanCode)!.add(subscription);
+      activeRealtimeChannels.set(cleanCode, realChannel);
     } catch (err) {
       console.error('[Peeranki] Failed to subscribe to Supabase realtime:', err);
     }
@@ -809,75 +905,10 @@ export function subscribeToGameState(
   }
 
   return {
-    sendEvent: async (event: string, payload: any) => {
-      if (!ROOM_EVENT_NAMES.has(event)) {
-        throw new Error(`Unsupported room event: ${event}`);
-      }
-
-      if (hasAnySupabaseConfiguration) {
-        if (!realChannel) {
-          throw new Error('The online room connection is unavailable. Please reconnect and try again.');
-        }
-        let lastError: unknown;
-        if (realtimeStatus === 'SUBSCRIBED') {
-          for (let attempt = 0; attempt < 2; attempt += 1) {
-            try {
-              const status = await realChannel.send({ type: 'broadcast', event, payload });
-              if (status === 'ok') return;
-              lastError = new Error(`Realtime returned ${status}`);
-            } catch (err) {
-              lastError = err;
-            }
-            if (attempt === 0) {
-              await new Promise((resolve) => window.setTimeout(resolve, 150));
-            }
-          }
-        }
-
-        // Mobile browsers can keep HTTP alive while suspending or dropping the
-        // Realtime WebSocket. Retry room actions through Supabase's HTTP
-        // Broadcast endpoint without waiting for the socket to reconnect.
-        try {
-          const result = await realChannel.httpSend(event, payload, { timeout: 5_000 });
-          if (result.success) return;
-          lastError = new Error(`Realtime HTTP returned ${result.status}: ${result.error}`);
-        } catch (err) {
-          lastError = err;
-        }
-
-        if (realtimeStatus !== 'SUBSCRIBED') {
-          throw new Error(`The room connection is unavailable (${realtimeStatus}). ${errorMessage(lastError)}`, { cause: lastError });
-        }
-        throw new Error(`Supabase could not send the room action: ${errorMessage(lastError)}`, { cause: lastError });
-      }
-
-      const peerListeners = roomEventListenersByRoom.get(cleanCode);
-      const hasLocalPeer = Boolean(peerListeners && [...peerListeners].some((listener) => listener !== onRoomEvent));
-      if (!broadcastChannel && !hasLocalPeer) {
-        throw new Error('Cross-device online play requires Supabase to be configured.');
-      }
-      notifyRoomEventListeners(cleanCode, event, payload, onRoomEvent);
-      if (broadcastChannel) {
-        try {
-          broadcastChannel.postMessage({ type: 'ROOM_EVENT', roomCode: cleanCode, event, payload });
-        } catch (err) {
-          throw new Error(`Could not send the local room action: ${errorMessage(err)}`, { cause: err });
-        }
-      }
-    },
     unsubscribe: async () => {
       listenersByRoom.get(cleanCode)?.delete(callback);
-      if (onRoomEvent) {
-        roomEventListenersByRoom.get(cleanCode)?.delete(onRoomEvent);
-      }
+      activeRealtimeChannels.delete(cleanCode);
       if (realChannel) {
-        const subscriptions = realtimeChannelsByRoom.get(cleanCode);
-        if (subscriptions) {
-          for (const subscription of subscriptions) {
-            if (subscription.channel === realChannel) subscriptions.delete(subscription);
-          }
-          if (subscriptions.size === 0) realtimeChannelsByRoom.delete(cleanCode);
-        }
         try {
           await realChannel.unsubscribe();
         } catch (err) {

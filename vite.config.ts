@@ -12,7 +12,7 @@ function backgroundUploadPlugin(): Plugin {
           req.on('data', (chunk) => chunks.push(chunk));
           req.on('end', () => {
             const buffer = Buffer.concat(chunks);
-            const targetDir = path.resolve(__dirname, 'public/assets/background');
+            const targetDir = path.resolve(process.cwd(), 'public/assets/background');
             if (!fs.existsSync(targetDir)) {
               fs.mkdirSync(targetDir, { recursive: true });
             }
@@ -37,6 +37,22 @@ function backgroundUploadPlugin(): Plugin {
 export default defineConfig({
   base: './',
   plugins: [backgroundUploadPlugin()],
+  build: {
+    target: 'es2020',
+    chunkSizeWarningLimit: 1400,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/phaser')) {
+            return 'vendor-phaser';
+          }
+          if (id.includes('node_modules/@supabase')) {
+            return 'vendor-supabase';
+          }
+        },
+      },
+    },
+  },
   server: {
     host: '0.0.0.0',
     port: 3000,

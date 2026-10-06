@@ -1,7 +1,9 @@
 # Supabase deployment
 
 Peeranki reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` at Vite
-build time. Set both values in the build environment for local web, Android,
+build time. For lowest latency and smooth multiplayer performance, deploy your
+Supabase project in the **Mumbai, India (`ap-south-1`)** region.
+Set both values in the build environment for local web, Android,
 desktop, and hosted deployments. Rebuild after changing them. Use the Supabase
 publishable/anon key; never place a service-role key in a client build.
 

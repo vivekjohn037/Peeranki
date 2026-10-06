@@ -179,34 +179,28 @@ export class PeerankiAudioSystem {
   private preloadSFX() {
     if (typeof window === 'undefined') return;
 
-    const sfxNames: PeerankiAudioEffect[] = [
-      'click',
-      'select',
-      'shoot',
-      'cannon',
-      'double_peeranki',
-      'hit',
-      'shield_hit',
-      'hook',
-      'hook_strip',
-      'tower_damage',
-      'tower_destroyed',
-      'elimination',
-      'count_tick',
-      'shooter_selected',
-      'timer_tick',
-      'duel_start',
-      'rps_clash',
-      'rps_tie',
-      'rps_win',
-      'weapon_upgrade',
-      'round_win',
-      'victory',
-      'defeat',
-    ];
+    // Immediately preload only primary UI sounds to prevent network congestion at startup
+    const immediateSFX: PeerankiAudioEffect[] = ['click', 'select'];
+    immediateSFX.forEach((name) => {
+      void this.loadAudioBuffer(name);
+    });
 
-    sfxNames.forEach((name) => {
-      this.loadAudioBuffer(name);
+    // Lazily preload common gameplay sounds during browser idle time so game boot is immediate
+    const scheduleLazy =
+      (window as any).requestIdleCallback ||
+      ((cb: () => void) => window.setTimeout(cb, 2000));
+
+    scheduleLazy(() => {
+      const gameplaySFX: PeerankiAudioEffect[] = [
+        'shoot',
+        'cannon',
+        'hit',
+        'count_tick',
+        'shooter_selected',
+      ];
+      gameplaySFX.forEach((name) => {
+        void this.loadAudioBuffer(name);
+      });
     });
   }
 

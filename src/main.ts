@@ -12,24 +12,6 @@ import {
   getAvatarDef,
   getBotAvatarId,
 } from './game/avatars';
-import {
-  ACTIVE_WEAPONS,
-  findMatchWinners,
-  getCountedPlayerIndex,
-  hasAllWeapons,
-  MATCH_DURATIONS,
-  nextWeaponUpgrade,
-  normalizeRpsChoice,
-  RPS_CHOICES,
-  RPS_LABELS,
-  normalizeWeapons,
-  resolveRpsWinner,
-  WEAPON_LABELS,
-  WEAPON_NAMES,
-  WEAPON_ORDER,
-  calculateHitResult,
-} from './game/rules';
-import type { RpsChoice, WeaponType } from './game/rules';
 
 import {
   saveGameState,
@@ -42,6 +24,8 @@ import {
   leaveRoomBestEffort,
   touchPlayer,
   cleanupStalePlayers,
+  getStoredServerRegion,
+  setStoredServerRegion,
   supabase,
 } from './supabase';
 
@@ -68,6 +52,8 @@ interface Player {
   duelChoiceRequest: OnlineDuelChoiceRequest | null;
 }
 
+type WeaponType = 'gun' | 'peeranki' | 'shield' | 'hook' | 'doublePeeranki';
+type RpsChoice = 'rock' | 'paper' | 'scissors';
 type OnlineAction = { nonce: string; shooterId: number; weapon: WeaponType; targetIds: number[] };
 type OnlineDuelChoiceRequest = { nonce: string; playerId: number; round: number; choice: RpsChoice };
 
@@ -81,8 +67,52 @@ function normalizeOnlineAction(value: unknown): OnlineAction | null {
   return { nonce: raw.nonce, shooterId: raw.shooterId as number, weapon: raw.weapon as WeaponType, targetIds: raw.targetIds as number[] };
 }
 
+const WEAPON_ORDER: WeaponType[] = ['gun', 'peeranki', 'shield', 'hook', 'doublePeeranki'];
+const ACTIVE_WEAPONS: WeaponType[] = ['gun', 'peeranki', 'hook', 'doublePeeranki'];
+const WEAPON_LABELS: Record<WeaponType, string> = {
+  gun: '🔫 Gun', peeranki: '⚡ Peeranki', shield: '🛡️ Shield',
+  hook: '🪝 Hook', doublePeeranki: '💥 Double Peeranki',
+};
+const WEAPON_NAMES: Record<WeaponType, string> = {
+  gun: 'Gun', peeranki: 'Peeranki', shield: 'Shield', hook: 'Hook', doublePeeranki: 'Double Peeranki',
+};
+const RPS_CHOICES: RpsChoice[] = ['rock', 'paper', 'scissors'];
+const RPS_LABELS: Record<RpsChoice, string> = {
+  rock: '🪨 Rock', paper: '📄 Paper', scissors: '✂️ Scissors',
+};
+const MATCH_DURATIONS = [3, 5, 10, 15] as const;
 let matchDurationMinutes: (typeof MATCH_DURATIONS)[number] = 5;
 const matchDurationMs = () => matchDurationMinutes * 60 * 1000;
+
+function normalizeWeapons(value: unknown): WeaponType[] {
+  if (!Array.isArray(value)) return ['gun'];
+  const valid = value.filter((weapon): weapon is WeaponType =>
+    typeof weapon === 'string' && WEAPON_ORDER.includes(weapon as WeaponType));
+  const available = new Set<WeaponType>(valid);
+  const normalized: WeaponType[] = ['gun'];
+  WEAPON_ORDER.slice(1).forEach((weapon, index) => {
+    const prerequisites = WEAPON_ORDER.slice(1, index + 1);
+    if (available.has(weapon) && prerequisites.every((prerequisite) => normalized.includes(prerequisite))) {
+      normalized.push(weapon);
+    }
+  });
+  return normalized;
+}
+
+function nextWeaponUpgrade(weapons: WeaponType[], round: number): WeaponType | undefined {
+  const eligible = WEAPON_ORDER.slice(1, Math.min(round, WEAPON_ORDER.length - 1) + 1);
+  return eligible.find((weapon) => {
+    const index = WEAPON_ORDER.indexOf(weapon);
+    const prerequisites = WEAPON_ORDER.slice(1, index);
+    return !weapons.includes(weapon) && prerequisites.every((prerequisite) => weapons.includes(prerequisite));
+  });
+}
+
+function normalizeRpsChoice(value: unknown): RpsChoice | null {
+  return typeof value === 'string' && RPS_CHOICES.includes(value as RpsChoice)
+    ? value as RpsChoice
+    : null;
+}
 
 function normalizeDuelChoiceRequest(value: unknown): OnlineDuelChoiceRequest | null {
   if (!value || typeof value !== 'object') return null;
@@ -273,7 +303,6 @@ let maxPlayers = MIN_PLAYERS;
 let isPublicRoom = false;
 let hostSessionId = '';
 let players: Player[] = [];
-let gameStateWriteQueue: Promise<void> = Promise.resolve();
 
 const sessionId = getOrCreateSessionId();
 const previousRoomCleanup = cleanupPreviousSession();
@@ -444,7 +473,7 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
           : '',
       weapons: normalizeWeapons(rawPlayer?.weapons),
       hasCollectedAllWeapons: rawPlayer?.all_weapons_collected === true ||
-        hasAllWeapons(normalizeWeapons(rawPlayer?.weapons)),
+        WEAPON_ORDER.every((weapon) => normalizeWeapons(rawPlayer?.weapons).includes(weapon)),
       eliminationPoints: Number.isInteger(rawPlayer?.elimination_points) && Number(rawPlayer.elimination_points) >= 0
         ? Number(rawPlayer.elimination_points) : 0,
       shieldDisabledRound: Number.isInteger(rawPlayer?.shield_disabled_round)
@@ -503,9 +532,6 @@ async function syncGameState(
   countNumber: number,
   gameStatus: string,
 ) {
-  // The host is the sole writer of the shared snapshot. Player clients send
-  // their actions as room events so stale local state cannot replace the match.
-  if (!offlineMode && !amHost()) return;
   if (!roomCode || players.length === 0) {
     return;
   }
@@ -538,18 +564,14 @@ async function syncGameState(
       shooting_deadline_at: shootingDeadlineAt,
     }));
 
-  // Serialize host snapshots so a delayed earlier write cannot overwrite a
-  // newer phase after the host has already advanced the local round.
-  const write = gameStateWriteQueue.then(() => saveGameState(
+  await saveGameState(
     roomCode,
     connected,
     maxPlayers,
     currentShooter,
     countNumber,
     gameStatus,
-  ));
-  gameStateWriteQueue = write.catch(() => undefined);
-  await write;
+  );
 }
 
 function startRoomHeartbeat() {
@@ -650,27 +672,16 @@ function positionHtmlInput(
   gameY: number,
   width = 300,
 ) {
-  const canvas = scene.game?.canvas;
-  const rect = canvas?.getBoundingClientRect();
-  const scaleWidth = scene.scale?.width;
-  const scaleHeight = scene.scale?.height;
-  const dimensions = [rect?.left, rect?.top, rect?.width, rect?.height, scaleWidth, scaleHeight, gameX, gameY, width];
-  if (!canvas || !rect || !canvas.isConnected || !input.isConnected ||
-      !dimensions.every((value) => Number.isFinite(value)) ||
-      rect.width <= 0 || rect.height <= 0 || scaleWidth <= 0 || scaleHeight <= 0 || width <= 0) {
-    input.style.visibility = 'hidden';
-    return;
-  }
-
-  const scaleX = rect.width / scaleWidth;
-  const scaleY = rect.height / scaleHeight;
+  const canvas = scene.game.canvas;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = rect.width / scene.scale.width;
+  const scaleY = rect.height / scene.scale.height;
   const cssWidth = Math.min(
     width * scaleX,
     rect.width * 0.88,
   );
 
   input.style.position = 'fixed';
-  input.style.visibility = 'visible';
   input.style.left = `${rect.left + gameX * scaleX}px`;
   input.style.top = `${rect.top + gameY * scaleY}px`;
   input.style.transform = 'translate(-50%, -50%)';
@@ -801,8 +812,6 @@ class MenuScene extends Phaser.Scene {
   private nameInputX = 0;
   private nameInputY = 0;
   private nameInputW = 300;
-  private backgroundResizeHandler?: (gameSize: Phaser.Structs.Size) => void;
-  private menuUiResizeHandler?: (gameSize: Phaser.Structs.Size) => void;
   private resizeHandler = () => {
     if (this.nameInput) {
       positionHtmlInput(this, this.nameInput, this.nameInputX, this.nameInputY, this.nameInputW);
@@ -814,8 +823,8 @@ class MenuScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image('peeranki-logo', 'assets/peeranki-logo.png');
-    this.load.image('menu-background', 'assets/background/menu_background.png');
+    this.load.image('peeranki-logo', 'assets/peeranki-logo.webp');
+    this.load.image('menu-background', 'assets/background/menu_background.webp');
     AVATAR_IDS.forEach((id) => {
       this.load.svg(`avatar_${id}`, `assets/players/avatar_${id}.svg`, { width: 96, height: 96 });
     });
@@ -840,14 +849,12 @@ class MenuScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(-5);
 
-      this.backgroundResizeHandler = (gameSize: Phaser.Structs.Size) => {
-        if (!bg.active || !overlay.active) return;
+      this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
         bg.setPosition(gameSize.width / 2, gameSize.height / 2);
         bg.setScale(Math.max(gameSize.width / bg.width, gameSize.height / bg.height));
         overlay.setPosition(gameSize.width / 2, gameSize.height / 2);
         overlay.setSize(gameSize.width, gameSize.height);
-      };
-      this.scale.on('resize', this.backgroundResizeHandler);
+      });
     }
 
     const isLandscape = width >= 640 && width > height * 1.12;
@@ -1001,13 +1008,13 @@ class MenuScene extends Phaser.Scene {
       // PORTRAIT / MOBILE COMPACT: Safe vertical flow ensuring zero overlap with top buttons & logo
       const contentWidth = Math.min(460, width - 36);
 
-      // Logo placed safely below top header bar (top buttons finish by y ~42)
-      const logoY = Math.max(86, Math.min(108, Math.floor(height * 0.12)));
-      const glow = this.add.circle(width / 2, logoY, 44, 0x2878ff, 0.14);
+      // Logo placed safely below top header bar (top buttons finish by y ~39)
+      const logoY = Math.max(118, Math.min(142, Math.floor(height * 0.16)));
+      const glow = this.add.circle(width / 2, logoY, 38, 0x2878ff, 0.14);
       this.tweens.add({ targets: glow, alpha: 0.28, scale: 1.15, duration: 1500, yoyo: true, repeat: -1 });
-      this.add.image(width / 2, logoY, 'peeranki-logo').setDisplaySize(72, 72);
+      this.add.image(width / 2, logoY, 'peeranki-logo').setDisplaySize(64, 64);
 
-      const titleY = logoY + 52;
+      const titleY = logoY + 48;
       this.add.text(width / 2, titleY, 'PEERANKI', {
         fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
         fontSize: '22px',
@@ -1015,14 +1022,14 @@ class MenuScene extends Phaser.Scene {
         fontStyle: 'bold',
       }).setOrigin(0.5);
 
-      const subTitleY = titleY + 24;
+      const subTitleY = titleY + 22;
       this.add.text(width / 2, subTitleY, 'Traditional Kerala Strategy Game', {
         fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
         fontSize: '12px',
         color: '#8a99a8',
       }).setOrigin(0.5);
 
-      const nameLabelY = subTitleY + 30;
+      const nameLabelY = subTitleY + 28;
       this.add.text(width / 2, nameLabelY, 'YOUR NAME', {
         fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
         fontSize: '12px',
@@ -1137,43 +1144,43 @@ class MenuScene extends Phaser.Scene {
 
     window.addEventListener('resize', this.resizeHandler);
 
-    // Top Header Bar: Clean separation so buttons never collide with the logo
-    const topBtnY = Math.max(26, Math.min(34, Math.round(height * 0.045)));
+    // Top Header Bar: Clean corner anchors ensuring ZERO collision with the logo
+    const topBtnY = 24;
 
     // Mute toggle on top-left corner
     const isMuted = PeerankiAudio.isMuted();
     const muteButton = makeButton(
       this,
-      30,
+      24,
       topBtnY,
       isMuted ? '🔇' : '🔊',
       isMuted ? '#822727' : '#2d3748',
-      16,
-      42,
-      34,
+      15,
+      36,
+      30,
     ).setDepth(1000);
 
     // Exit and Guide buttons on top-right corner
     const rightTopBtn = makeButton(
       this,
-      width - 44,
+      width - 26,
       topBtnY,
       '🚪 EXIT',
       '#9b3030',
-      12,
-      68,
-      34,
+      11,
+      44,
+      30,
     ).setDepth(1000);
 
     const guideTopBtn = makeButton(
       this,
-      width - 118,
+      width - 82,
       topBtnY,
       '❓ GUIDE',
       '#1f2937',
-      12,
-      68,
-      34,
+      11,
+      54,
+      30,
     ).setDepth(1000);
 
     guideTopBtn.on('pointerdown', () => {
@@ -1187,16 +1194,14 @@ class MenuScene extends Phaser.Scene {
       this.scene.restart();
     });
 
-    this.menuUiResizeHandler = (gameSize: Phaser.Structs.Size) => {
-      const resizeTopY = Math.max(26, Math.min(34, Math.round(gameSize.height * 0.045)));
-      muteButton.setPosition(30, resizeTopY);
-      rightTopBtn.setPosition(gameSize.width - 44, resizeTopY);
-      guideTopBtn.setPosition(gameSize.width - 118, resizeTopY);
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      muteButton.setPosition(24, 24);
+      rightTopBtn.setPosition(gameSize.width - 26, 24);
+      guideTopBtn.setPosition(gameSize.width - 82, 24);
       if (this.nameInput) {
         positionHtmlInput(this, this.nameInput, this.nameInputX, this.nameInputY, this.nameInputW);
       }
-    };
-    this.scale.on('resize', this.menuUiResizeHandler);
+    });
 
     rightTopBtn.on('pointerdown', () => {
       PeerankiAudio.effect('select');
@@ -1206,14 +1211,6 @@ class MenuScene extends Phaser.Scene {
 
   private cleanup() {
     window.removeEventListener('resize', this.resizeHandler);
-    if (this.backgroundResizeHandler) {
-      this.scale.off('resize', this.backgroundResizeHandler);
-      this.backgroundResizeHandler = undefined;
-    }
-    if (this.menuUiResizeHandler) {
-      this.scale.off('resize', this.menuUiResizeHandler);
-      this.menuUiResizeHandler = undefined;
-    }
     this.nameInput?.remove();
     this.nameInput = undefined;
     removePeerankiInputs();
@@ -1341,14 +1338,24 @@ class SettingsScene extends Phaser.Scene {
         redraw();
       });
 
-      const guideBtn = makeButton(this, rightColX, height * 0.60,
-        '📖 HOW TO PLAY GUIDE', '#1e293b', 14, colWidth, 42);
+      const serverInfo = getStoredServerRegion();
+      const serverBtn = makeButton(this, rightColX, height * 0.58,
+        `🌐 SERVER: ${serverInfo.flag} ${serverInfo.isMumbai ? 'MUMBAI (ap-south-1)' : 'SINGAPORE'}`, '#1e293b', 12, colWidth, 40);
+      serverBtn.on('pointerdown', () => {
+        const next = serverInfo.isMumbai ? 'singapore' : 'mumbai';
+        setStoredServerRegion(next);
+        PeerankiAudio.effect('select');
+        redraw();
+      });
+
+      const guideBtn = makeButton(this, rightColX, height * 0.70,
+        '📖 HOW TO PLAY GUIDE', '#1e293b', 13, colWidth, 40);
       guideBtn.on('pointerdown', () => {
         PeerankiAudio.effect('select');
         showHowToPlayModal();
       });
 
-      const back = makeButton(this, rightColX, height * 0.80, '⬅ BACK TO MENU', '#252d37', 15, Math.min(220, colWidth * 0.75), 42);
+      const back = makeButton(this, rightColX, height * 0.84, '⬅ BACK TO MENU', '#252d37', 14, Math.min(220, colWidth * 0.75), 40);
       back.on('pointerdown', () => this.scene.start('MenuScene'));
 
     } else {
@@ -1453,14 +1460,24 @@ class SettingsScene extends Phaser.Scene {
         redraw();
       });
 
-      const guideBtn = makeButton(this, width / 2, 414,
-        '📖 HOW TO PLAY GUIDE', '#1e293b', 14, contentWidth, 42);
+      const serverInfo = getStoredServerRegion();
+      const serverBtn = makeButton(this, width / 2, 412,
+        `🌐 SERVER: ${serverInfo.flag} ${serverInfo.isMumbai ? 'MUMBAI (ap-south-1)' : 'SINGAPORE'}`, '#1e293b', 12, contentWidth, 38);
+      serverBtn.on('pointerdown', () => {
+        const next = serverInfo.isMumbai ? 'singapore' : 'mumbai';
+        setStoredServerRegion(next);
+        PeerankiAudio.effect('select');
+        redraw();
+      });
+
+      const guideBtn = makeButton(this, width / 2, 458,
+        '📖 HOW TO PLAY GUIDE', '#1e293b', 13, contentWidth, 38);
       guideBtn.on('pointerdown', () => {
         PeerankiAudio.effect('select');
         showHowToPlayModal();
       });
 
-      const back = makeButton(this, width / 2, 470, '⬅ BACK TO MENU', '#252d37', 15, Math.min(200, contentWidth * 0.70), 42);
+      const back = makeButton(this, width / 2, 508, '⬅ BACK TO MENU', '#252d37', 14, Math.min(200, contentWidth * 0.70), 38);
       back.on('pointerdown', () => this.scene.start('MenuScene'));
     }
   }
@@ -1771,10 +1788,18 @@ class OnlineModeScene extends Phaser.Scene {
         fontStyle: 'bold',
       }).setOrigin(0.5);
 
-      this.add.text(leftColX, height * 0.24, 'Multiplayer Combat', {
+      this.add.text(leftColX, height * 0.23, 'Multiplayer Combat', {
         fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
         fontSize: '14px',
         color: '#8a99a8',
+      }).setOrigin(0.5);
+
+      const serverInfo = getStoredServerRegion();
+      this.add.text(leftColX, height * 0.30, `🌐 SERVER: ${serverInfo.flag} ${serverInfo.name}`, {
+        fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
+        fontSize: '12px',
+        color: '#60a5fa',
+        fontStyle: 'bold',
       }).setOrigin(0.5);
 
       addMatchDurationPicker(this, leftColX, height * 0.48);
@@ -1838,7 +1863,15 @@ class OnlineModeScene extends Phaser.Scene {
         fontStyle: 'bold',
       }).setOrigin(0.5);
 
-      const pickerY = titleY + 52;
+      const serverInfo = getStoredServerRegion();
+      this.add.text(width / 2, titleY + 28, `🌐 SERVER: ${serverInfo.flag} ${serverInfo.name}`, {
+        fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
+        fontSize: '11.5px',
+        color: '#60a5fa',
+        fontStyle: 'bold',
+      }).setOrigin(0.5);
+
+      const pickerY = titleY + 62;
       addMatchDurationPicker(this, width / 2, pickerY);
 
       const btnH = 54;
@@ -3162,25 +3195,22 @@ class GameScene extends Phaser.Scene {
   private lastActionSeconds = -1;
   private lastMatchSeconds = -1;
 
-  private currentShooter = -1;
-  private lastMarkedShooterIndex = -2;
-  private startIndex = -1;
-  private countNumber = 0;
-  private nextStartIndex = -1;
+ private currentShooter = -1;
+private startIndex = -1;
+private countNumber = 0;
+private nextStartIndex = -1;
 
   private countingTimer?: Phaser.Time.TimerEvent;
   private nextRoundTimer?: Phaser.Time.TimerEvent;
   private realtimeChannel: any;
   private applyingRemoteState = false;
   private initialized = false;
-  private remoteStateRefreshInFlight = false;
   private gameFinished = false;
   private victoryPlayed = false;
   private roundPhase: 'counting' | 'shooting' | 'duel' | 'waiting' | 'finished' = 'waiting';
   private duelActive = false;
   private resolvingDuel = false;
   private processingDuelChoices = false;
-  private processingOnlineAction = false;
   private duelUi: Phaser.GameObjects.GameObject[] = [];
   private duelPrompt?: Phaser.GameObjects.Text;
   private duelBotTimer?: Phaser.Time.TimerEvent;
@@ -3190,19 +3220,16 @@ class GameScene extends Phaser.Scene {
   private pingTimer?: Phaser.Time.TimerEvent;
   private lastAnnouncedRoundMessage = '';
   private lastAnnouncedDuelRound = 1;
-  private gameResizeHandler = (gameSize: Phaser.Structs.Size) => {
-    this.leaveButton?.setPosition(gameSize.width - 54, 32);
-  };
 
   constructor() {
     super('GameScene');
   }
 
   preload() {
-     this.load.image(
-    'game_background',
-    'assets/background/game_background.png',
-  );
+    this.load.image(
+      'game_background',
+      'assets/background/game_background.webp',
+    );
     this.load.image('tower_big', 'assets/towers/tower_big.png');
     this.load.image('tower_small', 'assets/towers/tower_small.png');
     this.load.image('tower_one', 'assets/towers/tower_one.png');
@@ -3219,7 +3246,6 @@ class GameScene extends Phaser.Scene {
     this.duelActive = false;
     this.resolvingDuel = false;
     this.processingDuelChoices = false;
-    this.processingOnlineAction = false;
     this.clearDuelControls();
     this.roundPhase = 'waiting';
     this.currentShooter = -1;
@@ -3286,7 +3312,6 @@ class GameScene extends Phaser.Scene {
     });
 
     this.events.once('shutdown', () => {
-      this.scale.off('resize', this.gameResizeHandler);
       this.uiManager.unmount();
       canvas.style.opacity = '1';
       canvas.style.pointerEvents = 'auto';
@@ -3339,8 +3364,6 @@ if (offlineMode) {
 
   this.renderPlayers();
 }
-
-    this.add.image(width / 2, 35, 'peeranki-logo').setDisplaySize(52, 52);
 
     this.shooterText = this.add
       .text(width / 2, 76, '', {
@@ -3399,7 +3422,9 @@ if (offlineMode) {
       .setInteractive({ useHandCursor: true });
 
     // Keep the touch target inside the visible game area as Phaser FIT resizes.
-    this.scale.on('resize', this.gameResizeHandler);
+    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
+      this.leaveButton?.setPosition(gameSize.width - 54, 32);
+    });
 
     this.leaveButton.on(
       'pointerdown',
@@ -3455,24 +3480,21 @@ if (offlineMode) {
 
   private startLatencyPing() {
     this.pingTimer = this.time.addEvent({
-      // Realtime remains the fast path. Polling is a lightweight recovery path
-      // for mobile networks that suspend or drop WebSocket subscriptions.
-      delay: amHost() ? 4500 : 1500,
+      delay: 3500,
       loop: true,
       callback: async () => {
-        if (this.gameFinished || offlineMode || this.remoteStateRefreshInFlight) return;
-        this.remoteStateRefreshInFlight = true;
+        if (this.gameFinished || offlineMode) return;
         const t0 = performance.now();
         try {
           const room = await fetchGameRoom(roomCode);
-          if (!amHost() && room) this.applyRemoteGameState(room);
           const rtt = Math.round(performance.now() - t0);
           this.currentLatencyMs = Math.max(12, Math.min(999, rtt));
+          if (room) {
+            this.applyRemoteGameState(room);
+          }
           this.scheduleUiSync();
         } catch {
           // ignore
-        } finally {
-          this.remoteStateRefreshInFlight = false;
         }
       },
     });
@@ -3547,6 +3569,7 @@ if (offlineMode) {
       isMuted: PeerankiAudio.isMuted(),
       roomCode: offlineMode ? undefined : roomCode,
       latencyMs: this.currentLatencyMs,
+      serverRegionName: getStoredServerRegion().name,
       connectedCount: connectedPlayers().length,
       maxPlayers,
     };
@@ -3584,7 +3607,8 @@ if (offlineMode) {
     };
 
     const connected = connectedPlayers();
-    const winners = findMatchWinners(connected);
+    const topCount = Math.max(0, ...connected.map((p) => p.weapons.length));
+    const winners = connected.filter((p) => p.weapons.length === topCount);
 
     const gameOverState: GameOverState = {
       active: this.gameFinished,
@@ -3670,7 +3694,6 @@ if (offlineMode) {
     );
 
     this.playerObjects = [];
-    this.lastMarkedShooterIndex = -2;
 
     const columns = maxPlayers <= 6 ? 3 : 5;
     const rows = Math.ceil(maxPlayers / columns);
@@ -3784,13 +3807,11 @@ if (offlineMode) {
       });
 
       this.playerObjects.push(container);
-      this.updatePlayerVisual(index, false);
+      this.updatePlayerVisual(index);
     });
-
-    this.syncUI();
   }
 
-  private updatePlayerVisual(index: number, syncAfterUpdate = true) {
+  private updatePlayerVisual(index: number) {
     const player = players[index];
     const container =
       this.playerObjects[index];
@@ -3953,36 +3974,17 @@ if (offlineMode) {
     container.setInteractive(
       player.connected && player.alive,
     );
-    if (syncAfterUpdate) this.syncUI();
+    this.syncUI();
   }
 
   private markShooter() {
-    if (this.lastMarkedShooterIndex !== this.currentShooter) {
-      const changedIndexes = new Set<number>();
-      if (this.lastMarkedShooterIndex >= 0) changedIndexes.add(this.lastMarkedShooterIndex);
-      if (this.currentShooter >= 0) changedIndexes.add(this.currentShooter);
-
-      changedIndexes.forEach((index) => {
-        const player = players[index];
-        const container = this.playerObjects[index];
-        if (!player || !container) return;
-
-        const background = container.list[0] as Phaser.GameObjects.Rectangle;
-        const isShooter = index === this.currentShooter && player.connected && player.alive;
-        background.setStrokeStyle(isShooter ? 3 : 2, isShooter ? 0x4da3ff : 0x444c55);
-
-        this.tweens.killTweensOf(container);
-        if (isShooter) {
-          this.tweens.add({ targets: container, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
-        } else {
-          container.setScale(1);
-        }
-      });
-
-      this.lastMarkedShooterIndex = this.currentShooter;
+    for (
+      let index = 0;
+      index < this.playerObjects.length;
+      index += 1
+    ) {
+      this.updatePlayerVisual(index);
     }
-
-    this.syncUI();
   }
 
   private startRealtimeSync() {
@@ -3991,65 +3993,7 @@ if (offlineMode) {
       (gameState) => {
         this.applyRemoteGameState(gameState);
       },
-      (event, payload) => this.handleRoomEvent(event, payload),
     );
-  }
-
-  private handleRoomEvent(event: string, payload: any) {
-    if (event === 'game_count_tick') {
-      if (amHost() || this.roundPhase !== 'counting' || payload?.round !== matchRound ||
-          !Number.isInteger(payload?.count) || payload.count < 1 || payload.count >= COUNT_TO ||
-          !Number.isInteger(payload?.shooterId)) return;
-      this.countNumber = Math.max(0, Math.min(COUNT_TO, payload.count));
-      this.currentShooter = payload.shooterId - 1;
-      this.countText?.setText(`Count ${this.countNumber} / ${COUNT_TO}`);
-      const countedPlayer = players[this.currentShooter];
-      if (countedPlayer) this.statusText?.setText(`${this.countNumber}. ${countedPlayer.name}`);
-      this.syncUI();
-      return;
-    }
-    if (!amHost() || !payload || typeof payload.sessionId !== 'string') return;
-    const owner = players.find((player) => player.connected && player.sessionId === payload.sessionId);
-    if (!owner) return;
-
-    if (event === 'player_action_request') {
-      const request = normalizeOnlineAction(payload.request);
-      if (!request || request.shooterId !== owner.id || owner.actionRequest) return;
-      owner.actionRequest = request;
-      void this.processPendingAction();
-      return;
-    }
-
-    if (event === 'duel_choice_request') {
-      const request = normalizeDuelChoiceRequest(payload.request);
-      const contestants = activePlayers().filter((player) => player.alive);
-      if (!request || !this.duelActive || this.roundPhase !== 'duel' || contestants.length !== 2 ||
-          request.playerId !== owner.id || request.round !== duelRound || !owner.alive ||
-          owner.duelChoice || owner.duelChoiceRequest) return;
-      owner.duelChoiceRequest = request;
-      void this.processPendingDuelChoices();
-    }
-  }
-
-  private async sendRoomEvent(event: string, payload: any) {
-    if (typeof this.realtimeChannel?.sendEvent !== 'function') {
-      throw new Error('The room connection is not ready. Please try again.');
-    }
-    await this.realtimeChannel.sendEvent(event, payload);
-  }
-
-  private scheduleNextRoundAfterShot() {
-    if (!amHost() || this.nextRoundTimer || this.countingTimer) return;
-    this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
-      this.nextRoundTimer = undefined;
-      const nextStartIndex = this.nextStartIndex;
-      this.nextStartIndex = -1;
-      if (this.isGameFinished()) {
-        void this.finishRound();
-      } else {
-        this.startCounting(nextStartIndex >= 0 ? nextStartIndex : undefined);
-      }
-    });
   }
 
   private applyRemoteGameState(gameState: any) {
@@ -4074,20 +4018,15 @@ if (offlineMode) {
       const prevPlayers = players.map((p) => ({
         id: p.id,
         name: p.name,
-        avatar: p.avatar,
         stage: p.stage,
         alive: p.alive,
         weapons: [...p.weapons],
-        hasCollectedAllWeapons: p.hasCollectedAllWeapons,
-        eliminationPoints: p.eliminationPoints,
         shieldDisabledRound: p.shieldDisabledRound,
         connected: p.connected,
       }));
-      const previousMatchRound = matchRound;
 
       loadPlayersFromRoom(gameState.players);
-      this.refreshWeaponPicker(false);
-      const roundChanged = previousMatchRound !== matchRound;
+      this.refreshWeaponPicker();
 
       // Non-host (and host client) rich combat audio & visual feedbacks
       if (this.initialized && prevPlayers.length > 0) {
@@ -4145,19 +4084,9 @@ if (offlineMode) {
         if (this.playerObjects.length !== maxPlayers) {
           this.renderPlayers();
         } else {
-          players.slice(0, maxPlayers).forEach((p, idx) => {
-            const prev = prevPlayers[idx];
-            const weaponsChanged = !prev || prev.weapons.length !== p.weapons.length ||
-              prev.weapons.some((weapon, weaponIndex) => weapon !== p.weapons[weaponIndex]);
-            const visualChanged = roundChanged || !prev || prev.id !== p.id || prev.name !== p.name ||
-              prev.avatar !== p.avatar || prev.stage !== p.stage || prev.alive !== p.alive ||
-              prev.connected !== p.connected || prev.hasCollectedAllWeapons !== p.hasCollectedAllWeapons ||
-              prev.eliminationPoints !== p.eliminationPoints || prev.shieldDisabledRound !== p.shieldDisabledRound ||
-              weaponsChanged;
-            if (visualChanged) this.updatePlayerVisual(idx, false);
-          });
           this.markShooter();
         }
+        this.syncUI();
       }
     }
 
@@ -4271,6 +4200,38 @@ if (offlineMode) {
       this.statusText?.setText(
         'The 10th tower will select the shooter.',
       );
+
+      // Smooth client-side counting animation for non-host players so counting feels real-time without freezing
+      if (!amHost() && !this.countingTimer && countingStartIndex >= 0) {
+        this.startIndex = countingStartIndex;
+        this.countNumber = 0;
+        this.countingTimer = this.time.addEvent({
+          delay: COUNTING_SPEED,
+          repeat: COUNT_TO - 1,
+          callback: () => {
+            if (this.roundPhase !== 'counting') {
+              this.countingTimer?.remove(false);
+              this.countingTimer = undefined;
+              return;
+            }
+            this.countNumber += 1;
+            const countedIndex = this.getCountedPlayerIndex(this.startIndex, this.countNumber);
+            if (countedIndex === -1) return;
+            this.currentShooter = countedIndex;
+            this.countText?.setText(`Count ${this.countNumber} / ${COUNT_TO}`);
+            this.statusText?.setText(`${this.countNumber}. ${players[countedIndex].name}`);
+            if (this.countNumber === COUNT_TO) {
+              PeerankiAudio.effect('shooter_selected');
+              this.countingTimer = undefined;
+            } else {
+              PeerankiAudio.effect('count_tick');
+            }
+            this.markShooter();
+          },
+          callbackScope: this,
+        });
+      }
+
       this.markShooter();
       return;
     }
@@ -4278,6 +4239,8 @@ if (offlineMode) {
     if (
       gameState.game_status === 'shooting'
     ) {
+      this.countingTimer?.remove(false);
+      this.countingTimer = undefined;
       this.roundPhase = 'shooting';
       if (!shootingDeadlineAt && amHost()) {
         shootingDeadlineAt = new Date(Date.now() + ACTION_LIMIT_MS).toISOString();
@@ -4316,7 +4279,30 @@ if (offlineMode) {
       );
       this.markShooter();
 
-      this.scheduleNextRoundAfterShot();
+      if (
+  amHost() &&
+  !this.nextRoundTimer &&
+  !this.countingTimer
+) {
+  this.nextRoundTimer =
+    this.time.delayedCall(
+      NEXT_ROUND_DELAY,
+      () => {
+        this.nextRoundTimer = undefined;
+
+        const nextStartIndex =
+          this.nextStartIndex;
+
+        this.nextStartIndex = -1;
+
+        if (this.isGameFinished()) {
+          void this.finishRound();
+        } else {
+          this.startCounting(nextStartIndex >= 0 ? nextStartIndex : undefined);
+        }
+      },
+    );
+}
 
       return;
     }
@@ -4429,25 +4415,16 @@ if (offlineMode) {
       return;
     }
 
-    const request: OnlineDuelChoiceRequest = {
+    player.duelChoiceRequest = {
       nonce: `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       playerId,
       round: duelRound,
       choice,
     };
-    player.duelChoiceRequest = request;
     this.statusText?.setText('Choice sent. Waiting for both players...');
     this.renderDuelControls();
-    if (amHost()) {
-      void this.processPendingDuelChoices();
-      return;
-    }
-    void this.sendRoomEvent('duel_choice_request', { sessionId, request }).catch((error) => {
-      if (player.duelChoiceRequest?.nonce === request.nonce) player.duelChoiceRequest = null;
-      console.error('[Peeranki] Could not send duel choice:', error);
-      const reason = error instanceof Error ? error.message : String(error);
-      this.statusText?.setText(`Choice failed: ${reason.slice(0, 100)}`);
-      this.renderDuelControls();
+    void syncGameState(null, 0, 'duel').then(() => {
+      if (amHost()) return this.processPendingDuelChoices();
     });
   }
 
@@ -4469,27 +4446,21 @@ if (offlineMode) {
     if (!amHost() || !this.duelActive || this.processingDuelChoices || this.gameFinished) return;
     this.processingDuelChoices = true;
     try {
-      while (amHost() && this.duelActive && !this.gameFinished) {
-        let changed = false;
-        players.forEach((owner) => {
-          const request = owner.duelChoiceRequest;
-          if (!request) return;
-          owner.duelChoiceRequest = null;
-          changed = true;
-          if (request.playerId === owner.id && request.round === duelRound && owner.connected && owner.alive &&
-              !owner.duelChoice && normalizeRpsChoice(request.choice)) {
-            owner.duelChoice = request.choice;
-          }
-        });
-        if (!changed) break;
-        await syncGameState(null, 0, 'duel');
-      }
+      let changed = false;
+      players.forEach((owner) => {
+        const request = owner.duelChoiceRequest;
+        if (!request) return;
+        owner.duelChoiceRequest = null;
+        changed = true;
+        if (request.playerId === owner.id && request.round === duelRound && owner.connected && owner.alive &&
+            !owner.duelChoice && normalizeRpsChoice(request.choice)) {
+          owner.duelChoice = request.choice;
+        }
+      });
+      if (changed) await syncGameState(null, 0, 'duel');
       await this.resolveDuelIfReady();
     } finally {
       this.processingDuelChoices = false;
-      if (amHost() && this.duelActive && players.some((player) => player.duelChoiceRequest)) {
-        void this.processPendingDuelChoices();
-      }
     }
   }
 
@@ -4501,9 +4472,9 @@ if (offlineMode) {
     const [first, second] = contestants as [Player, Player];
     const firstChoice = first.duelChoice!;
     const secondChoice = second.duelChoice!;
-    const duelResult = resolveRpsWinner(firstChoice, secondChoice);
+    const beats: Record<RpsChoice, RpsChoice> = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
     PeerankiAudio.effect('rps_clash');
-    if (duelResult === 'tie') {
+    if (firstChoice === secondChoice) {
       PeerankiAudio.effect('rps_tie');
       this.uiManager?.showToast(`🤝 Tie! Both chose ${RPS_LABELS[firstChoice]}! Choose again.`, 'info');
       first.duelChoice = null;
@@ -4520,7 +4491,7 @@ if (offlineMode) {
     }
 
     PeerankiAudio.effect('rps_win');
-    const winner = duelResult === 'first' ? first : second;
+    const winner = beats[firstChoice] === secondChoice ? first : second;
     const loser = winner.id === first.id ? second : first;
     const winnerChoice = winner.id === first.id ? firstChoice : secondChoice;
     const loserChoice = winner.id === first.id ? secondChoice : firstChoice;
@@ -4616,15 +4587,13 @@ this.startIndex = forcedStartIsAlive
       repeat: COUNT_TO - 1,
 
       callback: () => {
-        if (this.roundPhase !== 'counting' || this.countNumber >= COUNT_TO) {
-          this.countingTimer?.remove(false);
-          this.countingTimer = undefined;
-          return;
-        }
-        this.countNumber = Math.min(COUNT_TO, this.countNumber + 1);
+        this.countNumber += 1;
 
         const countedIndex =
-          getCountedPlayerIndex(players, this.startIndex, this.countNumber);
+          this.getCountedPlayerIndex(
+            this.startIndex,
+            this.countNumber,
+          );
 
         if (countedIndex === -1) {
           return;
@@ -4684,13 +4653,6 @@ this.startIndex = forcedStartIsAlive
           }
         } else {
           PeerankiAudio.effect('count_tick');
-          if (!offlineMode) {
-            void this.sendRoomEvent('game_count_tick', {
-              count: this.countNumber,
-              shooterId: countedIndex + 1,
-              round: matchRound,
-            }).catch((error) => console.error('[Peeranki] Could not sync count tick:', error));
-          }
         }
 
         this.markShooter();
@@ -4787,7 +4749,7 @@ private botShoot(shooterIndex: number) {
   // Bots use any weapon they own, with targets chosen from living players.
   const botWeapons = ACTIVE_WEAPONS.filter((weapon) =>
     players[shooterIndex].weapons.includes(weapon) &&
-    (weapon !== 'hook' || possibleTargets.some(({ player }) => player.weapons.includes('shield'))) &&
+    (weapon !== 'hook' || possibleTargets.some(({ player }) => player.weapons.includes('shield') && player.shieldDisabledRound !== matchRound)) &&
     (weapon !== 'doublePeeranki' || possibleTargets.length >= 2));
   const botChosenWeapon: WeaponType = Phaser.Utils.Array.GetRandom(botWeapons.length ? botWeapons : ['gun']);
   const selectedTarget = Phaser.Utils.Array.GetRandom(possibleTargets);
@@ -4827,7 +4789,7 @@ private applyOfflineShot(
 
   const weapon = botWeapon ?? 'gun';
   if (!players[_shooterIndex]?.weapons.includes(weapon)) return;
-  if (weapon === 'hook' && !target.weapons.includes('shield')) return;
+  if (weapon === 'hook' && (!target.weapons.includes('shield') || target.shieldDisabledRound === matchRound)) return;
   if (weapon === 'doublePeeranki' && players.filter((player, index) => player.connected && player.alive && index !== _shooterIndex).length < 2) return;
   this.applyWeaponEffect(targetIndex, weapon === 'doublePeeranki' ? 'peeranki' : weapon, _shooterIndex);
   let completedTarget = targetIndex;
@@ -4841,6 +4803,79 @@ private applyOfflineShot(
     completedTarget = secondTarget.index;
   }
   this.completePlayerShot(completedTarget);
+}
+
+  private getCountedPlayerIndex(
+  startIndex: number,
+  count: number,
+) {
+  const aliveIndexes = activePlayers()
+    .map((player) => player.id - 1)
+    .filter(
+      (index) =>
+        players[index]?.alive === true,
+    );
+
+  if (aliveIndexes.length === 0) {
+    return -1;
+  }
+
+  // Build the counting sequence using towers.
+  // Stage 0 = 1 tower
+  // Stage 1 = 2 towers
+  // Stage 2 = 1 tower
+  const countingSequence: number[] = [];
+
+  const startPosition =
+    aliveIndexes.indexOf(startIndex);
+
+  const safeStartPosition =
+    startPosition >= 0
+      ? startPosition
+      : 0;
+
+  for (
+    let offset = 0;
+    offset < aliveIndexes.length;
+    offset += 1
+  ) {
+    const position =
+      (safeStartPosition + offset) %
+      aliveIndexes.length;
+
+    const playerIndex =
+      aliveIndexes[position];
+
+    const player =
+      players[playerIndex];
+
+    if (!player) {
+      continue;
+    }
+
+    const towerCount =
+      player.stage === 1
+        ? 2
+        : 1;
+
+    for (
+      let tower = 0;
+      tower < towerCount;
+      tower += 1
+    ) {
+      countingSequence.push(playerIndex);
+    }
+  }
+
+  if (countingSequence.length === 0) {
+    return -1;
+  }
+
+  const sequencePosition =
+    (count - 1) %
+    countingSequence.length;
+
+  return countingSequence[sequencePosition];
 }
 
 private getNextCountingStartIndex(
@@ -4877,94 +4912,65 @@ private async requestHostAction(targetIds: number[]) {
   const shooter = players[myPlayerId - 1];
   if (!shooter || !ACTIVE_WEAPONS.includes(this.selectedWeapon) ||
       !shootingDeadlineAt || !Number.isFinite(Date.parse(shootingDeadlineAt))) return;
-  const request: OnlineAction = {
-    nonce: `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+  const nonce = `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  shooter.actionRequest = {
+    nonce,
     shooterId: shooter.id,
     weapon: this.selectedWeapon,
     targetIds: targetIds.map((id) => id + 1),
   };
-  shooter.actionRequest = request;
   this.statusText?.setText('Sending action to the host...');
-  try {
-    if (amHost()) {
-      await this.processPendingAction();
-    } else {
-      await this.sendRoomEvent('player_action_request', { sessionId, request });
-    }
-  } catch (error) {
-    if (shooter.actionRequest?.nonce === request.nonce) shooter.actionRequest = null;
-    console.error('[Peeranki] Could not send shot to the host:', error);
-    const reason = error instanceof Error ? error.message : String(error);
-    this.statusText?.setText(`Shot failed: ${reason.slice(0, 100)}`);
-    this.scheduleUiSync();
-  }
+  await syncGameState(this.currentShooter, this.countNumber, 'action_requested');
 }
 
 private async processPendingAction() {
-  if (!amHost() || this.gameFinished || this.matchTimeExpired() || this.processingOnlineAction) return;
-  this.processingOnlineAction = true;
-  try {
-    const requestOwner = players.find((player) => player.actionRequest !== null);
-    const action = requestOwner?.actionRequest;
-    if (!requestOwner || !action) return;
-    requestOwner.actionRequest = null;
-    if (processedOnlineActionNonces.has(action.nonce)) {
-      await syncGameState(this.currentShooter, this.countNumber, this.roundPhase === 'shooting' ? 'shooting' : 'shot');
-      return;
-    }
-    processedOnlineActionNonces.add(action.nonce);
-
-    const shooterIndex = action.shooterId - 1;
-    const shooter = players[shooterIndex];
-    const targetIndexes = action.targetIds.map((id) => id - 1);
-    const uniqueTargets = new Set(targetIndexes);
-    const validWeapon = ACTIVE_WEAPONS.includes(action.weapon) && shooter?.weapons.includes(action.weapon);
-    const expectedTargets = action.weapon === 'doublePeeranki' ? 2 : 1;
-    const validTargets = targetIndexes.length === expectedTargets && uniqueTargets.size === expectedTargets &&
-      targetIndexes.every((index) => index >= 0 && index < players.length && index !== shooterIndex && players[index].connected && players[index].alive);
-    const authorized = shooter?.sessionId === requestOwner.sessionId && shooterIndex === this.currentShooter && shooter.alive && shooter.connected;
-    const withinDeadline = Boolean(shootingDeadlineAt) && Date.now() < Date.parse(shootingDeadlineAt);
-    const validHook = action.weapon !== 'hook' || targetIndexes.length === 1 && players[targetIndexes[0]]?.weapons.includes('shield');
-    if (this.roundPhase !== 'shooting') {
-      await syncGameState(
-        this.currentShooter >= 0 ? this.currentShooter : null,
-        this.countNumber,
-        this.roundPhase === 'finished' ? 'finished' : 'shot',
-      );
-      return;
-    }
-    if (!withinDeadline) {
-      this.endActionOnTimeout();
-      return;
-    }
-
-    if (!authorized || !validWeapon || !validTargets || !validHook || this.matchTimeExpired()) {
-      this.statusText?.setText('The host rejected an invalid or expired action.');
-      await syncGameState(this.currentShooter, this.countNumber, 'shooting');
-      return;
-    }
-
-    this.applyWeaponEffect(targetIndexes[0], action.weapon === 'doublePeeranki' ? 'peeranki' : action.weapon, shooterIndex);
-    if (action.weapon === 'doublePeeranki') this.applyWeaponEffect(targetIndexes[1], 'gun', shooterIndex);
-    this.completePlayerShot(targetIndexes[targetIndexes.length - 1]);
-  } finally {
-    this.processingOnlineAction = false;
-    if (amHost() && players.some((player) => player.actionRequest)) {
-      void this.processPendingAction();
-    }
+  if (!amHost() || this.gameFinished || this.matchTimeExpired()) return;
+  const requestOwner = players.find((player) => player.actionRequest !== null);
+  const action = requestOwner?.actionRequest;
+  if (!requestOwner || !action) return;
+  requestOwner.actionRequest = null;
+  if (processedOnlineActionNonces.has(action.nonce)) {
+    await syncGameState(this.currentShooter, this.countNumber, this.roundPhase === 'shooting' ? 'shooting' : 'shot');
+    return;
   }
-}
+  processedOnlineActionNonces.add(action.nonce);
 
-private shootPlayer(index: number) {
-  if (!offlineMode && !this.gameFinished &&
-      (this.roundPhase !== 'shooting' || !shootingDeadlineAt)) {
-    this.statusText?.setText('Syncing the current turn. Please try again in a moment.');
-    void fetchGameRoom(roomCode)
-      .then((room) => { if (room) this.applyRemoteGameState(room); })
-      .catch((error) => console.error('[Peeranki] Could not refresh the current turn:', error));
+  const shooterIndex = action.shooterId - 1;
+  const shooter = players[shooterIndex];
+  const targetIndexes = action.targetIds.map((id) => id - 1);
+  const uniqueTargets = new Set(targetIndexes);
+  const validWeapon = ACTIVE_WEAPONS.includes(action.weapon) && shooter?.weapons.includes(action.weapon);
+  const expectedTargets = action.weapon === 'doublePeeranki' ? 2 : 1;
+  const validTargets = targetIndexes.length === expectedTargets && uniqueTargets.size === expectedTargets &&
+    targetIndexes.every((index) => index >= 0 && index < players.length && index !== shooterIndex && players[index].connected && players[index].alive);
+  const authorized = shooter?.sessionId === requestOwner.sessionId && shooterIndex === this.currentShooter && shooter.alive && shooter.connected;
+  const withinDeadline = Boolean(shootingDeadlineAt) && Date.now() < Date.parse(shootingDeadlineAt);
+  const validHook = action.weapon !== 'hook' || targetIndexes.length === 1 && players[targetIndexes[0]]?.weapons.includes('shield') && players[targetIndexes[0]]?.shieldDisabledRound !== matchRound;
+  if (this.roundPhase !== 'shooting') {
+    await syncGameState(
+      this.currentShooter >= 0 ? this.currentShooter : null,
+      this.countNumber,
+      this.roundPhase === 'finished' ? 'finished' : 'shot',
+    );
+    return;
+  }
+  if (!withinDeadline) {
+    this.endActionOnTimeout();
     return;
   }
 
+  if (!authorized || !validWeapon || !validTargets || !validHook || this.matchTimeExpired()) {
+    this.statusText?.setText('The host rejected an invalid or expired action.');
+    await syncGameState(this.currentShooter, this.countNumber, 'shooting');
+    return;
+  }
+
+  this.applyWeaponEffect(targetIndexes[0], action.weapon === 'doublePeeranki' ? 'peeranki' : action.weapon, shooterIndex);
+  if (action.weapon === 'doublePeeranki') this.applyWeaponEffect(targetIndexes[1], 'gun', shooterIndex);
+  this.completePlayerShot(targetIndexes[targetIndexes.length - 1]);
+}
+
+private shootPlayer(index: number) {
   if (
     this.applyingRemoteState ||
     this.gameFinished ||
@@ -5021,7 +5027,7 @@ private shootPlayer(index: number) {
     this.refreshWeaponPicker();
     return;
   }
-  if (this.selectedWeapon === 'hook' && !target.weapons.includes('shield')) {
+  if (this.selectedWeapon === 'hook' && (!target.weapons.includes('shield') || target.shieldDisabledRound === matchRound)) {
     this.statusText?.setText('Hook requires a target with a Shield.');
     return;
   }
@@ -5066,6 +5072,12 @@ private shootPlayer(index: number) {
   if (!offlineMode && !amHost()) {
     this.statusText?.setText(`Firing at ${target.name}...`);
     PeerankiAudio.effect(this.selectedWeapon === 'peeranki' ? 'cannon' : this.selectedWeapon === 'hook' ? 'hook' : 'shoot');
+    // Immediate visual recoil so non-host player feels zero latency
+    this.uiManager.triggerDamageFlash(index, false);
+    const targetCard = this.playerObjects[index];
+    if (targetCard) {
+      this.tweens.add({ targets: targetCard, scale: 1.08, duration: 80, yoyo: true, repeat: 1 });
+    }
     this.scheduleUiSync();
     void this.requestHostAction([index]);
     return;
@@ -5079,12 +5091,10 @@ private applyWeaponEffect(index: number, weapon: WeaponType, attackerIndex: numb
   const target = players[index];
   if (!target || !target.alive) return;
   const attacker = players[attackerIndex];
-  const result = calculateHitResult(target, weapon, matchRound);
-  const wasAlive = target.alive;
 
   if (weapon === 'hook') {
     PeerankiAudio.effect('hook');
-    if (result.shieldRemoved) {
+    if (target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound) {
       target.weapons = target.weapons.filter((item) => item !== 'shield');
       PeerankiAudio.effect('hook_strip');
       this.statusText?.setText(`${target.name}'s Shield was destroyed permanently!`);
@@ -5100,40 +5110,50 @@ private applyWeaponEffect(index: number, weapon: WeaponType, attackerIndex: numb
     return;
   }
 
-  if (weapon === 'doublePeeranki') PeerankiAudio.effect('double_peeranki');
-  else if (weapon === 'peeranki') PeerankiAudio.effect('cannon');
-  else PeerankiAudio.effect('shoot');
-
-  target.stage = result.newStage;
-  target.alive = result.alive;
-  target.shieldDisabledRound = result.shieldDisabledRound;
-
-  if (result.action === 'shield_absorbed') {
-    PeerankiAudio.effect('shield_hit');
-    this.statusText?.setText(`${target.name}'s Shield blocked the Gun shot.`);
-    this.uiManager?.showToast(`🛡️ ${target.name}'s Shield blocked ${attacker?.name ?? 'Attacker'}'s Gun shot!`, 'info');
-    this.updatePlayerVisual(index);
-    return;
-  }
-  if (result.action === 'shield_destroyed_for_round') {
-    PeerankiAudio.effect('shield_hit');
-    this.statusText?.setText(`${target.name}'s Shield was destroyed for this round.`);
-    this.uiManager?.showToast(`🛡️💥 ${target.name}'s Shield shattered for this round!`, 'alert');
-    const targetCard = this.playerObjects[index];
-    if (targetCard) this.tweens.add({ targets: targetCard, alpha: { from: 0.35, to: 1 }, duration: 110, yoyo: true, repeat: 2 });
-    this.updatePlayerVisual(index);
-    return;
-  }
-
-  if (!target.alive) {
-    PeerankiAudio.effect('tower_destroyed');
-    const weaponMessage = weapon === 'peeranki' ? ' demolished by Peeranki' : ' fell';
-    this.uiManager?.showToast(`⚡ ${target.name}'s Tower${weaponMessage}! Eliminated!`, 'alert');
+  if (weapon === 'doublePeeranki') {
+    PeerankiAudio.effect('double_peeranki');
+  } else if (weapon === 'peeranki') {
+    PeerankiAudio.effect('cannon');
   } else {
-    PeerankiAudio.effect('tower_damage');
-    this.uiManager?.showToast(`💥 ${target.name}'s Tower took damage (Stage ${target.stage})!`, 'alert');
+    PeerankiAudio.effect('shoot');
   }
-  if (wasAlive && !target.alive && attacker && attacker.id !== target.id && hasAllWeapons(attacker.weapons)) {
+
+  const hasShield = target.weapons.includes('shield') && target.shieldDisabledRound !== matchRound;
+  if (hasShield && (weapon === 'gun' || weapon === 'peeranki')) {
+    PeerankiAudio.effect('shield_hit');
+    if (weapon === 'peeranki') {
+      target.shieldDisabledRound = matchRound;
+      this.statusText?.setText(`${target.name}'s Shield was destroyed for this round.`);
+      this.uiManager?.showToast(`🛡️💥 ${target.name}'s Shield shattered for this round!`, 'alert');
+      const targetCard = this.playerObjects[index];
+      if (targetCard) this.tweens.add({ targets: targetCard, alpha: { from: 0.35, to: 1 }, duration: 110, yoyo: true, repeat: 2 });
+    } else {
+      this.statusText?.setText(`${target.name}'s Shield blocked the Gun shot.`);
+      this.uiManager?.showToast(`🛡️ ${target.name}'s Shield blocked ${attacker?.name ?? 'Attacker'}'s Gun shot!`, 'info');
+    }
+    this.updatePlayerVisual(index);
+    return;
+  }
+
+  if (weapon === 'peeranki') {
+    target.stage = 3;
+    target.alive = false;
+    PeerankiAudio.effect('tower_destroyed');
+    this.uiManager?.showToast(`⚡ ${target.name}'s Tower was demolished by Peeranki! Eliminated!`, 'alert');
+  } else {
+    target.stage += 1;
+    if (target.stage >= 3) {
+      target.stage = 3;
+      target.alive = false;
+      PeerankiAudio.effect('tower_destroyed');
+      this.uiManager?.showToast(`⚡ ${target.name}'s Tower fell! Eliminated!`, 'alert');
+    } else {
+      PeerankiAudio.effect('tower_damage');
+      this.uiManager?.showToast(`💥 ${target.name}'s Tower took damage (Stage ${target.stage})!`, 'alert');
+    }
+  }
+  if (!target.alive && attacker && attacker.id !== target.id &&
+      (attacker.hasCollectedAllWeapons || WEAPON_ORDER.every((ownedWeapon) => attacker.weapons.includes(ownedWeapon)))) {
     attacker.eliminationPoints += 1;
     this.updatePlayerVisual(attackerIndex);
   }
@@ -5217,8 +5237,6 @@ this.time.delayedCall(1200, () => {
 // Online mode
 this.nextStartIndex =
   this.getNextCountingStartIndex(index);
-// Do not wait for the database to echo the host's own write before advancing.
-this.scheduleNextRoundAfterShot();
 
 void this.recordShot();
 }
@@ -5244,14 +5262,14 @@ void this.recordShot();
     );
   }
 
-  private refreshWeaponPicker(syncAfterUpdate = true) {
+  private refreshWeaponPicker() {
     const localIndex = offlineMode ? 0 : myPlayerId - 1;
     const owned = players[localIndex]?.weapons ?? ['gun'];
     const options = ACTIVE_WEAPONS.filter((weapon) => owned.includes(weapon));
     if (!options.includes(this.selectedWeapon)) this.selectedWeapon = options[0] ?? 'gun';
     this.weaponImage?.setTexture(`weapon-${this.selectedWeapon}`);
     this.weaponText?.setText(WEAPON_NAMES[this.selectedWeapon]);
-    if (syncAfterUpdate) this.syncUI();
+    this.syncUI();
   }
 
   private refreshPreviousRoundText() {
@@ -5313,7 +5331,7 @@ void this.recordShot();
       message += ' No new weapon unlocked this round.';
       PeerankiAudio.effect('round_win');
     }
-    if (hasAllWeapons(winner.weapons)) winner.hasCollectedAllWeapons = true;
+    if (WEAPON_ORDER.every((weapon) => winner.weapons.includes(weapon))) winner.hasCollectedAllWeapons = true;
     lastRoundMessage = message;
     this.refreshPreviousRoundText();
     roundWinnerId = winner.id;
@@ -5351,23 +5369,13 @@ void this.recordShot();
     const winnerIndex = players.findIndex((player) => player.id === winner.id);
     const winnerCard = this.playerObjects[winnerIndex];
     if (winnerCard) this.tweens.add({ targets: winnerCard, scale: { from: 1, to: 1.12 }, duration: 300, yoyo: true, repeat: 2, ease: 'Back.Out' });
+    if (!offlineMode) await syncGameState(null, 0, 'round_won');
     this.markShooter();
     if (!this.nextRoundTimer) {
       this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
         this.nextRoundTimer = undefined;
         this.startCounting();
       });
-    }
-    // Keep the local round clock independent from the Supabase response. The
-    // previous ordering could leave the host stuck here forever when the
-    // update committed but its HTTP response was delayed or lost.
-    if (!offlineMode) {
-      try {
-        await syncGameState(null, 0, 'round_won');
-      } catch (error) {
-        console.error('Failed to sync round result:', error);
-        this.uiManager.showToast('Connection issue: continuing the next round…', 'alert');
-      }
     }
   }
 
@@ -5387,9 +5395,8 @@ void this.recordShot();
     this.countingTimer = undefined;
     this.nextRoundTimer?.remove(false);
     this.nextRoundTimer = undefined;
-    const eligiblePlayers = connectedPlayers();
-    const winners = findMatchWinners(eligiblePlayers);
-    const topCount = winners[0]?.weapons.length ?? 0;
+    const topCount = Math.max(0, ...connectedPlayers().map((player) => player.weapons.length));
+    const winners = connectedPlayers().filter((player) => player.weapons.length === topCount);
     if (!offlineMode) await syncGameState(this.currentShooter >= 0 ? this.currentShooter : null, this.countNumber, 'finished');
     this.showFinishedState(winners, topCount);
   }
@@ -5414,10 +5421,18 @@ void this.recordShot();
   shootingDeadlineAt = '';
 
   const connected = connectedPlayers();
-  const winners = weaponCount === undefined
-    ? findMatchWinners(finalists)
-    : finalists.filter((player) => player.weapons.length === weaponCount);
-  const topCount = winners[0]?.weapons.length ?? 0;
+  const topCount =
+    weaponCount ??
+    Math.max(
+      0,
+      ...connected.map(
+        (player) => player.weapons.length,
+      ),
+    );
+
+  const winners = finalists.filter(
+    (player) => player.weapons.length === topCount,
+  );
 
   if (!this.victoryPlayed) {
     this.victoryPlayed = true;
@@ -5714,7 +5729,6 @@ void this.recordShot();
   this.markShooter();
 }
   shutdown() {
-    this.scale.off('resize', this.gameResizeHandler);
     this.countingTimer?.remove(false);
     this.countingTimer = undefined;
     this.matchTimer?.remove(false);
