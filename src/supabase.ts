@@ -166,6 +166,16 @@ try {
       if (type === 'ROOM_UPDATE' && roomCode && data) {
         mockRoomsMemory.set(roomCode, data);
         notifyRoomListeners(roomCode, data, false);
+      } else if (type === 'PEER_ACTION_EVENT' && roomCode) {
+        const { event: actionEvent, payload, sender_id } = event.data;
+        const subs = roomSubscribers.get(roomCode);
+        if (subs) {
+          subs.forEach((sub) => {
+            if (sub.id !== sender_id) {
+              sub.eventCallback?.(actionEvent, payload);
+            }
+          });
+        }
       }
     };
   }
@@ -853,66 +863,180 @@ export function leaveRoomBestEffort(roomCode: string, sessionId: string) {
   }
 }
 
+export interface RoomSubscription {
+  unsubscribe: () => Promise<void>;
+  sendEvent: (event: string, payload: any) => Promise<void>;
+}
+
+interface RoomSubscriberEntry {
+  id: string;
+  stateCallback: (gameState: any) => void;
+  eventCallback?: (event: string, payload: any) => void;
+}
+
+const roomSubscribers = new Map<string, Set<RoomSubscriberEntry>>();
+
 export function subscribeToGameState(
   roomCode: string,
-  callback: (gameState: any) => void,
-) {
+  stateCallback: (gameState: any) => void,
+  eventCallback?: (event: string, payload: any) => void,
+): RoomSubscription {
   const cleanCode = roomCode.trim().toUpperCase();
+  const subId = `sub_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-  let realChannel: any = null;
+  if (!roomSubscribers.has(cleanCode)) {
+    roomSubscribers.set(cleanCode, new Set());
+  }
+
+  const currentEntry: RoomSubscriberEntry = {
+    id: subId,
+    stateCallback,
+    eventCallback,
+  };
+  roomSubscribers.get(cleanCode)!.add(currentEntry);
+
   if (hasAnySupabaseConfiguration) {
-    try {
-      const client = configuredClient();
-      realChannel = client
-        .channel(`peeranki-room-${cleanCode}`, {
-          config: {
-            broadcast: { self: false },
-          },
-        })
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'game_states',
-            filter: `room_code=eq.${cleanCode}`,
-          },
-          (payload) => {
-            const next = payload.new ?? null;
-            if (next && shouldAcceptRoomState(cleanCode, next)) {
-              callback(next);
+    if (!activeRealtimeChannels.has(cleanCode)) {
+      try {
+        const client = configuredClient();
+        const realChannel = client
+          .channel(`peeranki-room-${cleanCode}`, {
+            config: {
+              broadcast: { self: false },
+            },
+          })
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'game_states',
+              filter: `room_code=eq.${cleanCode}`,
+            },
+            (payload) => {
+              const next = payload.new ?? null;
+              if (next && shouldAcceptRoomState(cleanCode, next)) {
+                roomSubscribers.get(cleanCode)?.forEach((entry) => {
+                  try {
+                    entry.stateCallback(next);
+                  } catch (err) {
+                    console.error('[Peeranki] Subscriber state callback error:', err);
+                  }
+                });
+              }
+            },
+          )
+          .on('broadcast', { event: 'state_delta' }, (payload) => {
+            if (payload.payload && shouldAcceptRoomState(cleanCode, payload.payload)) {
+              roomSubscribers.get(cleanCode)?.forEach((entry) => {
+                try {
+                  entry.stateCallback(payload.payload);
+                } catch (err) {
+                  console.error('[Peeranki] Subscriber state delta callback error:', err);
+                }
+              });
             }
-          },
-        )
-        .on('broadcast', { event: 'state_delta' }, (payload) => {
-          if (payload.payload && shouldAcceptRoomState(cleanCode, payload.payload)) {
-            callback(payload.payload);
-          }
-        })
-        .subscribe((_status, error) => {
-          if (error) {
-            console.error('[Peeranki] Supabase realtime error:', error);
-          }
-        });
-      activeRealtimeChannels.set(cleanCode, realChannel);
-    } catch (err) {
-      console.error('[Peeranki] Failed to subscribe to Supabase realtime:', err);
+          })
+          .on('broadcast', { event: 'peer_action_event' }, (payload) => {
+            const data = payload.payload;
+            if (data && data.event) {
+              roomSubscribers.get(cleanCode)?.forEach((entry) => {
+                if (entry.id !== data.sender_id) {
+                  try {
+                    entry.eventCallback?.(data.event, data.payload);
+                  } catch (err) {
+                    console.error('[Peeranki] Subscriber peer action callback error:', err);
+                  }
+                }
+              });
+            }
+          })
+          .subscribe((_status, error) => {
+            if (error) {
+              console.error('[Peeranki] Supabase realtime error:', error);
+            }
+          });
+        activeRealtimeChannels.set(cleanCode, realChannel);
+      } catch (err) {
+        console.error('[Peeranki] Failed to subscribe to Supabase realtime:', err);
+      }
     }
   } else {
-    // Local listeners are only valid in explicitly unconfigured mode.
+    // Local in-memory listeners
     if (!listenersByRoom.has(cleanCode)) listenersByRoom.set(cleanCode, new Set());
-    listenersByRoom.get(cleanCode)!.add(callback);
+    listenersByRoom.get(cleanCode)!.add(stateCallback);
   }
 
   return {
-    unsubscribe: async () => {
-      listenersByRoom.get(cleanCode)?.delete(callback);
-      activeRealtimeChannels.delete(cleanCode);
-      if (realChannel) {
+    sendEvent: async (event: string, payload: any) => {
+      // 1. Dispatch directly to other local subscribers of the room (excluding sender)
+      const subs = roomSubscribers.get(cleanCode);
+      if (subs) {
+        subs.forEach((sub) => {
+          if (sub.id !== subId) {
+            try {
+              sub.eventCallback?.(event, payload);
+            } catch (err) {
+              console.error('[Peeranki] Local event dispatch error:', err);
+            }
+          }
+        });
+      }
+
+      // 2. Broadcast via Supabase Realtime channel
+      const chan = activeRealtimeChannels.get(cleanCode);
+      if (chan) {
         try {
-          await realChannel.unsubscribe();
-        } catch (err) {
-          console.error('[Peeranki] Supabase realtime unsubscribe failed:', err);
+          void chan.send({
+            type: 'broadcast',
+            event: 'peer_action_event',
+            payload: { event, payload, sender_id: subId },
+          });
+        } catch {
+          // best-effort
+        }
+      }
+
+      // 3. Broadcast across browser tabs
+      if (broadcastChannel) {
+        try {
+          broadcastChannel.postMessage({
+            type: 'PEER_ACTION_EVENT',
+            roomCode: cleanCode,
+            event,
+            payload,
+            sender_id: subId,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    },
+    unsubscribe: async () => {
+      listenersByRoom.get(cleanCode)?.delete(stateCallback);
+      const subs = roomSubscribers.get(cleanCode);
+      if (subs) {
+        subs.delete(currentEntry);
+        if (subs.size === 0) {
+          roomSubscribers.delete(cleanCode);
+          lastRoomStateSeq.delete(cleanCode);
+          lastRoomUpdatedAt.delete(cleanCode);
+          const chan = activeRealtimeChannels.get(cleanCode);
+          activeRealtimeChannels.delete(cleanCode);
+          if (chan) {
+            try {
+              await chan.unsubscribe();
+              if (hasAnySupabaseConfiguration) {
+                const client = configuredClient();
+                await client.removeChannel(chan);
+                if (activeRealtimeChannels.size === 0 && roomSubscribers.size === 0) {
+                  (client as any).realtime?.disconnect?.();
+                }
+              }
+            } catch (err) {
+              console.error('[Peeranki] Supabase realtime unsubscribe failed:', err);
+            }
+          }
         }
       }
     },
