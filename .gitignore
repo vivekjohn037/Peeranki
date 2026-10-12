@@ -36,3 +36,7 @@ artifacts/
 asset-backups/
 release/
 desktop.ini
+
+# Oversized raw audio files (Cloudflare 25MB limit)
+public/assets/audio/bg_music.wav
+*.wav.tmp

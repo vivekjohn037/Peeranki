@@ -253,30 +253,39 @@ for (let i = 0; i < totalSamples; i++) {
   offset += 4;
 }
 
+import os from 'node:os';
+
 const outputDir = path.resolve(process.cwd(), 'public/assets/audio');
 if (!fs.existsSync(outputDir)) {
   fs.mkdirSync(outputDir, { recursive: true });
 }
 
-const wavPath = path.join(outputDir, 'bg_music.wav');
-fs.writeFileSync(wavPath, wavBuffer);
-console.log(`Wrote WAV: ${wavPath} (${(wavBuffer.length / (1024 * 1024)).toFixed(2)} MB)`);
+// Ensure no stale oversized WAV remains in deployed public assets
+const legacyWavPath = path.join(outputDir, 'bg_music.wav');
+if (fs.existsSync(legacyWavPath)) {
+  fs.unlinkSync(legacyWavPath);
+  console.log(`Cleaned up oversized legacy WAV file: ${legacyWavPath}`);
+}
 
-// Encode to MP3 using ffmpeg
+// Write temporary WAV in OS temp dir for encoding
+const tempWavPath = path.join(os.tmpdir(), `peeranki_temp_bg_music_${Date.now()}.wav`);
+fs.writeFileSync(tempWavPath, wavBuffer);
+
+// Encode to MP3 at 192 kbps using ffmpeg
 const mp3Path = path.join(outputDir, 'bg_music.mp3');
 const mp3PathAlias1 = path.join(outputDir, 'bg_music_1.mp3');
 const mp3PathAlias2 = path.join(outputDir, 'bg_music_2.mp3');
 
 try {
-  execSync(`ffmpeg -y -i "${wavPath}" -codec:a libmp3lame -qscale:a 2 "${mp3Path}"`);
-  console.log(`Encoded MP3: ${mp3Path}`);
+  execSync(`ffmpeg -y -i "${tempWavPath}" -codec:a libmp3lame -b:a 192k "${mp3Path}"`);
+  console.log(`Encoded MP3 (192 kbps): ${mp3Path}`);
   fs.copyFileSync(mp3Path, mp3PathAlias1);
   fs.copyFileSync(mp3Path, mp3PathAlias2);
   console.log(`Copied aliases to ${mp3PathAlias1} and ${mp3PathAlias2}`);
 } catch (err) {
   console.error('ffmpeg conversion error:', err);
-  // Fallback: copy wav to mp3 so browser still handles it smoothly
-  fs.copyFileSync(wavPath, mp3Path);
-  fs.copyFileSync(wavPath, mp3PathAlias1);
-  fs.copyFileSync(wavPath, mp3PathAlias2);
+} finally {
+  if (fs.existsSync(tempWavPath)) {
+    fs.unlinkSync(tempWavPath);
+  }
 }

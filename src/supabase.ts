@@ -253,7 +253,7 @@ function notifyRoomListeners(roomCode: string, state: any, broadcast: boolean) {
   }
 }
 
-function updateMockRoomPartial(code: string, updates: Partial<MockRoomRecord>) {
+function updateMockRoomPartial(code: string, updates: Partial<MockRoomRecord>, notify = true) {
   const room = getStoredRoom(code);
   if (!room) return null;
   const updated: MockRoomRecord = {
@@ -261,7 +261,16 @@ function updateMockRoomPartial(code: string, updates: Partial<MockRoomRecord>) {
     ...updates,
     updated_at: new Date().toISOString(),
   };
-  persistMockRoom(updated);
+  const cleanCode = updated.room_code.trim().toUpperCase();
+  mockRoomsMemory.set(cleanCode, updated);
+  try {
+    sessionStorage.setItem(`${STORAGE_PREFIX}${cleanCode}`, JSON.stringify(updated));
+  } catch {
+    // sessionStorage quota or disabled
+  }
+  if (notify) {
+    notifyRoomListeners(cleanCode, updated, true);
+  }
   return updated;
 }
 
@@ -651,7 +660,7 @@ function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   }
 
   if (time > 0 && lastTime > 0) {
-    if (time < lastTime) return false;
+    if (time <= lastTime) return false;
     lastRoomUpdatedAt.set(roomCode, time);
     if (seq > lastSeq) lastRoomStateSeq.set(roomCode, seq);
     return true;
@@ -705,7 +714,21 @@ export async function saveGameState(
     }
   }
 
-  // 2. Also update local mock room (which persists and notifies local subscribers)
+  // 2. Instantly notify local subscribers on this client
+  notifyRoomListeners(cleanCode, statePayload, false);
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({
+        type: 'ROOM_UPDATE',
+        roomCode: cleanCode,
+        data: statePayload,
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Update local mock room store (without duplicate notify)
   updateMockRoomPartial(cleanCode, {
     players: players as any[],
     max_players: maxPlayers,
@@ -713,7 +736,7 @@ export async function saveGameState(
     countdown: countNumber,
     game_status: gameStatus,
     state_seq: seq,
-  });
+  }, false);
 
   if (hasAnySupabaseConfiguration) {
     const client = configuredClient();

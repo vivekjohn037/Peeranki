@@ -24,6 +24,7 @@ import {
   touchPlayer,
   leaveRoom,
   subscribeToGameState,
+  supabase,
 } from '../src/supabase.ts';
 
 test('1. WEAPON DEFINITIONS & SEQUENCING', async (t) => {
@@ -370,4 +371,14 @@ test('6. ROOM STATE UPDATES REACH LOCAL SUBSCRIBERS', async () => {
   } finally {
     await subscriber.unsubscribe();
   }
+});
+
+test('7. CLEANUP REALTIME CONNECTIONS', async () => {
+  if (supabase?.realtime) {
+    try {
+      await supabase.removeAllChannels();
+      supabase.realtime.disconnect();
+    } catch {}
+  }
+  setTimeout(() => process.exit(0), 50).unref();
 });

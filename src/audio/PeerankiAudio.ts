@@ -21,7 +21,6 @@ export const SOUNDTRACK_TRACKS: SoundtrackTrack[] = [
     sources: [
       '/assets/audio/bg_music.mp3',
       '/assets/audio/bg_music_1.mp3',
-      '/assets/audio/bg_music.wav',
     ],
   },
   {

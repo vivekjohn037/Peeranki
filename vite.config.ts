@@ -34,9 +34,56 @@ function backgroundUploadPlugin(): Plugin {
   };
 }
 
+function cloudflareAssetGuardPlugin(): Plugin {
+  return {
+    name: 'cloudflare-asset-guard-plugin',
+    buildStart() {
+      // Clean up any stale oversized WAV from public directory before Vite copies assets
+      const publicWav = path.resolve(process.cwd(), 'public/assets/audio/bg_music.wav');
+      if (fs.existsSync(publicWav)) {
+        try {
+          fs.unlinkSync(publicWav);
+          console.log('[Cloudflare Guard] Removed stale public/assets/audio/bg_music.wav');
+        } catch {}
+      }
+    },
+    closeBundle() {
+      const distDir = path.resolve(process.cwd(), 'dist');
+      if (!fs.existsSync(distDir)) return;
+
+      // 1. Ensure bg_music.wav never ends up in dist
+      const distWav = path.join(distDir, 'assets/audio/bg_music.wav');
+      if (fs.existsSync(distWav)) {
+        fs.unlinkSync(distWav);
+        console.log('[Cloudflare Guard] Purged dist/assets/audio/bg_music.wav');
+      }
+
+      // 2. Validate all output files strictly comply with Cloudflare Pages 25 MiB asset limit
+      const maxLimitBytes = 25 * 1024 * 1024;
+      function checkDir(dir: string) {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            checkDir(fullPath);
+          } else if (entry.isFile()) {
+            const stat = fs.statSync(fullPath);
+            if (stat.size >= maxLimitBytes) {
+              const rel = path.relative(process.cwd(), fullPath);
+              const mib = (stat.size / (1024 * 1024)).toFixed(2);
+              throw new Error(`[Cloudflare Guard] Asset exceeds Cloudflare Pages 25 MiB limit: ${rel} (${mib} MiB)`);
+            }
+          }
+        }
+      }
+      checkDir(distDir);
+    },
+  };
+}
+
 export default defineConfig({
   base: process.env.VITE_BASE || (process.env.ELECTRON === 'true' ? './' : '/'),
-  plugins: [backgroundUploadPlugin()],
+  plugins: [backgroundUploadPlugin(), cloudflareAssetGuardPlugin()],
   build: {
     target: 'es2020',
     chunkSizeWarningLimit: 1400,
