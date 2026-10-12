@@ -25,6 +25,9 @@ import {
   leaveRoom,
   subscribeToGameState,
   supabase,
+  parseSupabaseError,
+  MultiplayerError,
+  isServiceRoleKey,
 } from '../src/supabase.ts';
 
 test('1. WEAPON DEFINITIONS & SEQUENCING', async (t) => {
@@ -373,7 +376,78 @@ test('6. ROOM STATE UPDATES REACH LOCAL SUBSCRIBERS', async () => {
   }
 });
 
-test('7. CLEANUP REALTIME CONNECTIONS', async () => {
+test('7. MULTIPLAYER ERROR PARSING & RECOVERY', async (t) => {
+  await t.test('Maps missing build configuration to CONFIG_MISSING', () => {
+    const err = parseSupabaseError(new Error('VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY required'));
+    assert.equal(err.code, 'CONFIG_MISSING');
+    assert.equal(err.userMessage.includes('not configured'), true);
+  });
+
+  await t.test('Maps PostgreSQL 42P01 to TABLE_MISSING', () => {
+    const err = parseSupabaseError({ code: '42P01', message: 'relation "public.game_states" does not exist' });
+    assert.equal(err.code, 'TABLE_MISSING');
+    assert.equal(err.userMessage.includes('game_states'), true);
+  });
+
+  await t.test('Maps PGRST202 schema cache error to RPC_MISSING', () => {
+    const err = parseSupabaseError({ code: 'PGRST202', message: 'Could not find the function public.join_private_room' });
+    assert.equal(err.code, 'RPC_MISSING');
+    assert.equal(err.userMessage.includes('RPC function missing'), true);
+  });
+
+  await t.test('Maps P0001 / room not found to ROOM_NOT_FOUND', () => {
+    const err = parseSupabaseError({ code: 'P0001', message: 'Room does not exist' });
+    assert.equal(err.code, 'ROOM_NOT_FOUND');
+    assert.equal(err.userMessage.includes('Room not found'), true);
+  });
+
+  await t.test('Maps P0005 / capacity to ROOM_FULL', () => {
+    const err = parseSupabaseError({ code: 'P0005', message: 'Room is full' });
+    assert.equal(err.code, 'ROOM_FULL');
+    assert.equal(err.userMessage.includes('Room is full'), true);
+  });
+
+  await t.test('Maps P0004 / match started to GAME_IN_PROGRESS', () => {
+    const err = parseSupabaseError({ code: 'P0004', message: 'Game already in progress' });
+    assert.equal(err.code, 'GAME_IN_PROGRESS');
+  });
+
+  await t.test('Maps 42501 permission error to PERMISSION_DENIED', () => {
+    const err = parseSupabaseError({ code: '42501', message: 'permission denied for table game_states' });
+    assert.equal(err.code, 'PERMISSION_DENIED');
+  });
+
+  await t.test('Maps fetch errors to NETWORK_ERROR', () => {
+    const err = parseSupabaseError(new TypeError('Failed to fetch'));
+    assert.equal(err.code, 'NETWORK_ERROR');
+    assert.equal(err.userMessage.includes('Network connection failed'), true);
+  });
+
+  await t.test('Detects service-role JWT keys vs anon keys', () => {
+    // Header: {"alg":"HS256","typ":"JWT"}, Payload: {"role":"service_role","iss":"supabase"}, Signature
+    const serviceToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UifQ.mocksignature';
+    assert.equal(isServiceRoleKey(serviceToken), true);
+
+    const anonToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIn0.mocksignature';
+    assert.equal(isServiceRoleKey(anonToken), false);
+
+    assert.equal(isServiceRoleKey(''), false);
+    assert.equal(isServiceRoleKey(undefined), false);
+  });
+
+  await t.test('joinRoom validates 6-character code constraint', async () => {
+    await assert.rejects(
+      async () => {
+        await joinRoom('SHORT', 'Player', 'sess-123');
+      },
+      (err) => {
+        return err instanceof MultiplayerError && err.code === 'ROOM_NOT_FOUND';
+      },
+    );
+  });
+});
+
+test('8. CLEANUP REALTIME CONNECTIONS', async () => {
   if (supabase?.realtime) {
     try {
       await supabase.removeAllChannels();

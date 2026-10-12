@@ -49,6 +49,7 @@ import {
   setStoredServerRegion,
   supabase,
 } from './supabase';
+import { showMultiplayerErrorModal } from './ui/multiplayerModal';
 
 interface Player {
   id: number;
@@ -2302,28 +2303,77 @@ class PlayerCountScene extends Phaser.Scene {
       await previousRoomCleanup;
 
       if (this.mode === 'private') {
-        const result = await createPrivateRoom(
-          selectedCount,
-          sessionId,
-          getStoredPlayerName(),
-        );
+        try {
+          const result = await createPrivateRoom(
+            selectedCount,
+            sessionId,
+            getStoredPlayerName(),
+          );
 
-        if (!result) {
-          actionButton.setText('CREATE FAILED');
+          if (!result) {
+            throw new Error('Room returned empty data.');
+          }
+
+          roomCode = String(result.room_code);
+          maxPlayers = Number(result.max_players);
+          isPublicRoom = false;
+          hostSessionId = String(
+            result.host_session_id ?? sessionId,
+          );
+
+          loadPlayersFromRoom(
+            Array.isArray(result.players)
+              ? result.players
+              : [],
+          );
+
+          rememberRoom(roomCode, false);
+          startRoomHeartbeat();
+          this.scene.start('LobbyScene');
+          return;
+        } catch (err) {
+          actionButton.setText('CREATE ROOM');
           actionButton.setInteractive({
             useHandCursor: true,
           });
           backButton.setInteractive({
             useHandCursor: true,
           });
+
+          showMultiplayerErrorModal({
+            title: 'CANNOT CREATE ROOM',
+            error: err,
+            onRetry: () => {
+              actionButton.emit('pointerdown');
+            },
+          });
           return;
         }
+      }
+
+      const name =
+        this.nameInput?.value.trim() || getStoredPlayerName();
+      setStoredPlayerName(name);
+
+      try {
+        const result =
+          await findOrCreateRandomRoom(
+            selectedCount,
+            name,
+            sessionId,
+          );
+
+        if (!result) {
+          throw new Error('Matchmaking returned empty data.');
+        }
+
+        removePeerankiInputs();
 
         roomCode = String(result.room_code);
         maxPlayers = Number(result.max_players);
-        isPublicRoom = false;
+        isPublicRoom = true;
         hostSessionId = String(
-          result.host_session_id ?? sessionId,
+          result.host_session_id ?? '',
         );
 
         loadPlayersFromRoom(
@@ -2332,54 +2382,28 @@ class PlayerCountScene extends Phaser.Scene {
             : [],
         );
 
-        rememberRoom(roomCode, false);
+        findMyPlayerId();
+        rememberRoom(roomCode, true);
         startRoomHeartbeat();
+
         this.scene.start('LobbyScene');
-        return;
-      }
-
-      const name =
-        this.nameInput?.value.trim() || getStoredPlayerName();
-      setStoredPlayerName(name);
-
-      const result =
-        await findOrCreateRandomRoom(
-          selectedCount,
-          name,
-          sessionId,
-        );
-
-      if (!result) {
-        actionButton.setText('MATCH FAILED');
+      } catch (err) {
+        actionButton.setText('FIND MATCH');
         actionButton.setInteractive({
           useHandCursor: true,
         });
         backButton.setInteractive({
           useHandCursor: true,
         });
-        return;
+
+        showMultiplayerErrorModal({
+          title: 'MATCHMAKING FAILED',
+          error: err,
+          onRetry: () => {
+            actionButton.emit('pointerdown');
+          },
+        });
       }
-
-      removePeerankiInputs();
-
-      roomCode = String(result.room_code);
-      maxPlayers = Number(result.max_players);
-      isPublicRoom = true;
-      hostSessionId = String(
-        result.host_session_id ?? '',
-      );
-
-      loadPlayersFromRoom(
-        Array.isArray(result.players)
-          ? result.players
-          : [],
-      );
-
-      findMyPlayerId();
-      rememberRoom(roomCode, true);
-      startRoomHeartbeat();
-
-      this.scene.start('LobbyScene');
     });
 
     backButton.on('pointerdown', () => {
@@ -2586,43 +2610,58 @@ class JoinScene extends Phaser.Scene {
 
       await previousRoomCleanup;
 
-      const result = await joinRoom(
-        code,
-        name,
-        sessionId,
-      );
+      try {
+        const result = await joinRoom(
+          code,
+          name,
+          sessionId,
+        );
 
-      if (!result) {
-        joinButton.setText('JOIN FAILED');
+        if (!result) {
+          throw new Error('Room returned empty data.');
+        }
+
+        removePeerankiInputs();
+
+        roomCode = String(result.room_code);
+        maxPlayers = Number(result.max_players);
+        isPublicRoom = Boolean(result.is_public);
+        hostSessionId = String(
+          result.host_session_id ?? '',
+        );
+
+        loadPlayersFromRoom(
+          Array.isArray(result.players)
+            ? result.players
+            : [],
+        );
+
+        findMyPlayerId();
+        rememberRoom(roomCode, isPublicRoom);
+        startRoomHeartbeat();
+
+        this.scene.start('LobbyScene');
+      } catch (err) {
+        joinButton.setText('JOIN GAME');
         joinButton.setInteractive({
           useHandCursor: true,
         });
         backButton.setInteractive({
           useHandCursor: true,
         });
-        return;
+
+        showMultiplayerErrorModal({
+          title: 'CANNOT JOIN ROOM',
+          error: err,
+          roomCode: code,
+          onRetry: () => {
+            joinButton.emit('pointerdown');
+          },
+          onDismiss: () => {
+            this.roomInput?.focus();
+          },
+        });
       }
-
-      removePeerankiInputs();
-
-      roomCode = String(result.room_code);
-      maxPlayers = Number(result.max_players);
-      isPublicRoom = Boolean(result.is_public);
-      hostSessionId = String(
-        result.host_session_id ?? '',
-      );
-
-      loadPlayersFromRoom(
-        Array.isArray(result.players)
-          ? result.players
-          : [],
-      );
-
-      findMyPlayerId();
-      rememberRoom(roomCode, isPublicRoom);
-      startRoomHeartbeat();
-
-      this.scene.start('LobbyScene');
     });
 
     backButton.on('pointerdown', () => {
@@ -2982,17 +3021,26 @@ class LobbyScene extends Phaser.Scene {
       return;
     }
 
-    const result = await fetchGameRoom(roomCode);
+    let result: any = null;
+    try {
+      result = await fetchGameRoom(roomCode);
 
-    if (!result) {
+      if (!result) {
+        this.statusText?.setText(
+          'Room closed or connection failed.',
+        );
+        this.statusText?.setStyle({ color: '#ef4444' });
+        return;
+      }
+
+      this.applyRoomState(result);
+    } catch {
       this.statusText?.setText(
-        'Room closed or connection failed.',
+        'Connection to room lost. Reconnecting...',
       );
-      this.statusText?.setStyle({ color: '#ef4444' });
+      this.statusText?.setStyle({ color: '#f59e0b' });
       return;
     }
-
-    this.applyRoomState(result);
 
     if (isPublicRoom && amHost()) {
       const count = connectedPlayers().length;

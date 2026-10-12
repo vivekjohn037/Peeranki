@@ -11,43 +11,7 @@ const globalEnv = typeof globalThis !== 'undefined' ? (globalThis as any).proces
 const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || globalEnv?.VITE_SUPABASE_URL;
 const supabaseKey = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY) || globalEnv?.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-const isSupabaseConfigured = Boolean(
-  typeof supabaseUrl === 'string' &&
-  supabaseUrl.trim().startsWith('http') &&
-  typeof supabaseKey === 'string' &&
-  supabaseKey.trim().length > 0,
-);
-
-const hasAnySupabaseConfiguration = [supabaseUrl, supabaseKey].some(
-  (value) => typeof value === 'string' && value.trim().length > 0,
-);
-
-let realClient: SupabaseClient | null = null;
-let clientInitializationError: unknown;
-
-if (isSupabaseConfigured) {
-  try {
-    realClient = createClient(supabaseUrl.trim(), supabaseKey.trim());
-  } catch (err) {
-    console.error('[Peeranki] Failed to initialize configured Supabase client:', err);
-    clientInitializationError = err;
-    realClient = null;
-  }
-} else if (!hasAnySupabaseConfiguration) {
-  console.info('[Peeranki] Supabase environment variables not configured; running with local in-memory/broadcast room manager.');
-} else {
-  clientInitializationError = new Error('Both VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are required.');
-  console.error('[Peeranki] Supabase configuration is incomplete; online rooms are unavailable.');
-}
-
-// Purge any sensitive API keys inadvertently cached in client storage
-try {
-  if (typeof localStorage !== 'undefined') {
-    localStorage.removeItem('peeranki_custom_supabase_key');
-  }
-} catch {}
-
-function isServiceRoleKey(key: string | undefined): boolean {
+export function isServiceRoleKey(key: string | undefined): boolean {
   if (!key || typeof key !== 'string') return false;
   try {
     const parts = key.split('.');
@@ -67,13 +31,237 @@ function isServiceRoleKey(key: string | undefined): boolean {
   return false;
 }
 
+export const isProduction = Boolean(typeof import.meta !== 'undefined' && import.meta.env?.PROD);
+
+export const isSupabaseConfigured = Boolean(
+  typeof supabaseUrl === 'string' &&
+  supabaseUrl.trim().startsWith('http') &&
+  typeof supabaseKey === 'string' &&
+  supabaseKey.trim().length > 0 &&
+  !isServiceRoleKey(supabaseKey),
+);
+
+export const hasAnySupabaseConfiguration = [supabaseUrl, supabaseKey].some(
+  (value) => typeof value === 'string' && value.trim().length > 0,
+);
+
+export type MultiplayerErrorCode =
+  | 'CONFIG_MISSING'
+  | 'TABLE_MISSING'
+  | 'RPC_MISSING'
+  | 'ROOM_NOT_FOUND'
+  | 'ROOM_FULL'
+  | 'GAME_IN_PROGRESS'
+  | 'PERMISSION_DENIED'
+  | 'NETWORK_ERROR'
+  | 'REALTIME_ERROR'
+  | 'UNKNOWN_ERROR';
+
+export class MultiplayerError extends Error {
+  readonly code: MultiplayerErrorCode;
+  readonly userMessage: string;
+  readonly technicalDetails?: string;
+  readonly cause?: unknown;
+
+  constructor(
+    code: MultiplayerErrorCode,
+    userMessage: string,
+    technicalDetails?: string,
+    cause?: unknown,
+  ) {
+    super(userMessage);
+    this.name = 'MultiplayerError';
+    this.code = code;
+    this.userMessage = userMessage;
+    this.technicalDetails = technicalDetails;
+    this.cause = cause;
+  }
+}
+
+export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer request failed'): MultiplayerError {
+  if (err instanceof MultiplayerError) return err;
+
+  const msg = err instanceof Error ? err.message : String(err || '');
+  const rawCode = String((err as any)?.code || '');
+  const details = String((err as any)?.details || '');
+  const hint = String((err as any)?.hint || '');
+  const status = Number((err as any)?.status || 0);
+  const searchStr = `${msg} ${details} ${hint} ${rawCode}`.toLowerCase();
+
+  // 1. Missing or invalid build-time configuration / API key
+  if (
+    searchStr.includes('vite_supabase_url') ||
+    searchStr.includes('vite_supabase_publishable_key') ||
+    searchStr.includes('supabase is configured but unavailable') ||
+    searchStr.includes('supabase configuration is incomplete') ||
+    searchStr.includes('supabase client is not available') ||
+    searchStr.includes('supabase backend is not configured') ||
+    searchStr.includes('service-role') ||
+    searchStr.includes('invalid api key') ||
+    searchStr.includes('jwt') ||
+    searchStr.includes('apikey')
+  ) {
+    return new MultiplayerError(
+      'CONFIG_MISSING',
+      'Supabase backend is not configured in this build.',
+      'VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY must be provided during build time.',
+      err,
+    );
+  }
+
+  // 2. Database table missing (PostgreSQL 42P01: undefined_table)
+  if (
+    rawCode === '42P01' ||
+    searchStr.includes('relation "public.game_states" does not exist') ||
+    searchStr.includes('relation "game_states" does not exist') ||
+    searchStr.includes('table "game_states" does not exist') ||
+    searchStr.includes('game_states does not exist')
+  ) {
+    return new MultiplayerError(
+      'TABLE_MISSING',
+      'Database table "game_states" is missing on Supabase.',
+      'Execute migration supabase/migrations/001_multiplayer.sql in the Supabase SQL Editor.',
+      err,
+    );
+  }
+
+  // 3. RPC function missing (PostgREST PGRST202: function not found in schema cache)
+  if (
+    rawCode === 'PGRST202' ||
+    searchStr.includes('could not find the function') ||
+    searchStr.includes('join_private_room') ||
+    searchStr.includes('find_or_create_public_room') ||
+    searchStr.includes('touch_player') ||
+    searchStr.includes('leave_room') ||
+    searchStr.includes('cleanup_stale_players')
+  ) {
+    return new MultiplayerError(
+      'RPC_MISSING',
+      'Required database RPC function missing on Supabase.',
+      'Execute migration supabase/migrations/001_multiplayer.sql in the Supabase SQL Editor.',
+      err,
+    );
+  }
+
+  // 4. Room not found / expired (PostgreSQL P0001, P0002)
+  if (
+    rawCode === 'P0001' ||
+    rawCode === 'P0002' ||
+    searchStr.includes('room does not exist') ||
+    searchStr.includes('room not found') ||
+    searchStr.includes('could not find room')
+  ) {
+    return new MultiplayerError(
+      'ROOM_NOT_FOUND',
+      'Room not found. Check the 6-character code or ask host for a new room.',
+      msg || details,
+      err,
+    );
+  }
+
+  // 5. Room already full (PostgreSQL P0005)
+  if (
+    rawCode === 'P0005' ||
+    searchStr.includes('room is full') ||
+    searchStr.includes('capacity reached') ||
+    searchStr.includes('maximum players')
+  ) {
+    return new MultiplayerError(
+      'ROOM_FULL',
+      'Room is full. Maximum players already joined.',
+      msg || details,
+      err,
+    );
+  }
+
+  // 6. Game already in progress (PostgreSQL P0004)
+  if (
+    rawCode === 'P0004' ||
+    searchStr.includes('game already in progress') ||
+    searchStr.includes('match in progress') ||
+    searchStr.includes('already started')
+  ) {
+    return new MultiplayerError(
+      'GAME_IN_PROGRESS',
+      'This match has already started and cannot accept new players.',
+      msg || details,
+      err,
+    );
+  }
+
+  // 7. Permission / RLS failure (PostgreSQL 42501: insufficient_privilege)
+  if (
+    rawCode === '42501' ||
+    status === 401 ||
+    status === 403 ||
+    searchStr.includes('permission denied') ||
+    searchStr.includes('row-level security') ||
+    searchStr.includes('rls')
+  ) {
+    return new MultiplayerError(
+      'PERMISSION_DENIED',
+      'Database permission denied (Row Level Security check failed).',
+      'Ensure anon and authenticated roles have permissions on game_states and RPC functions.',
+      err,
+    );
+  }
+
+  // 8. Network timeout or connection failure
+  if (
+    searchStr.includes('failed to fetch') ||
+    searchStr.includes('networkerror') ||
+    searchStr.includes('aborterror') ||
+    searchStr.includes('timeout') ||
+    status === 502 ||
+    status === 503 ||
+    status === 504
+  ) {
+    return new MultiplayerError(
+      'NETWORK_ERROR',
+      'Network connection failed. Could not reach Supabase servers.',
+      msg,
+      err,
+    );
+  }
+
+  return new MultiplayerError('UNKNOWN_ERROR', defaultMessage, msg, err);
+}
+
+let realClient: SupabaseClient | null = null;
+let clientInitializationError: unknown;
+
 if (isServiceRoleKey(supabaseKey)) {
   console.error(
     '[SECURITY ALERT] A Supabase service-role key was detected in VITE_SUPABASE_PUBLISHABLE_KEY. ' +
     'Service-role keys bypass all Row Level Security and must NEVER be exposed in client builds. ' +
     'Use only your public anon/publishable key on the client.',
   );
+  clientInitializationError = new Error('Service-role key cannot be used in client builds.');
+} else if (isSupabaseConfigured) {
+  try {
+    realClient = createClient(supabaseUrl!.trim(), supabaseKey!.trim());
+  } catch (err) {
+    console.error('[Peeranki] Failed to initialize configured Supabase client:', err);
+    clientInitializationError = err;
+    realClient = null;
+  }
+} else if (!hasAnySupabaseConfiguration) {
+  if (isProduction) {
+    console.warn('[Peeranki] Production build compiled without Supabase credentials. Online multiplayer requires VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.');
+  } else {
+    console.info('[Peeranki] Local development: running with in-memory/broadcast mock room manager.');
+  }
+} else {
+  clientInitializationError = new Error('Both VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are required.');
+  console.error('[Peeranki] Supabase configuration is incomplete; online rooms are unavailable.');
 }
+
+// Purge any sensitive API keys inadvertently cached in client storage
+try {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem('peeranki_custom_supabase_key');
+  }
+} catch {}
 
 export interface ServerRegionInfo {
   id: string;
@@ -139,11 +327,53 @@ function getStoredCustomUrl(): string | null {
   }
 }
 
+export function getSupabaseConfigStatus() {
+  return {
+    isConfigured: isSupabaseConfigured,
+    hasAnyConfig: hasAnySupabaseConfiguration,
+    url: typeof supabaseUrl === 'string' && supabaseUrl ? supabaseUrl.replace(/^(https?:\/\/[^/]+).*/, '$1') : '',
+    hasKey: typeof supabaseKey === 'string' && supabaseKey.trim().length > 0,
+    isProduction,
+  };
+}
+
 function configuredClient(): SupabaseClient {
+  if (isServiceRoleKey(supabaseKey)) {
+    throw new MultiplayerError(
+      'CONFIG_MISSING',
+      'Security error: Supabase service-role key detected in client build.',
+      'A service-role key bypasses all Row Level Security. Replace VITE_SUPABASE_PUBLISHABLE_KEY with your project anon/publishable key and rebuild.',
+    );
+  }
+  if (!isSupabaseConfigured) {
+    if (!supabaseUrl && !supabaseKey) {
+      throw new MultiplayerError(
+        'CONFIG_MISSING',
+        'Supabase backend is not configured in this build.',
+        'Production multiplayer requires VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY environment variables set at build time.',
+      );
+    }
+    if (!supabaseUrl || !supabaseUrl.trim().startsWith('http')) {
+      throw new MultiplayerError(
+        'CONFIG_MISSING',
+        'Invalid Supabase URL configured.',
+        `VITE_SUPABASE_URL must be a valid HTTPS URL (e.g. https://your-project.supabase.co). Current value: "${supabaseUrl || ''}"`,
+      );
+    }
+    if (!supabaseKey || supabaseKey.trim().length === 0) {
+      throw new MultiplayerError(
+        'CONFIG_MISSING',
+        'Missing Supabase publishable key.',
+        'VITE_SUPABASE_PUBLISHABLE_KEY must be provided during build time.',
+      );
+    }
+  }
   if (realClient) return realClient;
-  throw new Error(
-    `Supabase is configured but unavailable: ${errorMessage(clientInitializationError)}. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.`,
-    { cause: clientInitializationError },
+  throw new MultiplayerError(
+    'CONFIG_MISSING',
+    'Supabase client failed to initialize.',
+    `Initialization error: ${errorMessage(clientInitializationError)}. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.`,
+    clientInitializationError,
   );
 }
 
@@ -375,12 +605,12 @@ export async function createPrivateRoom(
   playerName = 'Player 1',
 ) {
   if (!validPlayerCount(maxPlayers) || !sessionId) {
-    return null;
+    throw new MultiplayerError('UNKNOWN_ERROR', 'Invalid player count or session identifier.');
   }
 
   const hostName = playerName.trim() || 'Player 1';
 
-  if (hasAnySupabaseConfiguration) {
+  if (isProduction || hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
       for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -417,17 +647,20 @@ export async function createPrivateRoom(
           return data;
         }
 
-        if (error && !String(error.message).toLowerCase().includes('duplicate')) {
-          throw new Error(`Supabase room creation failed: ${error.message}`);
+        if (error) {
+          if (String(error.message).toLowerCase().includes('duplicate') || String((error as any).code).includes('23505')) {
+            continue;
+          }
+          throw parseSupabaseError(error, 'Supabase room creation failed');
         }
       }
-      throw new Error('Supabase could not generate a unique room code after several attempts.');
+      throw new MultiplayerError('UNKNOWN_ERROR', 'Could not generate unique room code after several attempts.');
     } catch (err) {
-      throw new Error(`Supabase room creation failed: ${errorMessage(err)}`, { cause: err });
+      throw parseSupabaseError(err, 'Supabase room creation failed');
     }
   }
 
-  // Local mock room creation
+  // Local mock room creation (development only)
   const roomCode = generateRoomCode();
   const initialPlayers = [
     {
@@ -469,11 +702,29 @@ export async function joinRoom(
   const cleanCode = roomCode.trim().toUpperCase();
   const cleanName = playerName.trim();
 
-  if (!cleanCode || !cleanName || !sessionId) {
-    return null;
+  if (!cleanCode || cleanCode.length !== 6) {
+    throw new MultiplayerError(
+      'ROOM_NOT_FOUND',
+      'Please enter a valid 6-character room code.',
+      `Received room code: "${cleanCode}"`,
+    );
   }
 
-  if (hasAnySupabaseConfiguration) {
+  if (!cleanName) {
+    throw new MultiplayerError(
+      'UNKNOWN_ERROR',
+      'Please enter your player name before joining.',
+    );
+  }
+
+  if (!sessionId) {
+    throw new MultiplayerError(
+      'UNKNOWN_ERROR',
+      'Session identifier missing. Please refresh the page.',
+    );
+  }
+
+  if (isProduction || hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
       const { data, error } = await client.rpc('join_private_room', {
@@ -482,17 +733,26 @@ export async function joinRoom(
         p_session_id: sessionId,
       });
 
-      if (error) throw new Error(error.message);
+      if (error) {
+        throw parseSupabaseError(error, `Could not join room ${cleanCode}`);
+      }
+      if (!data) {
+        throw new MultiplayerError('ROOM_NOT_FOUND', `Room ${cleanCode} not found or is closed.`);
+      }
       return data;
     } catch (err) {
-      throw new Error(`Supabase could not join room ${cleanCode}: ${errorMessage(err)}`, { cause: err });
+      throw parseSupabaseError(err, `Could not join room ${cleanCode}`);
     }
   }
 
-  // Local mock room join
+  // Local mock room join (development only)
   const room = getStoredRoom(cleanCode);
   if (!room) {
-    return null;
+    throw new MultiplayerError(
+      'ROOM_NOT_FOUND',
+      `Room ${cleanCode} not found in local session.`,
+      `Local mock store could not find room code ${cleanCode}.`,
+    );
   }
 
   const existingPlayerIndex = room.players.findIndex(
@@ -506,7 +766,10 @@ export async function joinRoom(
   } else {
     const connectedCount = room.players.filter((p: any) => p.connected).length;
     if (connectedCount >= room.max_players) {
-      return null;
+      throw new MultiplayerError(
+        'ROOM_FULL',
+        `Room ${cleanCode} is full (capacity: ${room.max_players}).`,
+      );
     }
     const usedIds = new Set(room.players.map((p: any) => Number(p.id)));
     let nextId = 1;
@@ -541,10 +804,10 @@ export async function findOrCreateRandomRoom(
   const cleanName = playerName.trim();
 
   if (!validPlayerCount(maxPlayers) || !cleanName || !sessionId) {
-    return null;
+    throw new MultiplayerError('UNKNOWN_ERROR', 'Invalid player count, name, or session identifier.');
   }
 
-  if (hasAnySupabaseConfiguration) {
+  if (isProduction || hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
       const { data, error } = await client.rpc('find_or_create_public_room', {
@@ -553,10 +816,11 @@ export async function findOrCreateRandomRoom(
         p_session_id: sessionId,
       });
 
-      if (error) throw new Error(error.message);
+      if (error) throw parseSupabaseError(error, 'Matchmaking failed');
+      if (!data) throw new MultiplayerError('UNKNOWN_ERROR', 'Matchmaking returned empty room data.');
       return data;
     } catch (err) {
-      throw new Error(`Supabase matchmaking failed: ${errorMessage(err)}`, { cause: err });
+      throw parseSupabaseError(err, 'Matchmaking failed');
     }
   }
 
@@ -617,7 +881,7 @@ export async function fetchGameRoom(roomCode: string) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode) return null;
 
-  if (hasAnySupabaseConfiguration) {
+  if (isProduction || hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
       const { data, error } = await client
@@ -626,10 +890,10 @@ export async function fetchGameRoom(roomCode: string) {
         .eq('room_code', cleanCode)
         .maybeSingle();
 
-      if (error) throw error;
+      if (error) throw parseSupabaseError(error, `Could not load room ${cleanCode}`);
       return data;
     } catch (err) {
-      throw new Error(`Supabase could not load room ${cleanCode}: ${errorMessage(err)}`, { cause: err });
+      throw parseSupabaseError(err, `Could not load room ${cleanCode}`);
     }
   }
 
@@ -811,7 +1075,7 @@ export async function touchPlayer(roomCode: string, sessionId: string) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !sessionId) return null;
 
-  if (hasAnySupabaseConfiguration) {
+  if (isProduction || hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
       const { data, error } = await client.rpc('touch_player', {
@@ -821,7 +1085,8 @@ export async function touchPlayer(roomCode: string, sessionId: string) {
       if (error) throw error;
       return data;
     } catch (err) {
-      throw new Error(`Supabase player heartbeat failed: ${errorMessage(err)}`, { cause: err });
+      console.warn('[Peeranki] Supabase player heartbeat failed:', errorMessage(err));
+      return null;
     }
   }
 
@@ -842,7 +1107,7 @@ export async function cleanupStalePlayers(roomCode: string, staleSeconds = 30) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode) return null;
 
-  if (hasAnySupabaseConfiguration) {
+  if (isProduction || hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
       const { data, error } = await client.rpc('cleanup_stale_players', {
@@ -852,7 +1117,8 @@ export async function cleanupStalePlayers(roomCode: string, staleSeconds = 30) {
       if (error) throw error;
       return data;
     } catch (err) {
-      throw new Error(`Supabase stale-player cleanup failed: ${errorMessage(err)}`, { cause: err });
+      console.warn('[Peeranki] Supabase stale-player cleanup failed:', errorMessage(err));
+      return null;
     }
   }
 
@@ -878,7 +1144,7 @@ export async function leaveRoom(roomCode: string, sessionId: string) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !sessionId) return null;
 
-  if (hasAnySupabaseConfiguration) {
+  if (isProduction || hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
       const { data, error } = await client.rpc('leave_room', {
@@ -888,7 +1154,8 @@ export async function leaveRoom(roomCode: string, sessionId: string) {
       if (error) throw error;
       return data;
     } catch (err) {
-      throw new Error(`Supabase could not leave room ${cleanCode}: ${errorMessage(err)}`, { cause: err });
+      console.warn(`[Peeranki] Supabase could not leave room ${cleanCode}:`, errorMessage(err));
+      return null;
     }
   }
 
