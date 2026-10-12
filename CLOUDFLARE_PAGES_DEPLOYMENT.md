@@ -70,5 +70,5 @@ In **Cloudflare Pages** > **Settings** > **Environment variables**, configure th
 ## 5. SPA Routing, Headers, and Asset Limits
 
 - **Asset Limits**: Cloudflare Pages enforces a strict maximum of 25 MiB per individual static asset. Background music is compressed in 192 kbps MP3 format (~3.5 MiB), and Vite includes a guard plugin (`cloudflareAssetGuardPlugin`) that verifies all output files in `dist/` remain strictly below 25 MiB.
-- `_redirects`: Contains `/* /index.html 200` to ensure deep links and page refreshes route smoothly without 404 errors.
+- **SPA Routing**: Single Page Application fallback is natively handled via `wrangler.jsonc` (`assets.not_found_handling: "single-page-application"`) or Cloudflare Pages' automatic SPA fallback. The legacy `_redirects` rule (`/* /index.html 200`) has been completely removed to prevent Cloudflare's infinite loop error `100324`.
 - `_headers`: Applies optimal cache control (`max-age=31536000` on immutable static assets) and security headers.

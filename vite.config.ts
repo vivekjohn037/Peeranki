@@ -38,7 +38,7 @@ function cloudflareAssetGuardPlugin(): Plugin {
   return {
     name: 'cloudflare-asset-guard-plugin',
     buildStart() {
-      // Clean up any stale oversized WAV from public directory before Vite copies assets
+      // Clean up any stale oversized WAV or conflicting _redirects from public directory
       const publicWav = path.resolve(process.cwd(), 'public/assets/audio/bg_music.wav');
       if (fs.existsSync(publicWav)) {
         try {
@@ -46,16 +46,28 @@ function cloudflareAssetGuardPlugin(): Plugin {
           console.log('[Cloudflare Guard] Removed stale public/assets/audio/bg_music.wav');
         } catch {}
       }
+      const publicRedirects = path.resolve(process.cwd(), 'public/_redirects');
+      if (fs.existsSync(publicRedirects)) {
+        try {
+          fs.unlinkSync(publicRedirects);
+          console.log('[Cloudflare Guard] Removed conflicting public/_redirects');
+        } catch {}
+      }
     },
     closeBundle() {
       const distDir = path.resolve(process.cwd(), 'dist');
       if (!fs.existsSync(distDir)) return;
 
-      // 1. Ensure bg_music.wav never ends up in dist
+      // 1. Ensure bg_music.wav and conflicting _redirects never end up in dist
       const distWav = path.join(distDir, 'assets/audio/bg_music.wav');
       if (fs.existsSync(distWav)) {
         fs.unlinkSync(distWav);
         console.log('[Cloudflare Guard] Purged dist/assets/audio/bg_music.wav');
+      }
+      const distRedirects = path.join(distDir, '_redirects');
+      if (fs.existsSync(distRedirects)) {
+        fs.unlinkSync(distRedirects);
+        console.log('[Cloudflare Guard] Purged conflicting dist/_redirects');
       }
 
       // 2. Validate all output files strictly comply with Cloudflare Pages 25 MiB asset limit
