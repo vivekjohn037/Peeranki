@@ -705,21 +705,7 @@ export async function saveGameState(
     }
   }
 
-  // 2. Also broadcast locally via BroadcastChannel for same-device/browser testing
-  notifyRoomListeners(cleanCode, statePayload, false);
-  if (broadcastChannel) {
-    try {
-      broadcastChannel.postMessage({
-        type: 'ROOM_UPDATE',
-        roomCode: cleanCode,
-        data: statePayload,
-      });
-    } catch {
-      // ignore
-    }
-  }
-
-  // Also update local mock room
+  // 2. Also update local mock room (which persists and notifies local subscribers)
   updateMockRoomPartial(cleanCode, {
     players: players as any[],
     max_players: maxPlayers,
@@ -789,7 +775,6 @@ export async function broadcastRoomStateDelta(
     }
   }
 
-  notifyRoomListeners(cleanCode, state, false);
   if (broadcastChannel) {
     try {
       broadcastChannel.postMessage({ type: 'ROOM_UPDATE', roomCode: cleanCode, data: state });
@@ -1028,10 +1013,6 @@ export function subscribeToGameState(
         console.error('[Peeranki] Failed to subscribe to Supabase realtime:', err);
       }
     }
-  } else {
-    // Local in-memory listeners
-    if (!listenersByRoom.has(cleanCode)) listenersByRoom.set(cleanCode, new Set());
-    listenersByRoom.get(cleanCode)!.add(stateCallback);
   }
 
   return {
@@ -1080,7 +1061,6 @@ export function subscribeToGameState(
       }
     },
     unsubscribe: async () => {
-      listenersByRoom.get(cleanCode)?.delete(stateCallback);
       const subs = roomSubscribers.get(cleanCode);
       if (subs) {
         subs.delete(currentEntry);
