@@ -8,9 +8,10 @@
     "test": "node --test tests/game.test.mjs",
     "lint": "tsc --noEmit",
     "build": "tsc && vite build",
+    "build:desktop": "tsc && vite build --base=./",
     "preview": "vite preview",
-    "desktop": "npm run build && electron .",
-    "dist:win": "npm run build && electron-builder --win"
+    "desktop": "npm run build:desktop && electron .",
+    "dist:win": "npm run build:desktop && electron-builder --win"
   },
   "devDependencies": {
     "electron": "44.5.1",

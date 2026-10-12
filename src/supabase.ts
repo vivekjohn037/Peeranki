@@ -40,6 +40,41 @@ if (isSupabaseConfigured) {
   console.error('[Peeranki] Supabase configuration is incomplete; online rooms are unavailable.');
 }
 
+// Purge any sensitive API keys inadvertently cached in client storage
+try {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem('peeranki_custom_supabase_key');
+  }
+} catch {}
+
+function isServiceRoleKey(key: string | undefined): boolean {
+  if (!key || typeof key !== 'string') return false;
+  try {
+    const parts = key.split('.');
+    if (parts.length === 3) {
+      let decoded = '';
+      if (typeof atob === 'function') {
+        decoded = atob(parts[1]);
+      } else if (typeof (globalThis as any).Buffer !== 'undefined') {
+        decoded = (globalThis as any).Buffer.from(parts[1], 'base64').toString('utf8');
+      }
+      if (decoded) {
+        const payload = JSON.parse(decoded);
+        return payload?.role === 'service_role';
+      }
+    }
+  } catch {}
+  return false;
+}
+
+if (isServiceRoleKey(supabaseKey)) {
+  console.error(
+    '[SECURITY ALERT] A Supabase service-role key was detected in VITE_SUPABASE_PUBLISHABLE_KEY. ' +
+    'Service-role keys bypass all Row Level Security and must NEVER be exposed in client builds. ' +
+    'Use only your public anon/publishable key on the client.',
+  );
+}
+
 export interface ServerRegionInfo {
   id: string;
   name: string;
@@ -51,7 +86,6 @@ export interface ServerRegionInfo {
 
 const REGION_STORAGE_KEY = 'peeranki_server_region';
 const CUSTOM_URL_STORAGE_KEY = 'peeranki_custom_supabase_url';
-const CUSTOM_KEY_STORAGE_KEY = 'peeranki_custom_supabase_key';
 
 export function getStoredServerRegion(): ServerRegionInfo {
   let regionId = 'mumbai';
@@ -84,7 +118,7 @@ export function getStoredServerRegion(): ServerRegionInfo {
   };
 }
 
-export function setStoredServerRegion(regionId: string, customUrl?: string, customKey?: string) {
+export function setStoredServerRegion(regionId: string, customUrl?: string) {
   try {
     localStorage.setItem(REGION_STORAGE_KEY, regionId);
     if (customUrl !== undefined) {
@@ -92,13 +126,6 @@ export function setStoredServerRegion(regionId: string, customUrl?: string, cust
         localStorage.setItem(CUSTOM_URL_STORAGE_KEY, customUrl.trim());
       } else {
         localStorage.removeItem(CUSTOM_URL_STORAGE_KEY);
-      }
-    }
-    if (customKey !== undefined) {
-      if (customKey.trim()) {
-        localStorage.setItem(CUSTOM_KEY_STORAGE_KEY, customKey.trim());
-      } else {
-        localStorage.removeItem(CUSTOM_KEY_STORAGE_KEY);
       }
     }
   } catch {}
@@ -112,23 +139,7 @@ function getStoredCustomUrl(): string | null {
   }
 }
 
-function getStoredCustomKey(): string | null {
-  try {
-    return localStorage.getItem(CUSTOM_KEY_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
 function configuredClient(): SupabaseClient {
-  const customUrl = getStoredCustomUrl();
-  const customKey = getStoredCustomKey();
-  if (customUrl && customKey) {
-    try {
-      return createClient(customUrl.trim(), customKey.trim());
-    } catch {}
-  }
-
   if (realClient) return realClient;
   throw new Error(
     `Supabase is configured but unavailable: ${errorMessage(clientInitializationError)}. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.`,
@@ -220,6 +231,16 @@ function notifyRoomListeners(roomCode: string, state: any, broadcast: boolean) {
         cb(state);
       } catch (err) {
         console.error('[Peeranki] Room listener callback error:', err);
+      }
+    });
+  }
+  const subs = roomSubscribers.get(roomCode);
+  if (subs) {
+    subs.forEach((sub) => {
+      try {
+        sub.stateCallback(state);
+      } catch (err) {
+        console.error('[Peeranki] Room subscriber callback error:', err);
       }
     });
   }
@@ -685,6 +706,7 @@ export async function saveGameState(
   }
 
   // 2. Also broadcast locally via BroadcastChannel for same-device/browser testing
+  notifyRoomListeners(cleanCode, statePayload, false);
   if (broadcastChannel) {
     try {
       broadcastChannel.postMessage({
@@ -748,6 +770,8 @@ export async function broadcastRoomStateDelta(
   };
   lastRoomStateSeq.set(cleanCode, seq);
   lastRoomUpdatedAt.set(cleanCode, Date.parse(state.updated_at));
+
+  notifyRoomListeners(cleanCode, state, false);
 
   const channel = activeRealtimeChannels.get(cleanCode);
   if (channel) {

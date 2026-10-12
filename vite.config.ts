@@ -35,7 +35,7 @@ function backgroundUploadPlugin(): Plugin {
 }
 
 export default defineConfig({
-  base: './',
+  base: process.env.VITE_BASE || (process.env.ELECTRON === 'true' ? './' : '/'),
   plugins: [backgroundUploadPlugin()],
   build: {
     target: 'es2020',
