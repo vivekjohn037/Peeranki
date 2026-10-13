@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS public.game_states (
     host_session_id TEXT NOT NULL CHECK (length(trim(host_session_id)) > 0),
     current_shooter INTEGER DEFAULT NULL,
     countdown INTEGER NOT NULL DEFAULT 0,
+    counting_start_timestamp TIMESTAMPTZ DEFAULT NULL,
     game_status TEXT NOT NULL DEFAULT 'waiting' CHECK (game_status IN ('waiting', 'playing', 'shooting', 'counting', 'duel', 'finished')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())

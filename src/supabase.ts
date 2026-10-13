@@ -388,6 +388,7 @@ interface MockRoomRecord {
   host_session_id: string;
   current_shooter: number | null;
   countdown: number;
+  counting_start_timestamp?: string | null;
   game_status: string;
   updated_at: string;
   created_at?: string;
@@ -686,6 +687,7 @@ export async function createPrivateRoom(
     host_session_id: sessionId,
     current_shooter: null,
     countdown: 0,
+    counting_start_timestamp: null,
     game_status: 'waiting',
     updated_at: new Date().toISOString(),
   };
@@ -865,6 +867,7 @@ export async function findOrCreateRandomRoom(
     host_session_id: sessionId,
     current_shooter: null,
     countdown: 0,
+    counting_start_timestamp: null,
     game_status: 'waiting',
     updated_at: new Date().toISOString(),
   };
@@ -874,6 +877,10 @@ export async function findOrCreateRandomRoom(
 }
 
 function errorMessage(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const raw = (error as any).message || (error as any).details || (error as any).hint;
+    if (raw) return String(raw);
+  }
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -891,6 +898,12 @@ export async function fetchGameRoom(roomCode: string) {
         .maybeSingle();
 
       if (error) throw parseSupabaseError(error, `Could not load room ${cleanCode}`);
+      if (data && !data.counting_start_timestamp && Array.isArray(data.players)) {
+        const timestampHolder = data.players.find((p: any) => typeof p?.counting_start_timestamp === 'string' && p.counting_start_timestamp);
+        if (timestampHolder) {
+          data.counting_start_timestamp = timestampHolder.counting_start_timestamp;
+        }
+      }
       return data;
     } catch (err) {
       throw parseSupabaseError(err, `Could not load room ${cleanCode}`);
@@ -942,6 +955,7 @@ export async function saveGameState(
   currentShooter: number | null,
   countNumber: number,
   gameStatus: string,
+  countingStartTimestamp?: string | null,
 ) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !validPlayerCount(maxPlayers)) {
@@ -959,6 +973,7 @@ export async function saveGameState(
     max_players: maxPlayers,
     current_shooter: currentShooter,
     countdown: countNumber,
+    counting_start_timestamp: countingStartTimestamp ?? null,
     game_status: gameStatus,
     updated_at: now,
     state_seq: seq,
@@ -998,6 +1013,7 @@ export async function saveGameState(
     max_players: maxPlayers,
     current_shooter: currentShooter,
     countdown: countNumber,
+    counting_start_timestamp: countingStartTimestamp ?? null,
     game_status: gameStatus,
     state_seq: seq,
   }, false);
@@ -1005,20 +1021,35 @@ export async function saveGameState(
   if (hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
+      const updateData: Record<string, any> = {
+        players,
+        max_players: maxPlayers,
+        current_shooter: currentShooter,
+        countdown: countNumber,
+        game_status: gameStatus,
+        updated_at: now,
+      };
+      if (countingStartTimestamp !== undefined) {
+        updateData.counting_start_timestamp = countingStartTimestamp;
+      }
+
       const { error } = await client
         .from('game_states')
-        .update({
-          players,
-          max_players: maxPlayers,
-          current_shooter: currentShooter,
-          countdown: countNumber,
-          game_status: gameStatus,
-          updated_at: now,
-        })
+        .update(updateData)
         .eq('room_code', cleanCode);
 
       if (error) {
-        throw error;
+        const errStr = `${(error as any)?.code || ''} ${(error as any)?.message || ''} ${(error as any)?.details || ''}`.toLowerCase();
+        if ((errStr.includes('counting_start_timestamp') || (error as any).code === '42703' || (error as any).code === 'PGRST204') && 'counting_start_timestamp' in updateData) {
+          delete updateData.counting_start_timestamp;
+          const retry = await client
+            .from('game_states')
+            .update(updateData)
+            .eq('room_code', cleanCode);
+          if (retry.error) throw retry.error;
+        } else {
+          throw error;
+        }
       }
     } catch (err) {
       throw new Error(`Supabase could not save game state: ${errorMessage(err)}`, { cause: err });
@@ -1030,13 +1061,19 @@ export async function saveGameState(
 /** Send transient authoritative turn/count fields without persisting a database write per tick. */
 export async function broadcastRoomStateDelta(
   roomCode: string,
-  delta: { current_shooter: number | null; countdown: number; game_status: string },
+  delta: {
+    current_shooter: number | null;
+    countdown?: number;
+    game_status: string;
+    counting_start_timestamp?: string | null;
+  },
 ) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode) return;
   const seq = ++roomSequenceCounter;
   const state = {
     room_code: cleanCode,
+    countdown: 0,
     ...delta,
     updated_at: new Date().toISOString(),
     state_seq: seq,

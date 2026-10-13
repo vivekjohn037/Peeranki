@@ -34,7 +34,6 @@ import {
 import type { RpsChoice, WeaponType } from './game/rules';
 
 import {
-  broadcastRoomStateDelta,
   saveGameState,
   subscribeToGameState,
   createPrivateRoom,
@@ -67,6 +66,7 @@ interface Player {
   matchStartedAt: string;
   matchRound: number;
   countingStartIndex: number;
+  countingStartTimestamp: string;
   roundWinnerId: number;
   matchOver: boolean;
   actionRequest: OnlineAction | null;
@@ -203,6 +203,7 @@ let matchStartedAt = '';
 let matchRound = 1;
 let lastRoundMessage = '';
 let countingStartIndex = -1;
+let countingStartTimestamp = '';
 let roundWinnerId = 0;
 let matchOver = false;
 let duelRound = 1;
@@ -231,6 +232,7 @@ function createOfflinePlayers(
     matchStartedAt: '',
     matchRound: 1,
     countingStartIndex: -1,
+    countingStartTimestamp: '',
     roundWinnerId: 0,
     matchOver: false,
     actionRequest: null,
@@ -255,6 +257,7 @@ function createOfflinePlayers(
       matchStartedAt: '',
       matchRound: 1,
       countingStartIndex: -1,
+      countingStartTimestamp: '',
       roundWinnerId: 0,
       matchOver: false,
       actionRequest: null,
@@ -376,6 +379,7 @@ function createEmptyPlayer(id: number): Player {
     matchStartedAt,
     matchRound,
     countingStartIndex: -1,
+    countingStartTimestamp: '',
     roundWinnerId: 0,
     matchOver: false,
     actionRequest: null,
@@ -459,6 +463,7 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
       matchRound: Number.isInteger(rawPlayer?.match_round) && rawPlayer.match_round > 0
         ? rawPlayer.match_round : 1,
       countingStartIndex: Number.isInteger(rawPlayer?.counting_start_index) ? rawPlayer.counting_start_index : -1,
+      countingStartTimestamp: typeof rawPlayer?.counting_start_timestamp === 'string' ? rawPlayer.counting_start_timestamp : '',
       roundWinnerId: Number.isInteger(rawPlayer?.round_winner_id) ? rawPlayer.round_winner_id : 0,
       matchOver: rawPlayer?.match_over === true,
       actionRequest: normalizeOnlineAction(rawPlayer?.action_request),
@@ -485,8 +490,15 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
   const sharedMatchData = players.find((player) => player.matchStartedAt);
   if (sharedMatchData) {
     countingStartIndex = sharedMatchData.countingStartIndex;
+    if (sharedMatchData.countingStartTimestamp) {
+      countingStartTimestamp = sharedMatchData.countingStartTimestamp;
+    }
     roundWinnerId = sharedMatchData.roundWinnerId;
     matchOver = sharedMatchData.matchOver;
+  }
+  const timestampHolder = players.find((player) => player.countingStartTimestamp);
+  if (timestampHolder?.countingStartTimestamp) {
+    countingStartTimestamp = timestampHolder.countingStartTimestamp;
   }
   findMyPlayerId();
 }
@@ -529,6 +541,7 @@ async function syncGameState(
       match_started_at: matchStartedAt,
       match_round: matchRound,
       counting_start_index: countingStartIndex,
+      counting_start_timestamp: countingStartTimestamp,
       round_winner_id: roundWinnerId,
       match_over: matchOver,
       action_request: player.actionRequest,
@@ -547,6 +560,7 @@ async function syncGameState(
     currentShooter,
     countNumber,
     gameStatus,
+    countingStartTimestamp || null,
   );
 }
 
@@ -4149,14 +4163,7 @@ if (offlineMode) {
       gameState.countdown,
     );
 
-    if (Number.isFinite(remoteCount)) {
-      if (remoteCount > 0 && remoteCount !== this.countNumber && gameState.game_status === 'counting') {
-        if (remoteCount === COUNT_TO) {
-          PeerankiAudio.effect('shooter_selected');
-        } else {
-          PeerankiAudio.effect('count_tick');
-        }
-      }
+    if (Number.isFinite(remoteCount) && gameState.game_status !== 'counting') {
       this.countNumber = remoteCount;
     }
 
@@ -4208,23 +4215,36 @@ if (offlineMode) {
 
     if (amHost()) void this.processPendingAction();
 
-    if (
-      gameState.game_status === 'counting'
-    ) {
+    if (gameState.game_status === 'counting') {
       this.stopActionClock();
       this.roundPhase = 'counting';
-      this.countText?.setText(
-        `Count ${this.countNumber} / ${COUNT_TO}`,
-      );
+
+      if (gameState.counting_start_timestamp) {
+        countingStartTimestamp = String(gameState.counting_start_timestamp);
+      }
+      if (countingStartIndex >= 0) {
+        this.startIndex = countingStartIndex;
+      }
+
       this.shooterText?.setText(
-        '🎲 Counting to select the shooter',
-      );
-      this.statusText?.setText(
-        'The 10th tower will select the shooter.',
+        this.startIndex >= 0 && players[this.startIndex]
+          ? `🎲 Start: ${players[this.startIndex].name}`
+          : '🎲 Counting to select the shooter',
       );
 
-      this.markShooter();
+      if (!this.countingTimer) {
+        this.countNumber = 0;
+        this.startLocalCountingLoop();
+      } else {
+        this.updateLocalCountingProgress();
+      }
+
       return;
+    }
+
+    if (gameState.game_status !== 'counting') {
+      this.countingTimer?.remove(false);
+      this.countingTimer = undefined;
     }
 
     if (
@@ -4502,165 +4522,177 @@ if (offlineMode) {
     await this.finishRound(resultMessage);
   }
 
-  private startCounting(forcedStartIndex?: number) {
-  if (
-    (!offlineMode && !amHost()) ||
-    this.countingTimer ||
-    this.nextRoundTimer ||
-    this.gameFinished
-  ) {
-    return;
-  }
-  if (this.matchTimeExpired()) {
-    if (offlineMode || amHost()) void this.finishMatch();
-    return;
+  private getCalculatedCount(): number {
+    if (!countingStartTimestamp) return 0;
+    const startMs =
+      typeof countingStartTimestamp === 'number'
+        ? countingStartTimestamp
+        : Date.parse(countingStartTimestamp);
+    if (!Number.isFinite(startMs) || startMs <= 0) return 0;
+    return Math.min(COUNT_TO, Math.floor((Date.now() - startMs) / COUNTING_SPEED));
   }
 
-  const aliveIndexes = activePlayers()
-    .map((player) => player.id - 1)
-    .filter(
-      (index) =>
-        players[index]?.alive === true,
-    );
-
-  if (aliveIndexes.length <= 1) {
-    void this.finishRound();
-    return;
+  private startLocalCountingLoop() {
+    this.countingTimer?.remove(false);
+    this.countingTimer = this.time.addEvent({
+      delay: 50,
+      loop: true,
+      callback: () => this.updateLocalCountingProgress(),
+    });
+    this.updateLocalCountingProgress();
   }
 
-  if (aliveIndexes.length === 2) {
-    this.beginDuel();
-    return;
-  }
+  private updateLocalCountingProgress() {
+    if (this.roundPhase !== 'counting' || this.gameFinished) {
+      this.countingTimer?.remove(false);
+      this.countingTimer = undefined;
+      return;
+    }
 
-  const forcedStartIsAlive =
-  typeof forcedStartIndex === 'number' &&
-  aliveIndexes.includes(forcedStartIndex);
+    if (this.startIndex < 0 && countingStartIndex >= 0) {
+      this.startIndex = countingStartIndex;
+    }
 
-this.startIndex = forcedStartIsAlive
-  ? forcedStartIndex
-  : Phaser.Utils.Array.GetRandom(
-      aliveIndexes,
-    );
-
-  countingStartIndex = this.startIndex;
-  players.forEach((player) => { player.countingStartIndex = countingStartIndex; });
-
-  this.currentShooter = -1;
-  this.stopActionClock();
-  shootingDeadlineAt = '';
-  this.roundPhase = 'counting';
-  this.countNumber = 0;
-
-  this.shooterText?.setText(
-    `🎲 Start: ${players[this.startIndex].name}`,
-  );
-
-  this.statusText?.setText(
-    `Counting ${COUNT_TO} towers...`,
-  );
-
-  this.countText?.setText(
-    `Count 0 / ${COUNT_TO}`,
-  );
-
-  if (!offlineMode) {
-    void syncGameState(
-      null,
-      0,
-      'counting',
-    );
-  }
-
-  this.countingTimer =
-    this.time.addEvent({
-      delay: COUNTING_SPEED,
-      repeat: COUNT_TO - 1,
-
-      callback: () => {
-        if (this.roundPhase !== 'counting' || this.countNumber >= COUNT_TO) {
-          this.countingTimer?.remove(false);
-          this.countingTimer = undefined;
-          return;
+    const calculated = this.getCalculatedCount();
+    if (calculated !== this.countNumber) {
+      this.countNumber = calculated;
+      const countedIndex = getCountedPlayerIndex(players, this.startIndex, this.countNumber);
+      if (countedIndex >= 0) {
+        this.currentShooter = countedIndex;
+        this.countText?.setText(`Count ${this.countNumber} / 10`);
+        if (players[countedIndex]) {
+          this.statusText?.setText(`${this.countNumber}. ${players[countedIndex].name}`);
         }
-        this.countNumber = Math.min(COUNT_TO, this.countNumber + 1);
-
-        const countedIndex =
-          getCountedPlayerIndex(players, this.startIndex, this.countNumber);
-
-        if (countedIndex === -1) {
-          return;
+        if (this.countNumber === 10) {
+          PeerankiAudio.effect('shooter_selected');
+        } else if (this.countNumber > 0) {
+          PeerankiAudio.effect('count_tick');
         }
+      }
+      this.markShooter();
+    }
 
-        this.currentShooter =
-          countedIndex;
+    if (this.countNumber >= COUNT_TO) {
+      this.countingTimer?.remove(false);
+      this.countingTimer = undefined;
 
-        this.countText?.setText(
-          `Count ${this.countNumber} / ${COUNT_TO}`,
-        );
+      // Check host health for failover recovery if original host stalled or disconnected
+      if (!amHost() && !offlineMode) {
+        const currentHost = players.find((p) => p.sessionId === hostSessionId);
+        const startMs = Date.parse(countingStartTimestamp);
+        const elapsedSinceStart = Number.isFinite(startMs) ? Date.now() - startMs : 0;
+        const hostStalled = (!currentHost || !currentHost.connected) || elapsedSinceStart > (COUNT_TO * COUNTING_SPEED + 4000);
+        if (hostStalled) {
+          const connectedLiving = players.filter((p) => p.connected && p.sessionId);
+          if (connectedLiving.length > 0 && connectedLiving[0].sessionId === sessionId) {
+            console.warn('[Peeranki] Host stalled or disconnected during counting. Claiming host authority.');
+            hostSessionId = sessionId;
+          }
+        }
+      }
 
-        this.statusText?.setText(
-          `${this.countNumber}. ${players[countedIndex].name}`,
-        );
-
-        if (
-          this.countNumber === COUNT_TO
-        ) {
+      if (offlineMode || amHost()) {
+        const finalShooterIndex = getCountedPlayerIndex(players, this.startIndex, COUNT_TO);
+        if (finalShooterIndex >= 0) {
           this.roundPhase = 'shooting';
+          this.currentShooter = finalShooterIndex;
           shootingDeadlineAt = new Date(Date.now() + ACTION_LIMIT_MS).toISOString();
           this.startActionClock();
           PeerankiAudio.effect('shooter_selected');
-          this.shooterText?.setText(
-            `🎯 Shooter: ${players[countedIndex].name}`,
-          );
-
-          this.statusText?.setText(
-           `${players[countedIndex].name}: choose a weapon and target(s) within 10 seconds.`,
-          );
+          this.shooterText?.setText(`🎯 Shooter: ${players[finalShooterIndex].name}`);
+          this.statusText?.setText(`${players[finalShooterIndex].name}: choose a weapon and target(s) within 10 seconds.`);
+          this.markShooter();
 
           if (!offlineMode) {
             void syncGameState(
-              countedIndex,
+              finalShooterIndex,
               COUNT_TO,
               'shooting',
             );
           }
 
-          this.countingTimer = undefined;
-
-          // 🤖 Offline bot automatically shoots
-          if (
-            offlineMode &&
-            players[countedIndex].id !== 1
-          ) {
-            this.time.delayedCall(
-            350,
-              () => {
-                this.botShoot(countedIndex);
-              },
-            );
+          if (offlineMode && players[finalShooterIndex].id !== 1) {
+            this.time.delayedCall(350, () => {
+              this.botShoot(finalShooterIndex);
+            });
           } else if (offlineMode) {
-            this.statusText?.setText(
-              'Choose a weapon and target(s) before time runs out.',
-            );
-          }
-        } else {
-          PeerankiAudio.effect('count_tick');
-          if (!offlineMode) {
-            void broadcastRoomStateDelta(roomCode, {
-              current_shooter: countedIndex,
-              countdown: this.countNumber,
-              game_status: 'counting',
-            }).catch((error) => console.warn('[Peeranki] Count display sync failed:', error));
+            this.statusText?.setText('Choose a weapon and target(s) before time runs out.');
           }
         }
+      } else {
+        const finalShooterIndex = getCountedPlayerIndex(players, this.startIndex, COUNT_TO);
+        if (finalShooterIndex >= 0) {
+          this.currentShooter = finalShooterIndex;
+          this.markShooter();
+        }
+        this.statusText?.setText('10. Selecting shooter...');
+      }
+    }
+  }
 
-        this.markShooter();
-      },
+  private startCounting(forcedStartIndex?: number) {
+    if (
+      (!offlineMode && !amHost()) ||
+      this.countingTimer ||
+      this.nextRoundTimer ||
+      this.gameFinished
+    ) {
+      return;
+    }
+    if (this.matchTimeExpired()) {
+      if (offlineMode || amHost()) void this.finishMatch();
+      return;
+    }
 
-      callbackScope: this,
+    const aliveIndexes = activePlayers()
+      .map((player) => player.id - 1)
+      .filter((index) => players[index]?.alive === true);
+
+    if (aliveIndexes.length <= 1) {
+      void this.finishRound();
+      return;
+    }
+
+    if (aliveIndexes.length === 2) {
+      this.beginDuel();
+      return;
+    }
+
+    const forcedStartIsAlive =
+      typeof forcedStartIndex === 'number' &&
+      aliveIndexes.includes(forcedStartIndex);
+
+    this.startIndex = forcedStartIsAlive
+      ? forcedStartIndex
+      : Phaser.Utils.Array.GetRandom(aliveIndexes);
+
+    countingStartIndex = this.startIndex;
+    countingStartTimestamp = new Date().toISOString();
+    players.forEach((player) => {
+      player.countingStartIndex = countingStartIndex;
+      player.countingStartTimestamp = countingStartTimestamp;
     });
-}
+
+    this.currentShooter = -1;
+    this.stopActionClock();
+    shootingDeadlineAt = '';
+    this.roundPhase = 'counting';
+    this.countNumber = 0;
+
+    this.shooterText?.setText(`🎲 Start: ${players[this.startIndex].name}`);
+    this.statusText?.setText(`Counting ${COUNT_TO} towers...`);
+    this.countText?.setText(`Count 0 / ${COUNT_TO}`);
+
+    if (!offlineMode) {
+      void syncGameState(
+        null,
+        0,
+        'counting',
+      );
+    }
+
+    this.startLocalCountingLoop();
+  }
 
   private startActionClock() {
     this.lastActionSeconds = -1;
@@ -5143,6 +5175,7 @@ void this.recordShot();
       player.matchStartedAt = matchStartedAt;
       player.matchRound = matchRound;
       player.countingStartIndex = -1;
+      player.countingStartTimestamp = '';
       player.roundWinnerId = roundWinnerId;
       player.matchOver = false;
     });
@@ -5159,6 +5192,7 @@ void this.recordShot();
       player.duelChoiceRequest = null;
     });
     countingStartIndex = -1;
+    countingStartTimestamp = '';
     this.countingTimer?.remove(false);
     this.countingTimer = undefined;
     this.pendingDoubleTarget = -1;

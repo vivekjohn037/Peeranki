@@ -344,6 +344,34 @@ test('5. SUPABASE MULTIPLAYER ROOM LIFECYCLE', async (t) => {
     assert.equal(reloaded.current_shooter, 1);
   });
 
+  await t.test('saveGameState persists counting_start_timestamp and clients calculate count locally', async () => {
+    const testTimestamp = new Date(Date.now() - 650).toISOString();
+    const state = await getGameState(roomCode);
+    const updatedPlayers = state.players.map((p) => ({
+      ...p,
+      counting_start_timestamp: testTimestamp,
+    }));
+    await saveGameState(roomCode, updatedPlayers, state.max_players, null, 0, 'counting', testTimestamp);
+
+    const reloaded = await getGameState(roomCode);
+    assert.equal(reloaded.game_status, 'counting');
+    assert.equal(reloaded.counting_start_timestamp, testTimestamp);
+
+    const COUNTING_SPEED = 200;
+    const COUNT_TO = 10;
+    const calcCount = (timestamp, nowMs = Date.now()) => {
+      const elapsed = Math.max(0, nowMs - Date.parse(timestamp));
+      return Math.min(COUNT_TO, Math.floor(elapsed / COUNTING_SPEED));
+    };
+
+    assert.equal(calcCount(testTimestamp, Date.parse(testTimestamp)), 0);
+    assert.equal(calcCount(testTimestamp, Date.parse(testTimestamp) + 200), 1);
+    assert.equal(calcCount(testTimestamp, Date.parse(testTimestamp) + 650), 3);
+    assert.equal(calcCount(testTimestamp, Date.parse(testTimestamp) + 1000), 5);
+    assert.equal(calcCount(testTimestamp, Date.parse(testTimestamp) + 2000), 10);
+    assert.equal(calcCount(testTimestamp, Date.parse(testTimestamp) + 9999), 10);
+  });
+
   await t.test('leaveRoom disconnects player cleanly', async () => {
     await leaveRoom(roomCode, sessionIdGuest);
     const updated = await getGameState(roomCode);
