@@ -983,6 +983,27 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     return true;
   }
 
+  // Count ticks share one start timestamp. Ignore delayed/out-of-order ticks, and do
+  // not let stale phase packets undo a later hit/duel state within the same count phase.
+  const phaseRank: Record<string, number> = {
+    waiting: 0,
+    playing: 1,
+    counting: 2,
+    action_requested: 3,
+    shooting: 3,
+    shot: 4,
+    duel: 5,
+    round_won: 6,
+    finished: 7,
+  };
+  if (
+    countingTimestamp && countingTimestamp === prev.countingTimestamp &&
+    ((prev.status === 'counting' && status === 'counting' && countdown >= 0 && countdown < prev.countdown) ||
+      (phaseRank[status] !== undefined && phaseRank[prev.status] !== undefined && phaseRank[status] < phaseRank[prev.status]))
+  ) {
+    return false;
+  }
+
   // Critical state changes (phase transition, shooter selection, counting start timestamp, countdown tick)
   const stateChanged =
     (Boolean(status) && status !== prev.status) ||
