@@ -572,9 +572,14 @@ test('9. HOST FAILURE & MIGRATION DURING COUNTING', async () => {
   assert.equal(newHostCandidate.session_id, sessionIdGuest1);
 
   // Candidate claims host
-  await claimHost(code, newHostCandidate.session_id);
+  await claimHost(code, newHostCandidate.session_id, sessionIdHost);
   const migratedRoom = await getGameState(code);
   assert.equal(migratedRoom.host_session_id, sessionIdGuest1);
+
+  // A concurrent claimant using the stale host ID must not replace the elected host.
+  await claimHost(code, sessionIdGuest2, sessionIdHost);
+  const afterStaleClaim = await getGameState(code);
+  assert.equal(afterStaleClaim.host_session_id, sessionIdGuest1);
 
   // Clean up
   await leaveRoom(code, sessionIdGuest1);
@@ -596,14 +601,16 @@ test('10. OFFLINE BOT GAME STATE ISOLATION & LEGAL ACTIONS', async () => {
     }));
 
     for (let botIndex = 1; botIndex < playerCount; botIndex++) {
-      const action = chooseBotAction(offlinePlayers, botIndex);
+      // Each action is checked against a fresh roster; resolving it mutates player state.
+      const actionPlayers = structuredClone(offlinePlayers);
+      const action = chooseBotAction(actionPlayers, botIndex, 1, () => 0);
       assert.ok(action, `Bot ${botIndex} in ${playerCount}-player game must choose an action`);
       assert.equal(action.shooterId, botIndex + 1);
       assert.equal(action.weapon, 'gun');
       assert.notEqual(action.targetIds[0], botIndex + 1, 'Bot must not target itself');
       assert.equal(action.targetIds[0] >= 1 && action.targetIds[0] <= playerCount, true);
 
-      const resolution = resolvePlayerAction(offlinePlayers, action, botIndex, 1);
+      const resolution = resolvePlayerAction(actionPlayers, action, botIndex, 1);
       assert.ok(resolution);
       assert.equal(resolution.accepted, true);
     }

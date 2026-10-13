@@ -5,10 +5,13 @@ For lowest latency and smooth multiplayer performance, deploy your Supabase proj
 
 ---
 
-## 1. Database Migration (`supabase/migrations/001_multiplayer.sql`)
+## 1. Database Migrations
 
-The repository includes a production-ready SQL migration file:
-`supabase/migrations/001_multiplayer.sql`
+Apply the SQL files in `supabase/migrations/` in numeric order:
+
+1. `001_multiplayer.sql` creates the room table, RPCs, RLS policies, and Realtime configuration.
+2. `002_counting_timestamp.sql` adds the shared count start timestamp.
+3. `003_atomic_host_handoff.sql` adds guarded, atomic host failover.
 
 This migration provisions:
 1. **`public.game_states` table**:
@@ -24,13 +27,15 @@ This migration provisions:
    - `created_at` & `updated_at`: Timestamps
 2. **Row Level Security (RLS)**:
    - SELECT, INSERT, and UPDATE policies granted to `anon` and `authenticated` roles.
-3. **5 Public Database RPC Functions**:
+3. **Room RPC Functions**:
    - `public.join_private_room(p_room_code, p_player_name, p_session_id)`: Joins an existing room or reconnects an existing session.
    - `public.find_or_create_public_room(p_max_players, p_player_name, p_session_id)`: Atomic matchmaking that joins open lobbies or provisions a new one.
    - `public.touch_player(p_room_code, p_session_id)`: Heartbeat keepalive for connected players.
    - `public.cleanup_stale_players(p_room_code, p_stale_seconds)`: Disconnects abandoned player sessions.
    - `public.leave_room(p_room_code, p_session_id)`: Marks player as disconnected and dead on exit.
-4. **Realtime Configuration**:
+4. **Host Handoff RPC**:
+   - `public.claim_room_host(p_room_code, p_expected_host_session_id, p_new_host_session_id)` serializes host claims and rejects stale or ineligible candidates.
+5. **Realtime Configuration**:
    - Sets `REPLICA IDENTITY FULL` on `public.game_states`.
    - Adds `public.game_states` to the `supabase_realtime` publication for instant state broadcasts.
 
@@ -40,14 +45,13 @@ This migration provisions:
 2. Select your project.
 3. In the left navigation menu, click **SQL Editor**.
 4. Click **New Query** (or the **+** button).
-5. Open `supabase/migrations/001_multiplayer.sql` from this repository, copy its entire contents, and paste into the SQL Editor.
-6. Click **Run** (or press `Cmd + Enter` / `Ctrl + Enter`).
-7. Verify that the query executes successfully with status `Success: No rows returned`.
+5. Open each migration file in numeric order, copy its entire contents, and run it in the SQL Editor.
+6. Verify that each query executes successfully before running the next one.
 
 ### How to Verify Database Setup
 
 - **Table**: Go to **Table Editor** > verify `game_states` exists.
-- **Database Functions**: Go to **Database** > **Functions** > verify that `join_private_room`, `find_or_create_public_room`, `touch_player`, `cleanup_stale_players`, and `leave_room` are listed with `SECURITY DEFINER`.
+- **Database Functions**: Go to **Database** > **Functions** > verify that `join_private_room`, `find_or_create_public_room`, `touch_player`, `cleanup_stale_players`, `leave_room`, and `claim_room_host` are listed with `SECURITY DEFINER`.
 - **Realtime**: Go to **Database** > **Publications** > click `supabase_realtime` > ensure `game_states` is listed under Tables.
 
 ---
@@ -103,7 +107,7 @@ Peeranki includes a diagnostic modal that surfaces actionable error reports in t
 |---|---|---|
 | `CONFIG_MISSING` | `VITE_SUPABASE_URL` or `VITE_SUPABASE_PUBLISHABLE_KEY` missing at build time. | Configure variables in Cloudflare build settings and redeploy. |
 | `TABLE_MISSING` | `public.game_states` table not found in Supabase. | Run `supabase/migrations/001_multiplayer.sql` in Supabase SQL Editor. |
-| `RPC_MISSING` | `join_private_room` or other RPC missing in Supabase schema cache. | Run `supabase/migrations/001_multiplayer.sql` in Supabase SQL Editor. |
+| `RPC_MISSING` | A required RPC is missing in Supabase schema cache. | Apply all files in `supabase/migrations/` in numeric order. |
 | `ROOM_NOT_FOUND` | Room code does not exist or lobby has closed. | Verify 6-character code with host. |
 | `ROOM_FULL` | Room has reached maximum capacity. | Ask host to start a match with higher player count or create a new room. |
 | `GAME_IN_PROGRESS` | Battle has already started. | Wait for the round to finish or create a new room. |

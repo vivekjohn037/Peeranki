@@ -131,6 +131,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     searchStr.includes('could not find the function') ||
     searchStr.includes('join_private_room') ||
     searchStr.includes('find_or_create_public_room') ||
+    searchStr.includes('claim_room_host') ||
     searchStr.includes('touch_player') ||
     searchStr.includes('leave_room') ||
     searchStr.includes('cleanup_stale_players')
@@ -1002,27 +1003,23 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   return false;
 }
 
-export async function claimHost(roomCode: string, newHostSessionId: string) {
+export async function claimHost(roomCode: string, newHostSessionId: string, expectedHostSessionId: string) {
   const cleanCode = roomCode.trim().toUpperCase();
-  if (!cleanCode || !newHostSessionId) return null;
+  if (!cleanCode || !newHostSessionId || !expectedHostSessionId) return null;
 
   console.log(`[Peeranki Diagnostics] Claiming host authority for room ${cleanCode} with session ${newHostSessionId}`);
 
   if (hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
-      const { data, error } = await client
-        .from('game_states')
-        .update({
-          host_session_id: newHostSessionId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('room_code', cleanCode)
-        .select()
-        .maybeSingle();
-
+      const { data, error } = await client.rpc('claim_room_host', {
+        p_room_code: cleanCode,
+        p_expected_host_session_id: expectedHostSessionId,
+        p_new_host_session_id: newHostSessionId,
+      });
       if (error) {
         console.warn('[Peeranki Diagnostics] Failed to claim host in Supabase:', error);
+        return null;
       }
       return data;
     } catch (err) {
@@ -1031,9 +1028,13 @@ export async function claimHost(roomCode: string, newHostSessionId: string) {
     }
   }
 
-  return updateMockRoomPartial(cleanCode, {
-    host_session_id: newHostSessionId,
-  });
+  const room = getStoredRoom(cleanCode);
+  if (!room || room.host_session_id !== expectedHostSessionId) return null;
+  const candidates = room.players
+    .filter((player: any) => player.connected && player.alive && player.session_id && player.session_id !== expectedHostSessionId)
+    .sort((a: any, b: any) => Number(a.id) - Number(b.id));
+  if (candidates[0]?.session_id !== newHostSessionId) return room;
+  return updateMockRoomPartial(cleanCode, { host_session_id: newHostSessionId });
 }
 
 export async function saveGameState(
