@@ -968,7 +968,8 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   const countdown = typeof state.countdown === 'number' ? state.countdown : -1;
   const roomFingerprint = Array.isArray(state.players)
     ? JSON.stringify({
-      host_session_id: state.host_session_id ?? '',
+      // Durable updates are delivered both by Postgres Changes and as state_delta.
+      // The broadcast omits host_session_id, so exclude it from duplicate detection.
       max_players: state.max_players ?? null,
       players: state.players,
     })
