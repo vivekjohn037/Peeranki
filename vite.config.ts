@@ -37,23 +37,6 @@ function backgroundUploadPlugin(): Plugin {
 function cloudflareAssetGuardPlugin(): Plugin {
   return {
     name: 'cloudflare-asset-guard-plugin',
-    buildStart() {
-      // Clean up any stale oversized WAV or conflicting _redirects from public directory
-      const publicWav = path.resolve(process.cwd(), 'public/assets/audio/bg_music.wav');
-      if (fs.existsSync(publicWav)) {
-        try {
-          fs.unlinkSync(publicWav);
-          console.log('[Cloudflare Guard] Removed stale public/assets/audio/bg_music.wav');
-        } catch {}
-      }
-      const publicRedirects = path.resolve(process.cwd(), 'public/_redirects');
-      if (fs.existsSync(publicRedirects)) {
-        try {
-          fs.unlinkSync(publicRedirects);
-          console.log('[Cloudflare Guard] Removed conflicting public/_redirects');
-        } catch {}
-      }
-    },
     closeBundle() {
       const distDir = path.resolve(process.cwd(), 'dist');
       if (!fs.existsSync(distDir)) return;

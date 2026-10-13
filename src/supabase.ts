@@ -131,6 +131,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     searchStr.includes('could not find the function') ||
     searchStr.includes('join_private_room') ||
     searchStr.includes('find_or_create_public_room') ||
+    searchStr.includes('claim_room_host') ||
     searchStr.includes('touch_player') ||
     searchStr.includes('leave_room') ||
     searchStr.includes('cleanup_stale_players')
@@ -938,6 +939,7 @@ interface LastAcceptedStateSummary {
   shooter: number | null;
   countingTimestamp: string | null;
   countdown: number;
+  roomFingerprint: string;
 }
 
 const lastAcceptedSummary = new Map<string, LastAcceptedStateSummary>();
@@ -951,11 +953,18 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   const shooter = typeof state.current_shooter === 'number' ? state.current_shooter : null;
   const countingTimestamp = typeof state.counting_start_timestamp === 'string' ? state.counting_start_timestamp : null;
   const countdown = typeof state.countdown === 'number' ? state.countdown : -1;
+  const roomFingerprint = Array.isArray(state.players)
+    ? JSON.stringify({
+      host_session_id: state.host_session_id ?? '',
+      max_players: state.max_players ?? null,
+      players: state.players,
+    })
+    : '';
 
   const prev = lastAcceptedSummary.get(cleanCode);
 
   if (!prev) {
-    lastAcceptedSummary.set(cleanCode, { seq, time, status, shooter, countingTimestamp, countdown });
+    lastAcceptedSummary.set(cleanCode, { seq, time, status, shooter, countingTimestamp, countdown, roomFingerprint });
     if (seq > 0) lastRoomStateSeq.set(cleanCode, seq);
     if (time > 0) lastRoomUpdatedAt.set(cleanCode, time);
     return true;
@@ -966,26 +975,12 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     (Boolean(status) && status !== prev.status) ||
     (shooter !== prev.shooter) ||
     (countingTimestamp !== prev.countingTimestamp) ||
-    (countdown >= 0 && prev.countdown !== countdown);
+    (countdown >= 0 && prev.countdown !== countdown) ||
+    (Boolean(roomFingerprint) && roomFingerprint !== prev.roomFingerprint);
 
-  // Strict sequence check if both records have sequence numbers
-  if (seq > 0 && prev.seq > 0) {
-    if (seq > prev.seq || stateChanged) {
-      lastAcceptedSummary.set(cleanCode, {
-        seq: Math.max(seq, prev.seq),
-        time: Math.max(time, prev.time),
-        status: status || prev.status,
-        shooter,
-        countingTimestamp: countingTimestamp || prev.countingTimestamp,
-        countdown: countdown >= 0 ? countdown : prev.countdown,
-      });
-      lastRoomStateSeq.set(cleanCode, Math.max(seq, prev.seq));
-      return true;
-    }
-    return false;
-  }
-
-  // Accept if timestamp is forward, or if state changed, or initial
+  // state_seq is only incremented in each browser tab, so it cannot order messages across peers.
+  // Use the shared timestamp plus the actual room contents instead; action requests and shots can
+  // change players while phase, shooter, and countdown remain unchanged.
   if (time > prev.time || stateChanged || (prev.time === 0 && time > 0)) {
     lastAcceptedSummary.set(cleanCode, {
       seq: Math.max(seq, prev.seq),
@@ -994,7 +989,9 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
       shooter,
       countingTimestamp: countingTimestamp || prev.countingTimestamp,
       countdown: countdown >= 0 ? countdown : prev.countdown,
+      roomFingerprint: roomFingerprint || prev.roomFingerprint,
     });
+    if (seq > 0) lastRoomStateSeq.set(cleanCode, Math.max(seq, prev.seq));
     if (time > 0) lastRoomUpdatedAt.set(cleanCode, Math.max(time, prev.time));
     return true;
   }
@@ -1002,27 +999,23 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   return false;
 }
 
-export async function claimHost(roomCode: string, newHostSessionId: string) {
+export async function claimHost(roomCode: string, newHostSessionId: string, expectedHostSessionId: string) {
   const cleanCode = roomCode.trim().toUpperCase();
-  if (!cleanCode || !newHostSessionId) return null;
+  if (!cleanCode || !newHostSessionId || !expectedHostSessionId) return null;
 
   console.log(`[Peeranki Diagnostics] Claiming host authority for room ${cleanCode} with session ${newHostSessionId}`);
 
   if (hasAnySupabaseConfiguration) {
     const client = configuredClient();
     try {
-      const { data, error } = await client
-        .from('game_states')
-        .update({
-          host_session_id: newHostSessionId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('room_code', cleanCode)
-        .select()
-        .maybeSingle();
-
+      const { data, error } = await client.rpc('claim_room_host', {
+        p_room_code: cleanCode,
+        p_expected_host_session_id: expectedHostSessionId,
+        p_new_host_session_id: newHostSessionId,
+      });
       if (error) {
         console.warn('[Peeranki Diagnostics] Failed to claim host in Supabase:', error);
+        return null;
       }
       return data;
     } catch (err) {
@@ -1031,9 +1024,13 @@ export async function claimHost(roomCode: string, newHostSessionId: string) {
     }
   }
 
-  return updateMockRoomPartial(cleanCode, {
-    host_session_id: newHostSessionId,
-  });
+  const room = getStoredRoom(cleanCode);
+  if (!room || room.host_session_id !== expectedHostSessionId) return null;
+  const candidates = room.players
+    .filter((player: any) => player.connected && player.alive && player.session_id && player.session_id !== expectedHostSessionId)
+    .sort((a: any, b: any) => Number(a.id) - Number(b.id));
+  if (candidates[0]?.session_id !== newHostSessionId) return room;
+  return updateMockRoomPartial(cleanCode, { host_session_id: newHostSessionId });
 }
 
 export async function saveGameState(
@@ -1066,45 +1063,6 @@ export async function saveGameState(
     updated_at: now,
     state_seq: seq,
   };
-
-  // 1. Instantly broadcast state over active Realtime channel if available (sub-40ms WebSocket delivery)
-  const activeChan = activeRealtimeChannels.get(cleanCode);
-  if (activeChan) {
-    try {
-      void activeChan.send({
-        type: 'broadcast',
-        event: 'state_delta',
-        payload: statePayload,
-      });
-    } catch {
-      // Best-effort fast broadcast
-    }
-  }
-
-  // 2. Instantly notify local subscribers on this client
-  notifyRoomListeners(cleanCode, statePayload, false);
-  if (broadcastChannel) {
-    try {
-      broadcastChannel.postMessage({
-        type: 'ROOM_UPDATE',
-        roomCode: cleanCode,
-        data: statePayload,
-      });
-    } catch {
-      // ignore
-    }
-  }
-
-  // 3. Update local mock room store (without duplicate notify)
-  updateMockRoomPartial(cleanCode, {
-    players: players as any[],
-    max_players: maxPlayers,
-    current_shooter: currentShooter,
-    countdown: countNumber,
-    counting_start_timestamp: countingStartTimestamp ?? null,
-    game_status: gameStatus,
-    state_seq: seq,
-  }, false);
 
   if (hasAnySupabaseConfiguration) {
     const client = configuredClient();
@@ -1142,8 +1100,36 @@ export async function saveGameState(
     } catch (err) {
       throw new Error(`Supabase could not save game state: ${errorMessage(err)}`, { cause: err });
     }
-    return;
   }
+
+  // Publish only after the durable write succeeds. Realtime broadcasts are a fast path, not a
+  // substitute for a persisted room snapshot; emitting first let peers observe updates rejected by
+  // the database and left the room divergent when the broadcast was missed.
+  notifyRoomListeners(cleanCode, statePayload, false);
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({ type: 'ROOM_UPDATE', roomCode: cleanCode, data: statePayload });
+    } catch {
+      // ignore
+    }
+  }
+  const activeChan = activeRealtimeChannels.get(cleanCode);
+  if (activeChan) {
+    try {
+      void activeChan.send({ type: 'broadcast', event: 'state_delta', payload: statePayload });
+    } catch {
+      // The persisted Postgres change remains the source of truth.
+    }
+  }
+  updateMockRoomPartial(cleanCode, {
+    players: players as any[],
+    max_players: maxPlayers,
+    current_shooter: currentShooter,
+    countdown: countNumber,
+    counting_start_timestamp: countingStartTimestamp ?? null,
+    game_status: gameStatus,
+    state_seq: seq,
+  }, false);
 }
 
 /** Send transient authoritative turn/count fields without persisting a database write per tick. */
@@ -1291,6 +1277,9 @@ export async function leaveRoom(roomCode: string, sessionId: string) {
     if (player) {
       player.connected = false;
       player.alive = false;
+      if (room.max_players === 3 && room.game_status !== 'waiting' && room.game_status !== 'finished') {
+        room.game_status = 'finished';
+      }
       persistMockRoom(room);
       return room;
     }
@@ -1495,6 +1484,7 @@ export function subscribeToGameState(
           roomSubscribers.delete(cleanCode);
           lastRoomStateSeq.delete(cleanCode);
           lastRoomUpdatedAt.delete(cleanCode);
+          lastAcceptedSummary.delete(cleanCode);
           const chan = activeRealtimeChannels.get(cleanCode);
           activeRealtimeChannels.delete(cleanCode);
           if (chan) {

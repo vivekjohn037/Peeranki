@@ -199,6 +199,7 @@ const PLAYER_COUNTS = Array.from(
 // Offline game state
 let offlineMode = false;
 let offlinePlayers: Player[] = [];
+let matchLifecycleGeneration = 0;
 let offlineMaxPlayers = MIN_PLAYERS;
 let shootingDeadlineAt = '';
 let matchStartedAt = '';
@@ -338,6 +339,7 @@ async function cleanupPreviousSession() {
 
 function resetMatchLifecycleState(targetMode: 'offline' | 'online' | 'none') {
   console.log(`[Peeranki Diagnostics] Resetting match lifecycle state for mode: ${targetMode}`);
+  matchLifecycleGeneration += 1;
 
   stopRoomHeartbeat();
   processedOnlineActionNonces.clear();
@@ -2815,12 +2817,16 @@ class LobbyScene extends Phaser.Scene {
   private refreshTimer?: Phaser.Time.TimerEvent;
   private starting = false;
   private lastPlayerCount = 0;
+  private lifecycleGeneration = 0;
+  private roomCodeAtStart = '';
 
   constructor() {
     super('LobbyScene');
   }
 
   create() {
+    this.lifecycleGeneration = matchLifecycleGeneration;
+    this.roomCodeAtStart = roomCode;
     const { width, height } = this.scale;
     const isLandscape = width >= 640 && width > height * 1.12;
 
@@ -3064,8 +3070,9 @@ class LobbyScene extends Phaser.Scene {
     }
 
     this.realtimeChannel = subscribeToGameState(
-      roomCode,
+      this.roomCodeAtStart,
       (gameState) => {
+        if (!this.isCurrentLobby()) return;
         this.applyRoomState(gameState);
       },
     );
@@ -3082,7 +3089,7 @@ class LobbyScene extends Phaser.Scene {
   }
 
   private applyRoomState(gameState: any) {
-    if (!gameState) {
+    if (!this.isCurrentLobby() || !gameState) {
       return;
     }
 
@@ -3120,13 +3127,14 @@ class LobbyScene extends Phaser.Scene {
   }
 
   private async refreshLobby() {
-    if (this.starting) {
+    if (this.starting || !this.isCurrentLobby()) {
       return;
     }
 
     let result: any = null;
     try {
-      result = await fetchGameRoom(roomCode);
+      result = await fetchGameRoom(this.roomCodeAtStart);
+      if (!this.isCurrentLobby()) return;
 
       if (!result) {
         this.statusText?.setText(
@@ -3155,6 +3163,13 @@ class LobbyScene extends Phaser.Scene {
         void this.startGame();
       }
     }
+  }
+
+  private isCurrentLobby() {
+    return matchLifecycleGeneration === this.lifecycleGeneration &&
+      Boolean(this.roomCodeAtStart) &&
+      roomCode === this.roomCodeAtStart &&
+      !offlineMode;
   }
 
   private updateLobbyText() {
@@ -3207,6 +3222,7 @@ class LobbyScene extends Phaser.Scene {
 
     if (
       this.starting ||
+      !this.isCurrentLobby() ||
       !amHost() ||
       connected.length !== maxPlayers
     ) {
@@ -3263,6 +3279,8 @@ class LobbyScene extends Phaser.Scene {
         updated_at: new Date().toISOString(),
       })
       .eq('room_code', roomCode);
+
+    if (!this.isCurrentLobby()) return;
 
     if (error) {
       console.error(
@@ -3349,6 +3367,10 @@ private nextStartIndex = -1;
   private lastAnnouncedDuelRound = 1;
   private countingPhaseEnteredAt = 0;
   private playingPhaseWatchdogTimer?: Phaser.Time.TimerEvent;
+  private hostRecoveryInProgress = false;
+  private lastHostRecoveryAttemptAt = 0;
+  private lifecycleGeneration = 0;
+  private roomCodeAtStart = '';
 
   constructor() {
     super('GameScene');
@@ -3359,6 +3381,8 @@ private nextStartIndex = -1;
       offlineMode = Boolean(data.offline);
     }
     this.initialized = false;
+    this.lifecycleGeneration = matchLifecycleGeneration;
+    this.roomCodeAtStart = offlineMode ? '' : roomCode;
     this.gameFinished = false;
     this.victoryPlayed = false;
     this.duelActive = false;
@@ -3373,6 +3397,8 @@ private nextStartIndex = -1;
     this.selectedWeapon = 'gun';
     this.playerObjects = [];
     this.countingPhaseEnteredAt = 0;
+    this.hostRecoveryInProgress = false;
+    this.lastHostRecoveryAttemptAt = 0;
     console.log(`[Peeranki Diagnostics] GameScene.init: offlineMode=${offlineMode}, roomCode=${roomCode}, amHost=${amHost()}`);
   }
 
@@ -3647,7 +3673,10 @@ if (offlineMode) {
         if (this.gameFinished || offlineMode) return;
         const t0 = performance.now();
         try {
-          const room = await fetchGameRoom(roomCode);
+          const subscribedRoomCode = this.roomCodeAtStart;
+          if (!this.isCurrentOnlineGame()) return;
+          const room = await fetchGameRoom(subscribedRoomCode);
+          if (!this.isCurrentOnlineGame()) return;
           const rtt = Math.round(performance.now() - t0);
           this.currentLatencyMs = Math.max(12, Math.min(999, rtt));
           if (room) {
@@ -3794,7 +3823,10 @@ if (offlineMode) {
   }
 
   private async initializeGame() {
-    const room = await fetchGameRoom(roomCode);
+    const subscribedRoomCode = this.roomCodeAtStart;
+    if (!this.isCurrentOnlineGame()) return;
+    const room = await fetchGameRoom(subscribedRoomCode);
+    if (!this.isCurrentOnlineGame()) return;
 
     if (!room) {
       this.statusText?.setText(
@@ -3854,9 +3886,7 @@ if (offlineMode) {
           candidates.sort((a, b) => a.id - b.id);
           if (candidates.length > 0 && candidates[0].sessionId === sessionId) {
             console.warn('[Peeranki Diagnostics] Host unresponsive in playing status. Claiming host authority.');
-            hostSessionId = sessionId;
-            await claimHost(roomCode, sessionId);
-            this.startCounting();
+            if (await this.claimHostIfCurrent(hostSessionId)) this.startCounting();
           }
         }
       });
@@ -4165,16 +4195,50 @@ if (offlineMode) {
   }
 
   private startRealtimeSync() {
+    const subscribedRoomCode = this.roomCodeAtStart;
+    if (!subscribedRoomCode || !this.isCurrentOnlineGame()) return;
     this.realtimeChannel = subscribeToGameState(
-      roomCode,
+      subscribedRoomCode,
       (gameState) => {
+        if (!this.isCurrentOnlineGame()) return;
         this.applyRemoteGameState(gameState);
       },
     );
   }
 
+  private isCurrentOnlineGame() {
+    return !offlineMode &&
+      this.lifecycleGeneration === matchLifecycleGeneration &&
+      Boolean(this.roomCodeAtStart) &&
+      roomCode === this.roomCodeAtStart;
+  }
+
+  private async claimHostIfCurrent(expectedHostSessionId: string): Promise<boolean> {
+    if (!this.isCurrentOnlineGame()) return false;
+    const now = Date.now();
+    if (this.hostRecoveryInProgress || now - this.lastHostRecoveryAttemptAt < 1_500) return false;
+    this.hostRecoveryInProgress = true;
+    this.lastHostRecoveryAttemptAt = now;
+    try {
+      const room = await claimHost(roomCode, sessionId, expectedHostSessionId);
+      if (!this.isCurrentOnlineGame()) return false;
+      const claimedHost = typeof room?.host_session_id === 'string' ? room.host_session_id : '';
+      if (claimedHost !== sessionId) {
+        if (claimedHost) hostSessionId = claimedHost;
+        return false;
+      }
+      hostSessionId = sessionId;
+      return true;
+    } catch (error) {
+      console.warn('[Peeranki Diagnostics] Host recovery failed:', error);
+      return false;
+    } finally {
+      this.hostRecoveryInProgress = false;
+    }
+  }
+
   private applyRemoteGameState(gameState: any) {
-    if (!gameState) {
+    if (!this.isCurrentOnlineGame() || !gameState) {
       return;
     }
 
@@ -4740,7 +4804,7 @@ if (offlineMode) {
     }
 
     // Non-host watchdog: Detect stalled, missing, or disconnected host during counting phase
-    if (!amHost() && !offlineMode) {
+    if (!amHost() && !offlineMode && !this.hostRecoveryInProgress) {
       const currentHost = players.find((p) => p.sessionId === hostSessionId);
       const startMs = countingStartTimestamp ? Date.parse(countingStartTimestamp) : 0;
       const elapsedSinceStart = Number.isFinite(startMs) && startMs > 0 ? (now - startMs) : (now - this.countingPhaseEnteredAt);
@@ -4752,23 +4816,25 @@ if (offlineMode) {
         candidates.sort((a, b) => a.id - b.id);
         if (candidates.length > 0 && candidates[0].sessionId === sessionId) {
           console.warn('[Peeranki Diagnostics] Host stalled or disconnected during counting phase. Claiming host authority.');
-          hostSessionId = sessionId;
-          void claimHost(roomCode, sessionId);
-
-          countingStartTimestamp = new Date().toISOString();
-          this.countingPhaseEnteredAt = now;
-          if (this.startIndex < 0) {
-            const aliveIndexes = activePlayers().map((p) => p.id - 1);
-            this.startIndex = aliveIndexes[0] ?? 0;
-            countingStartIndex = this.startIndex;
-          }
-          void syncGameState(null, 0, 'counting', countingStartTimestamp);
-          void broadcastRoomStateDelta(roomCode, {
-            game_status: 'counting',
-            current_shooter: null,
-            countdown: 0,
-            counting_start_timestamp: countingStartTimestamp,
-            counting_start_index: this.startIndex,
+          const expectedHost = hostSessionId;
+          void this.claimHostIfCurrent(expectedHost).then((claimed) => {
+            if (!claimed || this.roundPhase !== 'counting' || this.gameFinished) return;
+            const recoveredAt = new Date().toISOString();
+            countingStartTimestamp = recoveredAt;
+            this.countingPhaseEnteredAt = Date.now();
+            if (this.startIndex < 0) {
+              const aliveIndexes = activePlayers().map((p) => p.id - 1);
+              this.startIndex = aliveIndexes[0] ?? 0;
+              countingStartIndex = this.startIndex;
+            }
+            void syncGameState(null, 0, 'counting', recoveredAt);
+            void broadcastRoomStateDelta(roomCode, {
+              game_status: 'counting',
+              current_shooter: null,
+              countdown: 0,
+              counting_start_timestamp: recoveredAt,
+              counting_start_index: this.startIndex,
+            });
           });
         }
       }
@@ -4848,20 +4914,21 @@ if (offlineMode) {
             candidates.sort((a, b) => a.id - b.id);
             if (candidates.length > 0 && candidates[0].sessionId === sessionId) {
               console.warn('[Peeranki Diagnostics] Host failed to advance room to shooting. Recovering host.');
-              hostSessionId = sessionId;
-              void claimHost(roomCode, sessionId);
-              if (finalShooterIndex >= 0) {
-                this.roundPhase = 'shooting';
-                this.currentShooter = finalShooterIndex;
-                shootingDeadlineAt = new Date(Date.now() + ACTION_LIMIT_MS).toISOString();
-                this.startActionClock();
-                void syncGameState(finalShooterIndex, COUNT_TO, 'shooting');
-                void broadcastRoomStateDelta(roomCode, {
-                  game_status: 'shooting',
-                  current_shooter: finalShooterIndex,
-                  countdown: COUNT_TO,
-                });
-              }
+              const expectedHost = hostSessionId;
+              void this.claimHostIfCurrent(expectedHost).then((claimed) => {
+                if (claimed && this.roundPhase === 'counting' && !this.gameFinished && finalShooterIndex >= 0) {
+                  this.roundPhase = 'shooting';
+                  this.currentShooter = finalShooterIndex;
+                  shootingDeadlineAt = new Date(Date.now() + ACTION_LIMIT_MS).toISOString();
+                  this.startActionClock();
+                  void syncGameState(finalShooterIndex, COUNT_TO, 'shooting');
+                  void broadcastRoomStateDelta(roomCode, {
+                    game_status: 'shooting',
+                    current_shooter: finalShooterIndex,
+                    countdown: COUNT_TO,
+                  });
+                }
+              });
             }
           }
         });
