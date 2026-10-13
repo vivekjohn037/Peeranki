@@ -957,6 +957,15 @@ interface LastAcceptedStateSummary {
 
 const lastAcceptedSummary = new Map<string, LastAcceptedStateSummary>();
 
+function stableRoomJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableRoomJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableRoomJson(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   if (!state || typeof state !== 'object') return false;
   const cleanCode = roomCode.trim().toUpperCase();
@@ -967,9 +976,8 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   const countingTimestamp = typeof state.counting_start_timestamp === 'string' ? state.counting_start_timestamp : null;
   const countdown = typeof state.countdown === 'number' ? state.countdown : -1;
   const roomFingerprint = Array.isArray(state.players)
-    ? JSON.stringify({
-      // Durable updates are delivered both by Postgres Changes and as state_delta.
-      // The broadcast omits host_session_id, so exclude it from duplicate detection.
+    ? stableRoomJson({
+      // The durable broadcast omits host_session_id, and Postgres may reorder JSONB keys.
       max_players: state.max_players ?? null,
       players: state.players,
     })
