@@ -199,6 +199,7 @@ const PLAYER_COUNTS = Array.from(
 // Offline game state
 let offlineMode = false;
 let offlinePlayers: Player[] = [];
+let matchLifecycleGeneration = 0;
 let offlineMaxPlayers = MIN_PLAYERS;
 let shootingDeadlineAt = '';
 let matchStartedAt = '';
@@ -338,6 +339,7 @@ async function cleanupPreviousSession() {
 
 function resetMatchLifecycleState(targetMode: 'offline' | 'online' | 'none') {
   console.log(`[Peeranki Diagnostics] Resetting match lifecycle state for mode: ${targetMode}`);
+  matchLifecycleGeneration += 1;
 
   stopRoomHeartbeat();
   processedOnlineActionNonces.clear();
@@ -2815,12 +2817,16 @@ class LobbyScene extends Phaser.Scene {
   private refreshTimer?: Phaser.Time.TimerEvent;
   private starting = false;
   private lastPlayerCount = 0;
+  private lifecycleGeneration = 0;
+  private roomCodeAtStart = '';
 
   constructor() {
     super('LobbyScene');
   }
 
   create() {
+    this.lifecycleGeneration = matchLifecycleGeneration;
+    this.roomCodeAtStart = roomCode;
     const { width, height } = this.scale;
     const isLandscape = width >= 640 && width > height * 1.12;
 
@@ -3064,8 +3070,9 @@ class LobbyScene extends Phaser.Scene {
     }
 
     this.realtimeChannel = subscribeToGameState(
-      roomCode,
+      this.roomCodeAtStart,
       (gameState) => {
+        if (!this.isCurrentLobby()) return;
         this.applyRoomState(gameState);
       },
     );
@@ -3082,7 +3089,7 @@ class LobbyScene extends Phaser.Scene {
   }
 
   private applyRoomState(gameState: any) {
-    if (!gameState) {
+    if (!this.isCurrentLobby() || !gameState) {
       return;
     }
 
@@ -3120,13 +3127,14 @@ class LobbyScene extends Phaser.Scene {
   }
 
   private async refreshLobby() {
-    if (this.starting) {
+    if (this.starting || !this.isCurrentLobby()) {
       return;
     }
 
     let result: any = null;
     try {
-      result = await fetchGameRoom(roomCode);
+      result = await fetchGameRoom(this.roomCodeAtStart);
+      if (!this.isCurrentLobby()) return;
 
       if (!result) {
         this.statusText?.setText(
@@ -3155,6 +3163,13 @@ class LobbyScene extends Phaser.Scene {
         void this.startGame();
       }
     }
+  }
+
+  private isCurrentLobby() {
+    return matchLifecycleGeneration === this.lifecycleGeneration &&
+      Boolean(this.roomCodeAtStart) &&
+      roomCode === this.roomCodeAtStart &&
+      !offlineMode;
   }
 
   private updateLobbyText() {
@@ -3207,6 +3222,7 @@ class LobbyScene extends Phaser.Scene {
 
     if (
       this.starting ||
+      !this.isCurrentLobby() ||
       !amHost() ||
       connected.length !== maxPlayers
     ) {
@@ -3263,6 +3279,8 @@ class LobbyScene extends Phaser.Scene {
         updated_at: new Date().toISOString(),
       })
       .eq('room_code', roomCode);
+
+    if (!this.isCurrentLobby()) return;
 
     if (error) {
       console.error(
@@ -3351,6 +3369,8 @@ private nextStartIndex = -1;
   private playingPhaseWatchdogTimer?: Phaser.Time.TimerEvent;
   private hostRecoveryInProgress = false;
   private lastHostRecoveryAttemptAt = 0;
+  private lifecycleGeneration = 0;
+  private roomCodeAtStart = '';
 
   constructor() {
     super('GameScene');
@@ -3361,6 +3381,8 @@ private nextStartIndex = -1;
       offlineMode = Boolean(data.offline);
     }
     this.initialized = false;
+    this.lifecycleGeneration = matchLifecycleGeneration;
+    this.roomCodeAtStart = offlineMode ? '' : roomCode;
     this.gameFinished = false;
     this.victoryPlayed = false;
     this.duelActive = false;
@@ -3651,7 +3673,10 @@ if (offlineMode) {
         if (this.gameFinished || offlineMode) return;
         const t0 = performance.now();
         try {
-          const room = await fetchGameRoom(roomCode);
+          const subscribedRoomCode = this.roomCodeAtStart;
+          if (!this.isCurrentOnlineGame()) return;
+          const room = await fetchGameRoom(subscribedRoomCode);
+          if (!this.isCurrentOnlineGame()) return;
           const rtt = Math.round(performance.now() - t0);
           this.currentLatencyMs = Math.max(12, Math.min(999, rtt));
           if (room) {
@@ -3798,7 +3823,10 @@ if (offlineMode) {
   }
 
   private async initializeGame() {
-    const room = await fetchGameRoom(roomCode);
+    const subscribedRoomCode = this.roomCodeAtStart;
+    if (!this.isCurrentOnlineGame()) return;
+    const room = await fetchGameRoom(subscribedRoomCode);
+    if (!this.isCurrentOnlineGame()) return;
 
     if (!room) {
       this.statusText?.setText(
@@ -4167,21 +4195,33 @@ if (offlineMode) {
   }
 
   private startRealtimeSync() {
+    const subscribedRoomCode = this.roomCodeAtStart;
+    if (!subscribedRoomCode || !this.isCurrentOnlineGame()) return;
     this.realtimeChannel = subscribeToGameState(
-      roomCode,
+      subscribedRoomCode,
       (gameState) => {
+        if (!this.isCurrentOnlineGame()) return;
         this.applyRemoteGameState(gameState);
       },
     );
   }
 
+  private isCurrentOnlineGame() {
+    return !offlineMode &&
+      this.lifecycleGeneration === matchLifecycleGeneration &&
+      Boolean(this.roomCodeAtStart) &&
+      roomCode === this.roomCodeAtStart;
+  }
+
   private async claimHostIfCurrent(expectedHostSessionId: string): Promise<boolean> {
+    if (!this.isCurrentOnlineGame()) return false;
     const now = Date.now();
     if (this.hostRecoveryInProgress || now - this.lastHostRecoveryAttemptAt < 1_500) return false;
     this.hostRecoveryInProgress = true;
     this.lastHostRecoveryAttemptAt = now;
     try {
       const room = await claimHost(roomCode, sessionId, expectedHostSessionId);
+      if (!this.isCurrentOnlineGame()) return false;
       const claimedHost = typeof room?.host_session_id === 'string' ? room.host_session_id : '';
       if (claimedHost !== sessionId) {
         if (claimedHost) hostSessionId = claimedHost;
@@ -4198,7 +4238,7 @@ if (offlineMode) {
   }
 
   private applyRemoteGameState(gameState: any) {
-    if (!gameState) {
+    if (!this.isCurrentOnlineGame() || !gameState) {
       return;
     }
 

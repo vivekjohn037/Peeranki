@@ -12,6 +12,7 @@ Apply the SQL files in `supabase/migrations/` in numeric order:
 1. `001_multiplayer.sql` creates the room table, RPCs, RLS policies, and Realtime configuration.
 2. `002_counting_timestamp.sql` adds the shared count start timestamp.
 3. `003_atomic_host_handoff.sql` adds guarded, atomic host failover.
+4. `004_online_state_reliability.sql` allows every phase persisted by the client and ends a live 3-player match when a player leaves.
 
 This migration provisions:
 1. **`public.game_states` table**:
@@ -23,7 +24,7 @@ This migration provisions:
    - `host_session_id`: Host session identifier
    - `current_shooter`: Active turn pointer
    - `countdown`: Turn timer countdown
-   - `game_status`: Status (`waiting`, `playing`, `shooting`, `counting`, `duel`, `finished`)
+   - `game_status`: Phase (`waiting`, `playing`, `counting`, `shooting`, `action_requested`, `shot`, `round_won`, `duel`, `finished`)
    - `created_at` & `updated_at`: Timestamps
 2. **Row Level Security (RLS)**:
    - SELECT, INSERT, and UPDATE policies granted to `anon` and `authenticated` roles.

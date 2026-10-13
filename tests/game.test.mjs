@@ -29,6 +29,7 @@ import {
   MultiplayerError,
   isServiceRoleKey,
   claimHost,
+  shouldAcceptRoomState,
 } from '../src/supabase.ts';
 
 test('1. WEAPON DEFINITIONS & SEQUENCING', async (t) => {
@@ -384,11 +385,12 @@ test('5. SUPABASE MULTIPLAYER ROOM LIFECYCLE', async (t) => {
 
 test('6. ROOM STATE UPDATES REACH LOCAL SUBSCRIBERS', async () => {
   const room = await createPrivateRoom(3, 'state-host', 'Host');
+  const joined = await joinRoom(room.room_code, 'Target', 'state-target');
   const observed = [];
   const subscriber = subscribeToGameState(room.room_code, (state) => observed.push(state));
 
   try {
-    await saveGameState(room.room_code, room.players, room.max_players, 0, 4, 'counting');
+    await saveGameState(room.room_code, joined.players, room.max_players, 0, 4, 'counting');
     assert.equal(observed.length, 1);
     assert.equal(observed[0].game_status, 'counting');
     assert.equal(observed[0].countdown, 4);
@@ -400,9 +402,68 @@ test('6. ROOM STATE UPDATES REACH LOCAL SUBSCRIBERS', async () => {
     assert.equal(observed.length, 2);
     assert.equal(observed[1].countdown, 5);
     assert.equal(observed[1].current_shooter, 1);
+
+    const shotPlayers = joined.players.map((player) => player.session_id === 'state-target'
+      ? { ...player, stage: 1 }
+      : player);
+    await saveGameState(room.room_code, shotPlayers, room.max_players, 1, 10, 'shot');
+    assert.equal(observed[2].game_status, 'shot');
+    assert.equal(observed[2].players.find((player) => player.session_id === 'state-target').stage, 1);
   } finally {
     await subscriber.unsubscribe();
   }
+});
+
+test('6a. Cross-client room updates accept player changes despite local sequence counters', () => {
+  const roomCode = `SEQ${Date.now()}`;
+  const before = {
+    state_seq: 25,
+    updated_at: '2026-01-01T00:00:00.000Z',
+    game_status: 'shooting',
+    current_shooter: 1,
+    countdown: 10,
+    players: [{ id: 2, session_id: 'target', connected: true, alive: true, stage: 0, weapons: ['gun'], action_request: null }],
+  };
+  const after = {
+    ...before,
+    state_seq: 1,
+    updated_at: '2026-01-01T00:00:00.100Z',
+    players: [{ ...before.players[0], stage: 1 }],
+  };
+
+  assert.equal(shouldAcceptRoomState(roomCode, before), true);
+  assert.equal(shouldAcceptRoomState(roomCode, after), true, 'lower per-tab sequence must not hide a newer shot');
+  assert.equal(shouldAcceptRoomState(roomCode, after), false, 'an identical duplicate should be ignored');
+});
+
+test('6b. Leaving a live 3-player room finishes the shared match only for that size', async (t) => {
+  await t.test('3-player active match becomes finished', async () => {
+    const created = await createPrivateRoom(3, 'leave-three-host', 'Host');
+    const joined1 = await joinRoom(created.room_code, 'Guest 1', 'leave-three-guest1');
+    const joined2 = await joinRoom(created.room_code, 'Guest 2', 'leave-three-guest2');
+    await saveGameState(created.room_code, joined2.players, 3, 0, 10, 'shooting');
+
+    const updated = await leaveRoom(created.room_code, 'leave-three-guest1');
+    assert.equal(updated.game_status, 'finished');
+    const leaver = updated.players.find((player) => player.session_id === 'leave-three-guest1');
+    assert.equal(leaver.connected, false);
+    assert.equal(leaver.alive, false);
+  });
+
+  await t.test('3-player waiting room remains open and 4-player match continues', async () => {
+    const waiting = await createPrivateRoom(3, 'leave-wait-host', 'Host');
+    await joinRoom(waiting.room_code, 'Guest', 'leave-wait-guest');
+    const waitingAfterLeave = await leaveRoom(waiting.room_code, 'leave-wait-guest');
+    assert.equal(waitingAfterLeave.game_status, 'waiting');
+
+    const fourPlayer = await createPrivateRoom(4, 'leave-four-host', 'Host');
+    const guest1 = await joinRoom(fourPlayer.room_code, 'Guest 1', 'leave-four-guest1');
+    const guest2 = await joinRoom(fourPlayer.room_code, 'Guest 2', 'leave-four-guest2');
+    const guest3 = await joinRoom(fourPlayer.room_code, 'Guest 3', 'leave-four-guest3');
+    await saveGameState(fourPlayer.room_code, guest3.players, 4, 0, 10, 'shooting');
+    const fourPlayerAfterLeave = await leaveRoom(fourPlayer.room_code, 'leave-four-guest1');
+    assert.equal(fourPlayerAfterLeave.game_status, 'shooting');
+  });
 });
 
 test('7. MULTIPLAYER ERROR PARSING & RECOVERY', async (t) => {
