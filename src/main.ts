@@ -3153,13 +3153,10 @@ class LobbyScene extends Phaser.Scene {
       return;
     }
 
-    if (isPublicRoom && amHost()) {
+    if (isPublicRoom) {
       const count = connectedPlayers().length;
 
-      if (
-        count === maxPlayers &&
-        result.game_status === 'waiting'
-      ) {
+      if (count === maxPlayers && result.game_status === 'waiting') {
         void this.startGame();
       }
     }
@@ -3223,7 +3220,7 @@ class LobbyScene extends Phaser.Scene {
     if (
       this.starting ||
       !this.isCurrentLobby() ||
-      !amHost() ||
+      (!isPublicRoom && !amHost()) ||
       connected.length !== maxPlayers
     ) {
       return;
@@ -3269,7 +3266,7 @@ class LobbyScene extends Phaser.Scene {
       }),
     );
 
-    const { error } = await supabase
+    const { data: startedRows, error } = await supabase
       .from('game_states')
       .update({
         players: cleanPlayers,
@@ -3278,7 +3275,9 @@ class LobbyScene extends Phaser.Scene {
         game_status: 'playing',
         updated_at: new Date().toISOString(),
       })
-      .eq('room_code', roomCode);
+      .eq('room_code', this.roomCodeAtStart)
+      .eq('game_status', 'waiting')
+      .select('room_code');
 
     if (!this.isCurrentLobby()) return;
 
@@ -3293,6 +3292,15 @@ class LobbyScene extends Phaser.Scene {
       this.startButton?.setInteractive({
         useHandCursor: true,
       });
+      return;
+    }
+
+    if (!startedRows?.length) {
+      // Another full-room client won the atomic start race. Follow its persisted state.
+      const room = await fetchGameRoom(this.roomCodeAtStart);
+      if (!this.isCurrentLobby()) return;
+      this.starting = false;
+      if (room) this.applyRoomState(room);
       return;
     }
 
