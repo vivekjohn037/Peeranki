@@ -434,6 +434,17 @@ test('6a. Cross-client room updates accept player changes despite local sequence
   assert.equal(shouldAcceptRoomState(roomCode, before), true);
   assert.equal(shouldAcceptRoomState(roomCode, after), true, 'lower per-tab sequence must not hide a newer shot');
   assert.equal(shouldAcceptRoomState(roomCode, after), false, 'an identical duplicate should be ignored');
+
+  const postgresEcho = {
+    ...after,
+    host_session_id: 'authoritative-host',
+    created_at: '2026-01-01T00:00:00.000Z',
+  };
+  assert.equal(
+    shouldAcceptRoomState(roomCode, postgresEcho),
+    false,
+    'the Postgres Changes echo of the same durable broadcast must not replay hit feedback',
+  );
 });
 
 test('6b. Leaving a live 3-player room finishes the shared match only for that size', async (t) => {
