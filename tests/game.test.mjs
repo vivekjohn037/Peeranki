@@ -501,7 +501,7 @@ test('7. MULTIPLAYER ERROR PARSING & RECOVERY', async (t) => {
     const err = parseSupabaseError({ code: 'P0001', message: 'This player session is already in the room', details: 'Retry the matchmaking request.' });
     assert.equal(err.code, 'UNKNOWN_ERROR');
     assert.match(err.technicalDetails, /This player session is already in the room/);
-    assert.doesNotMatch(err.technicalDetails, /\[object Object\]/);
+    assert.doesNotMatch(err.technicalDetails, /\\[object Object\\]/);
   });
 
   await t.test('Does not treat P0002 no-data errors as missing rooms', () => {
@@ -706,4 +706,3 @@ test('11. CLEANUP REALTIME CONNECTIONS', async () => {
   }
   setTimeout(() => process.exit(0), 50).unref();
 });
-
