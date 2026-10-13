@@ -485,10 +485,29 @@ test('7. MULTIPLAYER ERROR PARSING & RECOVERY', async (t) => {
     assert.equal(err.userMessage.includes('RPC function missing'), true);
   });
 
-  await t.test('Maps P0001 / room not found to ROOM_NOT_FOUND', () => {
+  await t.test('Maps an explicit P0001 room-not-found message to ROOM_NOT_FOUND', () => {
     const err = parseSupabaseError({ code: 'P0001', message: 'Room does not exist' });
     assert.equal(err.code, 'ROOM_NOT_FOUND');
     assert.equal(err.userMessage.includes('Room not found'), true);
+  });
+
+  await t.test('Does not misclassify generic matchmaking exceptions as ROOM_NOT_FOUND', () => {
+    const err = parseSupabaseError({ code: 'P0001', message: 'That player name is already in use' });
+    assert.equal(err.code, 'UNKNOWN_ERROR');
+    assert.match(err.technicalDetails, /That player name is already in use/);
+  });
+
+  await t.test('Preserves readable details from PostgREST error objects', () => {
+    const err = parseSupabaseError({ code: 'P0001', message: 'This player session is already in the room', details: 'Retry the matchmaking request.' });
+    assert.equal(err.code, 'UNKNOWN_ERROR');
+    assert.match(err.technicalDetails, /This player session is already in the room/);
+    assert.doesNotMatch(err.technicalDetails, /\[object Object\]/);
+  });
+
+  await t.test('Does not treat P0002 no-data errors as missing rooms', () => {
+    const err = parseSupabaseError({ code: 'P0002', message: 'Invalid session identifier' });
+    assert.equal(err.code, 'UNKNOWN_ERROR');
+    assert.match(err.technicalDetails, /Invalid session identifier/);
   });
 
   await t.test('Maps P0005 / capacity to ROOM_FULL', () => {
