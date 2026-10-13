@@ -983,6 +983,16 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     return true;
   }
 
+  // Count ticks share one start timestamp. Ignore delayed/out-of-order ticks, and do
+  // not let a late counting packet roll a room back after the host selected a shooter.
+  if (
+    countingTimestamp && countingTimestamp === prev.countingTimestamp &&
+    ((prev.status === 'counting' && status === 'counting' && countdown >= 0 && countdown < prev.countdown) ||
+      (prev.status === 'shooting' && status === 'counting'))
+  ) {
+    return false;
+  }
+
   // Critical state changes (phase transition, shooter selection, counting start timestamp, countdown tick)
   const stateChanged =
     (Boolean(status) && status !== prev.status) ||
