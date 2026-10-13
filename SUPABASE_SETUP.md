@@ -13,6 +13,7 @@ Apply the SQL files in `supabase/migrations/` in numeric order:
 2. `002_counting_timestamp.sql` adds the shared count start timestamp.
 3. `003_atomic_host_handoff.sql` adds guarded, atomic host failover.
 4. `004_online_state_reliability.sql` allows every phase persisted by the client and ends a live 3-player match when a player leaves.
+5. `005_idempotent_public_matchmaking.sql` makes public matchmaking retries safe and avoids duplicate-session/name failures.
 
 This migration provisions:
 1. **`public.game_states` table**:
