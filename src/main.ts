@@ -630,6 +630,29 @@ async function syncGameState(
   );
 }
 
+/** Retry idempotent state snapshots when Supabase briefly drops a write. */
+async function syncGameStateWithRetry(
+  currentShooter: number | null,
+  countNumber: number,
+  gameStatus: string,
+  explicitCountingTimestamp?: string | null,
+) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await syncGameState(currentShooter, countNumber, gameStatus, explicitCountingTimestamp);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        console.warn(`[Peeranki Diagnostics] ${gameStatus} state save failed (attempt ${attempt}/3); retrying.`, error);
+        await new Promise((resolve) => window.setTimeout(resolve, attempt * 250));
+      }
+    }
+  }
+  throw lastError;
+}
+
 function startRoomHeartbeat() {
   stopRoomHeartbeat();
 
@@ -5128,7 +5151,14 @@ private async requestHostAction(action: PlayerAction) {
   const nonce = `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
   shooter.actionRequest = { ...action, nonce };
   this.statusText?.setText('Sending action to the host...');
-  await syncGameState(this.currentShooter, this.countNumber, 'action_requested');
+  try {
+    await syncGameStateWithRetry(this.currentShooter, this.countNumber, 'action_requested');
+  } catch (error) {
+    console.error('[Peeranki Diagnostics] Could not confirm the online shot request:', error);
+    this.statusText?.setText('Shot request could not reach the host. Check the connection before trying again.');
+    this.uiManager.showToast('⚠️ Shot request was not confirmed. Check your connection.', 'alert');
+    this.syncUI();
+  }
 }
 
 private async processPendingAction() {
@@ -5424,18 +5454,26 @@ void this.recordShot();
 
     if (alive.length <= 1) {
       if (!offlineMode && !amHost()) {
-        await syncGameState(this.currentShooter, COUNT_TO, 'shot');
+        await syncGameStateWithRetry(this.currentShooter, COUNT_TO, 'shot');
         return;
       }
       await this.finishRound();
       return;
     }
 
-    await syncGameState(
-      this.currentShooter,
-      COUNT_TO,
-      'shot',
-    );
+    try {
+      await syncGameStateWithRetry(this.currentShooter, COUNT_TO, 'shot');
+    } catch (error) {
+      console.error('[Peeranki Diagnostics] Could not persist online shot; will retry the same state:', error);
+      this.statusText?.setText('Shot applied. Reconnecting to sync it with everyone…');
+      this.uiManager.showToast('⚠️ Sync interrupted. Retrying this shot with everyone…', 'alert');
+      const roomAtFailure = roomCode;
+      this.time.delayedCall(1_000, () => {
+        if (this.isCurrentOnlineGame() && roomCode === roomAtFailure && this.roundPhase === 'waiting' && !this.gameFinished) {
+          void this.recordShot();
+        }
+      });
+    }
   }
 
   private refreshWeaponPicker() {
@@ -5547,14 +5585,40 @@ void this.recordShot();
     const winnerIndex = players.findIndex((player) => player.id === winner.id);
     const winnerCard = this.playerObjects[winnerIndex];
     if (winnerCard) this.tweens.add({ targets: winnerCard, scale: { from: 1, to: 1.12 }, duration: 300, yoyo: true, repeat: 2, ease: 'Back.Out' });
-    if (!offlineMode) await syncGameState(null, 0, 'round_won');
-    this.markShooter();
-    if (!this.nextRoundTimer) {
-      this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
-        this.nextRoundTimer = undefined;
-        this.startCounting();
-      });
+    if (!offlineMode) {
+      try {
+        await syncGameStateWithRetry(null, 0, 'round_won');
+      } catch (error) {
+        console.error('[Peeranki Diagnostics] Could not persist round result; retrying without awarding it twice:', error);
+        this.statusText?.setText('Round result is ready. Reconnecting to sync it with everyone…');
+        this.uiManager.showToast('⚠️ Round result is waiting to sync. Retrying…', 'alert');
+        this.retryRoundWinSync();
+        return;
+      }
     }
+    this.markShooter();
+    this.scheduleNextRound();
+  }
+
+  private retryRoundWinSync() {
+    this.time.delayedCall(1_000, () => {
+      if (!this.isCurrentOnlineGame() || this.gameFinished || this.roundPhase !== 'waiting') return;
+      void syncGameStateWithRetry(null, 0, 'round_won').then(() => {
+        this.markShooter();
+        this.scheduleNextRound();
+      }).catch((error) => {
+        console.warn('[Peeranki Diagnostics] Round result is still waiting for Supabase:', error);
+        this.retryRoundWinSync();
+      });
+    });
+  }
+
+  private scheduleNextRound() {
+    if (this.nextRoundTimer || this.gameFinished) return;
+    this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
+      this.nextRoundTimer = undefined;
+      this.startCounting();
+    });
   }
 
   private async finishMatch() {
