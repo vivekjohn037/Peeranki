@@ -81,12 +81,30 @@ export class MultiplayerError extends Error {
 export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer request failed'): MultiplayerError {
   if (err instanceof MultiplayerError) return err;
 
-  const msg = err instanceof Error ? err.message : String(err || '');
-  const rawCode = String((err as any)?.code || '');
-  const details = String((err as any)?.details || '');
-  const hint = String((err as any)?.hint || '');
+  const errorObject = err && typeof err === 'object' ? err as Record<string, unknown> : undefined;
+  const asText = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (value instanceof Error) return value.message;
+    if (value === undefined || value === null) return '';
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  };
+  const msg = asText(errorObject?.message) || (err instanceof Error ? err.message : asText(err));
+  const rawCode = asText(errorObject?.code);
+  const details = asText(errorObject?.details);
+  const hint = asText(errorObject?.hint);
   const status = Number((err as any)?.status || 0);
   const searchStr = `${msg} ${details} ${hint} ${rawCode}`.toLowerCase();
+  const diagnosticDetails = [
+    msg,
+    details && `Details: ${details}`,
+    hint && `Hint: ${hint}`,
+    rawCode && `Code: ${rawCode}`,
+    status && `Status: ${status}`,
+  ].filter(Boolean).join('\n');
 
   // 1. Missing or invalid build-time configuration / API key
   if (
@@ -129,12 +147,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
   if (
     rawCode === 'PGRST202' ||
     searchStr.includes('could not find the function') ||
-    searchStr.includes('join_private_room') ||
-    searchStr.includes('find_or_create_public_room') ||
-    searchStr.includes('claim_room_host') ||
-    searchStr.includes('touch_player') ||
-    searchStr.includes('leave_room') ||
-    searchStr.includes('cleanup_stale_players')
+    searchStr.includes('schema cache') && searchStr.includes('function')
   ) {
     return new MultiplayerError(
       'RPC_MISSING',
@@ -144,18 +157,18 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     );
   }
 
-  // 4. Room not found / expired (PostgreSQL P0001, P0002)
+  // 4. Room not found. P0001 is PostgreSQL's generic raise_exception code,
+  // so classify by its actual message rather than by SQLSTATE alone.
   if (
-    rawCode === 'P0001' ||
-    rawCode === 'P0002' ||
     searchStr.includes('room does not exist') ||
     searchStr.includes('room not found') ||
-    searchStr.includes('could not find room')
+    searchStr.includes('could not find room') ||
+    searchStr.includes('room could not be found')
   ) {
     return new MultiplayerError(
       'ROOM_NOT_FOUND',
       'Room not found. Check the 6-character code or ask host for a new room.',
-      msg || details,
+      diagnosticDetails,
       err,
     );
   }
@@ -170,7 +183,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     return new MultiplayerError(
       'ROOM_FULL',
       'Room is full. Maximum players already joined.',
-      msg || details,
+      diagnosticDetails,
       err,
     );
   }
@@ -185,7 +198,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     return new MultiplayerError(
       'GAME_IN_PROGRESS',
       'This match has already started and cannot accept new players.',
-      msg || details,
+      diagnosticDetails,
       err,
     );
   }
@@ -220,12 +233,12 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     return new MultiplayerError(
       'NETWORK_ERROR',
       'Network connection failed. Could not reach Supabase servers.',
-      msg,
+      diagnosticDetails,
       err,
     );
   }
 
-  return new MultiplayerError('UNKNOWN_ERROR', defaultMessage, msg, err);
+  return new MultiplayerError('UNKNOWN_ERROR', defaultMessage, diagnosticDetails || defaultMessage, err);
 }
 
 let realClient: SupabaseClient | null = null;
@@ -1545,4 +1558,5 @@ export async function updatePlayerAvatar(
     notifyRoomListeners(cleanCode, mock, true);
   }
 }
+
 
