@@ -17,7 +17,12 @@ ALTER TABLE public.game_states
         'finished'
     ));
 
-CREATE OR REPLACE FUNCTION public.leave_room(
+-- Earlier deployed versions returned JSONB, while migration 001 declares the
+-- game_states composite return type. PostgreSQL cannot change a function's
+-- return type with CREATE OR REPLACE, so replace the RPC explicitly.
+DROP FUNCTION IF EXISTS public.leave_room(TEXT, TEXT);
+
+CREATE FUNCTION public.leave_room(
     p_room_code TEXT,
     p_session_id TEXT
 )
