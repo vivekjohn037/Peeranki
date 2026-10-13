@@ -157,8 +157,8 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     );
   }
 
-  // 4. Room not found. P0001 is PostgreSQL's generic raise_exception code,
-  // so classify by its actual message rather than by SQLSTATE alone.
+  // 4. P0001 is PostgreSQL's generic raise_exception code, so classify a missing
+  // room by its message rather than by SQLSTATE alone.
   if (
     searchStr.includes('room does not exist') ||
     searchStr.includes('room not found') ||
@@ -1558,5 +1558,4 @@ export async function updatePlayerAvatar(
     notifyRoomListeners(cleanCode, mock, true);
   }
 }
-
 
