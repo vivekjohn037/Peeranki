@@ -21,6 +21,7 @@ import {
   findOrCreateRandomRoom,
   getGameState,
   saveGameState,
+  requestPlayerAction,
   touchPlayer,
   leaveRoom,
   subscribeToGameState,
@@ -346,6 +347,16 @@ test('5. SUPABASE MULTIPLAYER ROOM LIFECYCLE', async (t) => {
     assert.equal(reloaded.current_shooter, 1);
   });
 
+  await t.test('online shot requests update only the active shooter entry', async () => {
+    const room = await getGameState(roomCode);
+    const players = room.players.map((player) => ({ ...player, action_request: null }));
+    await saveGameState(roomCode, players, room.max_players, 0, 10, 'shooting');
+    await requestPlayerAction(roomCode, sessionIdHost, { shooterId: 1, weapon: 'gun', targetIds: [2], nonce: 'atomic-shot-test' });
+    const updated = await getGameState(roomCode);
+    assert.equal(updated.players[0].action_request.nonce, 'atomic-shot-test');
+    assert.equal(updated.players[1].action_request, null);
+  });
+
   await t.test('saveGameState persists counting_start_timestamp and clients calculate count locally', async () => {
     const testTimestamp = new Date(Date.now() - 650).toISOString();
     const state = await getGameState(roomCode);
@@ -446,6 +457,14 @@ test('6a. Cross-client room updates accept player changes despite local sequence
     false,
     'the Postgres Changes echo of the same durable broadcast must not replay hit feedback',
   );
+});
+
+test('6a2. Action timeout is a distinct forward room transition', () => {
+  const roomCode = `TIMEOUT${Date.now()}`;
+  const players = [{ id: 1, session_id: 'timeout-host', stage: 0, alive: true, connected: true }];
+  assert.equal(shouldAcceptRoomState(roomCode, { game_status: 'shooting', current_shooter: 0, countdown: 10, counting_start_timestamp: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:10.000Z', players }), true);
+  assert.equal(shouldAcceptRoomState(roomCode, { game_status: 'action_timeout', current_shooter: 0, countdown: 10, counting_start_timestamp: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:13.000Z', players }), true);
+  assert.equal(shouldAcceptRoomState(roomCode, { game_status: 'shooting', current_shooter: 0, countdown: 10, counting_start_timestamp: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:12.000Z', players }), false);
 });
 
 test('6b. Leaving a live 3-player room finishes the shared match only for that size', async (t) => {
