@@ -439,6 +439,7 @@ test('6a. Cross-client room updates accept player changes despite local sequence
     ...after,
     host_session_id: 'authoritative-host',
     created_at: '2026-01-01T00:00:00.000Z',
+    players: [Object.fromEntries(Object.entries(after.players[0]).reverse())],
   };
   assert.equal(
     shouldAcceptRoomState(roomCode, postgresEcho),
