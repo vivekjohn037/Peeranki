@@ -4364,11 +4364,9 @@ if (offlineMode) {
       this.currentShooter = -1;
     }
 
-    const remoteCount = Number(
-      gameState.countdown,
-    );
+    const remoteCount = Number(gameState.countdown);
 
-    if (Number.isFinite(remoteCount) && gameState.game_status !== 'counting') {
+    if (Number.isFinite(remoteCount)) {
       this.countNumber = remoteCount;
     }
 
@@ -4456,7 +4454,6 @@ if (offlineMode) {
 
       if (!this.countingTimer) {
         this.countingPhaseEnteredAt = Date.now();
-        this.countNumber = 0;
         this.startLocalCountingLoop();
       } else {
         this.updateLocalCountingProgress();
@@ -4840,7 +4837,11 @@ if (offlineMode) {
       }
     }
 
-    const calculated = this.getCalculatedCount();
+    // The host owns the online count. Clients use its Realtime ticks so players with
+    // different device clocks cannot select different shooters.
+    const calculated = !offlineMode && !amHost()
+      ? this.countNumber
+      : this.getCalculatedCount();
     if (calculated !== this.countNumber) {
       this.countNumber = calculated;
       const countedIndex = getCountedPlayerIndex(players, this.startIndex >= 0 ? this.startIndex : 0, this.countNumber);
@@ -4857,9 +4858,28 @@ if (offlineMode) {
         }
       }
       this.markShooter();
+      if (!offlineMode && amHost() && this.countNumber < COUNT_TO) {
+        void broadcastRoomStateDelta(roomCode, {
+          game_status: 'counting',
+          current_shooter: this.currentShooter >= 0 ? this.currentShooter : null,
+          countdown: this.countNumber,
+          counting_start_timestamp: countingStartTimestamp,
+          counting_start_index: this.startIndex,
+        });
+      }
     } else if (this.countNumber === 0 && this.startIndex >= 0 && players[this.startIndex]) {
       this.countText?.setText('Count 0 / 10');
       this.statusText?.setText(`🎲 Starting at ${players[this.startIndex].name}...`);
+    }
+
+    if (!offlineMode && !amHost() && this.countNumber > 0 && this.countNumber < COUNT_TO) {
+      const countedIndex = getCountedPlayerIndex(players, this.startIndex >= 0 ? this.startIndex : 0, this.countNumber);
+      if (countedIndex >= 0) {
+        this.currentShooter = countedIndex;
+        this.countText?.setText(`Count ${this.countNumber} / ${COUNT_TO}`);
+        this.statusText?.setText(`${this.countNumber}. ${players[countedIndex]?.name ?? 'Player'}`);
+        this.markShooter();
+      }
     }
 
     if (this.countNumber >= COUNT_TO) {
