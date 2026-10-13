@@ -44,9 +44,11 @@ import {
   leaveRoomBestEffort,
   touchPlayer,
   cleanupStalePlayers,
+  claimHost,
   getStoredServerRegion,
   setStoredServerRegion,
   supabase,
+  broadcastRoomStateDelta,
 } from './supabase';
 import { showMultiplayerErrorModal } from './ui/multiplayerModal';
 
@@ -334,6 +336,54 @@ async function cleanupPreviousSession() {
   sessionStorage.removeItem('peeranki-room-public');
 }
 
+function resetMatchLifecycleState(targetMode: 'offline' | 'online' | 'none') {
+  console.log(`[Peeranki Diagnostics] Resetting match lifecycle state for mode: ${targetMode}`);
+
+  stopRoomHeartbeat();
+  processedOnlineActionNonces.clear();
+
+  matchRound = 1;
+  duelRound = 1;
+  lastRoundMessage = '';
+  roundWinnerId = 0;
+  matchOver = false;
+  countingStartIndex = -1;
+  countingStartTimestamp = '';
+  shootingDeadlineAt = '';
+  if (targetMode !== 'online' || !matchStartedAt) {
+    matchStartedAt = '';
+  }
+
+  if (targetMode === 'offline') {
+    offlineMode = true;
+    if (roomCode) {
+      const oldCode = roomCode;
+      roomCode = '';
+      void leaveRoom(oldCode, sessionId).catch(() => undefined);
+    }
+    forgetRoom();
+    myPlayerId = 1;
+    hostSessionId = 'offline-human';
+    players = [];
+  } else if (targetMode === 'online') {
+    offlineMode = false;
+    offlinePlayers = [];
+  } else {
+    // 'none'
+    offlineMode = false;
+    offlinePlayers = [];
+    if (roomCode) {
+      const oldCode = roomCode;
+      roomCode = '';
+      void leaveRoom(oldCode, sessionId).catch(() => undefined);
+    }
+    forgetRoom();
+    myPlayerId = 0;
+    hostSessionId = '';
+    players = [];
+  }
+}
+
 function rememberRoom(code: string, publicRoom: boolean) {
   sessionStorage.setItem('peeranki-room-code', code);
   sessionStorage.setItem(
@@ -500,6 +550,10 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
   if (timestampHolder?.countingStartTimestamp) {
     countingStartTimestamp = timestampHolder.countingStartTimestamp;
   }
+  const startIndexHolder = players.find((player) => typeof player.countingStartIndex === 'number' && player.countingStartIndex >= 0);
+  if (startIndexHolder && typeof startIndexHolder.countingStartIndex === 'number' && startIndexHolder.countingStartIndex >= 0) {
+    countingStartIndex = startIndexHolder.countingStartIndex;
+  }
   findMyPlayerId();
 }
 
@@ -519,9 +573,19 @@ async function syncGameState(
   currentShooter: number | null,
   countNumber: number,
   gameStatus: string,
+  explicitCountingTimestamp?: string | null,
 ) {
   if (!roomCode || players.length === 0) {
     return;
+  }
+
+  const effectiveTimestamp =
+    explicitCountingTimestamp !== undefined
+      ? explicitCountingTimestamp
+      : countingStartTimestamp || null;
+
+  if (effectiveTimestamp) {
+    countingStartTimestamp = effectiveTimestamp;
   }
 
   const connected = players
@@ -560,7 +624,7 @@ async function syncGameState(
     currentShooter,
     countNumber,
     gameStatus,
-    countingStartTimestamp || null,
+    effectiveTimestamp,
   );
 }
 
@@ -821,6 +885,7 @@ class MenuScene extends Phaser.Scene {
   }
 
   create() {
+    resetMatchLifecycleState('none');
     removePeerankiInputs();
     PeerankiAudio.startMusic();
 
@@ -1482,6 +1547,7 @@ class OfflineSetupScene extends Phaser.Scene {
 
   create() {
     removePeerankiInputs();
+    resetMatchLifecycleState('offline');
 
     const { width, height } = this.scale;
     const isLandscape = width >= 640 && width > height * 1.12;
@@ -1603,14 +1669,17 @@ class OfflineSetupScene extends Phaser.Scene {
       startButton.on('pointerdown', () => {
         const playerName = nameInput.value.trim() || getStoredPlayerName();
         setStoredPlayerName(playerName);
-        offlineMode = true;
+        resetMatchLifecycleState('offline');
         offlineMaxPlayers = this.selectedPlayers;
         offlinePlayers = createOfflinePlayers(playerName, offlineMaxPlayers);
+        players = [...offlinePlayers];
+        maxPlayers = offlineMaxPlayers;
         nameInput.remove();
         this.scene.start('GameScene', { offline: true });
       });
 
       backButton.on('pointerdown', () => {
+        resetMatchLifecycleState('none');
         nameInput.remove();
         this.scene.start('MenuScene');
       });
@@ -1735,14 +1804,17 @@ class OfflineSetupScene extends Phaser.Scene {
       startButton.on('pointerdown', () => {
         const playerName = nameInput.value.trim() || getStoredPlayerName();
         setStoredPlayerName(playerName);
-        offlineMode = true;
+        resetMatchLifecycleState('offline');
         offlineMaxPlayers = this.selectedPlayers;
         offlinePlayers = createOfflinePlayers(playerName, offlineMaxPlayers);
+        players = [...offlinePlayers];
+        maxPlayers = offlineMaxPlayers;
         nameInput.remove();
         this.scene.start('GameScene', { offline: true });
       });
 
       backButton.on('pointerdown', () => {
+        resetMatchLifecycleState('none');
         nameInput.remove();
         this.scene.start('MenuScene');
       });
@@ -1839,7 +1911,10 @@ class OnlineModeScene extends Phaser.Scene {
 
       friendsButton.on('pointerdown', () => this.scene.start('FriendsScene'));
       randomButton.on('pointerdown', () => this.scene.start('PlayerCountScene', { mode: 'random' }));
-      backButton.on('pointerdown', () => this.scene.start('MenuScene'));
+      backButton.on('pointerdown', () => {
+        resetMatchLifecycleState('none');
+        this.scene.start('MenuScene');
+      });
 
     } else {
       // Portrait / Compact Layout: Sequential vertical spacing
@@ -1902,7 +1977,10 @@ class OnlineModeScene extends Phaser.Scene {
 
       friendsButton.on('pointerdown', () => this.scene.start('FriendsScene'));
       randomButton.on('pointerdown', () => this.scene.start('PlayerCountScene', { mode: 'random' }));
-      backButton.on('pointerdown', () => this.scene.start('MenuScene'));
+      backButton.on('pointerdown', () => {
+        resetMatchLifecycleState('none');
+        this.scene.start('MenuScene');
+      });
     }
   }
 }
@@ -2315,6 +2393,7 @@ class PlayerCountScene extends Phaser.Scene {
       );
 
       await previousRoomCleanup;
+      resetMatchLifecycleState('online');
 
       if (this.mode === 'private') {
         try {
@@ -2421,6 +2500,7 @@ class PlayerCountScene extends Phaser.Scene {
     });
 
     backButton.on('pointerdown', () => {
+      resetMatchLifecycleState('none');
       removePeerankiInputs();
       this.scene.start(
         this.mode === 'private'
@@ -2623,6 +2703,7 @@ class JoinScene extends Phaser.Scene {
       joinButton.setText('JOINING...');
 
       await previousRoomCleanup;
+      resetMatchLifecycleState('online');
 
       try {
         const result = await joinRoom(
@@ -2679,6 +2760,7 @@ class JoinScene extends Phaser.Scene {
     });
 
     backButton.on('pointerdown', () => {
+      resetMatchLifecycleState('none');
       removePeerankiInputs();
       this.scene.start('FriendsScene');
     });
@@ -2841,6 +2923,7 @@ class LobbyScene extends Phaser.Scene {
         this.leaveButton?.disableInteractive();
         this.statusText?.setText('Leaving room...');
         await leaveCurrentRoom();
+        resetMatchLifecycleState('none');
         this.scene.start('OnlineModeScene');
       });
 
@@ -2975,6 +3058,7 @@ class LobbyScene extends Phaser.Scene {
         this.leaveButton?.disableInteractive();
         this.statusText?.setText('Leaving room...');
         await leaveCurrentRoom();
+        resetMatchLifecycleState('none');
         this.scene.start('OnlineModeScene');
       });
     }
@@ -3025,7 +3109,12 @@ class LobbyScene extends Phaser.Scene {
       this.updateLobbyText();
     }
 
-    if (gameState.game_status === 'playing') {
+    if (
+      gameState.game_status === 'playing' ||
+      gameState.game_status === 'counting' ||
+      gameState.game_status === 'shooting' ||
+      gameState.game_status === 'duel'
+    ) {
       this.openGame();
     }
   }
@@ -3201,7 +3290,8 @@ class LobbyScene extends Phaser.Scene {
     this.starting = true;
     this.refreshTimer?.remove(false);
 
-    this.scene.start('GameScene');
+    resetMatchLifecycleState('online');
+    this.scene.start('GameScene', { offline: false });
   }
 
   shutdown() {
@@ -3257,9 +3347,33 @@ private nextStartIndex = -1;
   private pingTimer?: Phaser.Time.TimerEvent;
   private lastAnnouncedRoundMessage = '';
   private lastAnnouncedDuelRound = 1;
+  private countingPhaseEnteredAt = 0;
+  private playingPhaseWatchdogTimer?: Phaser.Time.TimerEvent;
 
   constructor() {
     super('GameScene');
+  }
+
+  init(data?: { offline?: boolean }) {
+    if (data?.offline !== undefined) {
+      offlineMode = Boolean(data.offline);
+    }
+    this.initialized = false;
+    this.gameFinished = false;
+    this.victoryPlayed = false;
+    this.duelActive = false;
+    this.resolvingDuel = false;
+    this.processingDuelChoices = false;
+    this.roundPhase = 'waiting';
+    this.currentShooter = -1;
+    this.startIndex = -1;
+    this.countNumber = 0;
+    this.nextStartIndex = -1;
+    this.pendingDoubleTarget = -1;
+    this.selectedWeapon = 'gun';
+    this.playerObjects = [];
+    this.countingPhaseEnteredAt = 0;
+    console.log(`[Peeranki Diagnostics] GameScene.init: offlineMode=${offlineMode}, roomCode=${roomCode}, amHost=${amHost()}`);
   }
 
   preload() {
@@ -3325,21 +3439,30 @@ private nextStartIndex = -1;
         this.scheduleUiSync();
       },
       onLeaveGame: async () => {
-        this.uiManager.unmount();
-        canvas.style.opacity = '1';
-        canvas.style.pointerEvents = 'auto';
+        this.leaveButton?.disableInteractive();
+        this.statusText?.setText('Leaving game...');
+        this.shutdown();
         if (offlineMode) {
+          resetMatchLifecycleState('none');
           this.scene.start('OfflineSetupScene');
         } else {
           await leaveCurrentRoom();
+          resetMatchLifecycleState('none');
           this.scene.start('OnlineModeScene');
         }
       },
       onPlayAgain: () => {
-        this.uiManager.unmount();
-        canvas.style.opacity = '1';
-        canvas.style.pointerEvents = 'auto';
-        this.scene.restart();
+        this.shutdown();
+        if (offlineMode) {
+          resetMatchLifecycleState('offline');
+          offlinePlayers = createOfflinePlayers(getStoredPlayerName(), offlineMaxPlayers);
+          players = [...offlinePlayers];
+          this.scene.restart({ offline: true });
+        } else {
+          void leaveCurrentRoom();
+          resetMatchLifecycleState('none');
+          this.scene.start('OnlineModeScene');
+        }
       },
       onToggleAudio: () => {
         const isMuted = PeerankiAudio.toggleMute();
@@ -3348,10 +3471,8 @@ private nextStartIndex = -1;
       },
     });
 
-    this.events.once('shutdown', () => {
-      this.uiManager.unmount();
-      canvas.style.opacity = '1';
-      canvas.style.pointerEvents = 'auto';
+    this.events.on('shutdown', () => {
+      this.shutdown();
     });
     const { width, height } = this.scale;
         const background = this.add
@@ -3468,10 +3589,13 @@ if (offlineMode) {
       async () => {
         this.leaveButton?.disableInteractive();
         this.statusText?.setText('Leaving game...');
+        this.shutdown();
         if (offlineMode) {
+          resetMatchLifecycleState('none');
           this.scene.start('OfflineSetupScene');
         } else {
           await leaveCurrentRoom();
+          resetMatchLifecycleState('none');
           this.scene.start('OnlineModeScene');
         }
       },
@@ -3719,6 +3843,23 @@ if (offlineMode) {
       amHost()
     ) {
       this.startCounting();
+    } else if (room.game_status === 'playing' && !amHost()) {
+      // Non-host watchdog: if host does not advance to counting within 2.5 seconds, recover host authority
+      this.playingPhaseWatchdogTimer?.remove(false);
+      this.playingPhaseWatchdogTimer = this.time.delayedCall(2500, async () => {
+        if (this.gameFinished || offlineMode || this.roundPhase !== 'waiting') return;
+        const currentHost = players.find((p) => p.sessionId === hostSessionId);
+        if (!currentHost || !currentHost.connected) {
+          const candidates = players.filter((p) => p.connected && p.alive && p.sessionId);
+          candidates.sort((a, b) => a.id - b.id);
+          if (candidates.length > 0 && candidates[0].sessionId === sessionId) {
+            console.warn('[Peeranki Diagnostics] Host unresponsive in playing status. Claiming host authority.');
+            hostSessionId = sessionId;
+            await claimHost(roomCode, sessionId);
+            this.startCounting();
+          }
+        }
+      });
     }
   }
 
@@ -4215,6 +4356,12 @@ if (offlineMode) {
 
     if (amHost()) void this.processPendingAction();
 
+    if (gameState.game_status === 'playing' && amHost() && this.roundPhase === 'waiting' && !this.countingTimer) {
+      console.log('[Peeranki Diagnostics] Authoritative host transitioning room from playing to counting.');
+      this.startCounting();
+      return;
+    }
+
     if (gameState.game_status === 'counting') {
       this.stopActionClock();
       this.roundPhase = 'counting';
@@ -4222,8 +4369,19 @@ if (offlineMode) {
       if (gameState.counting_start_timestamp) {
         countingStartTimestamp = String(gameState.counting_start_timestamp);
       }
-      if (countingStartIndex >= 0) {
+      if (typeof gameState.counting_start_index === 'number' && gameState.counting_start_index >= 0) {
+        countingStartIndex = gameState.counting_start_index;
+        this.startIndex = gameState.counting_start_index;
+      } else if (countingStartIndex >= 0) {
         this.startIndex = countingStartIndex;
+      }
+
+      if (this.startIndex < 0) {
+        const aliveIndexes = activePlayers().map((p) => p.id - 1);
+        if (aliveIndexes.length > 0) {
+          this.startIndex = aliveIndexes[0];
+          countingStartIndex = this.startIndex;
+        }
       }
 
       this.shooterText?.setText(
@@ -4233,6 +4391,7 @@ if (offlineMode) {
       );
 
       if (!this.countingTimer) {
+        this.countingPhaseEnteredAt = Date.now();
         this.countNumber = 0;
         this.startLocalCountingLoop();
       } else {
@@ -4549,14 +4708,76 @@ if (offlineMode) {
       return;
     }
 
+    const now = Date.now();
+    if (!this.countingPhaseEnteredAt) {
+      this.countingPhaseEnteredAt = now;
+    }
+
     if (this.startIndex < 0 && countingStartIndex >= 0) {
       this.startIndex = countingStartIndex;
+    }
+
+    // Host self-healing: If host is in counting phase but count hasn't started or timestamp is missing
+    if (amHost() && !offlineMode) {
+      if (!countingStartTimestamp || (this.countNumber === 0 && (now - this.countingPhaseEnteredAt) > 1500)) {
+        console.warn('[Peeranki Diagnostics] Host detected missing or stalled counting start timestamp. Re-initializing count.');
+        countingStartTimestamp = new Date().toISOString();
+        this.countingPhaseEnteredAt = now;
+        if (this.startIndex < 0) {
+          const aliveIndexes = activePlayers().map((p) => p.id - 1);
+          this.startIndex = aliveIndexes[0] ?? 0;
+          countingStartIndex = this.startIndex;
+        }
+        void syncGameState(null, 0, 'counting', countingStartTimestamp);
+        void broadcastRoomStateDelta(roomCode, {
+          game_status: 'counting',
+          current_shooter: null,
+          countdown: 0,
+          counting_start_timestamp: countingStartTimestamp,
+          counting_start_index: this.startIndex,
+        });
+      }
+    }
+
+    // Non-host watchdog: Detect stalled, missing, or disconnected host during counting phase
+    if (!amHost() && !offlineMode) {
+      const currentHost = players.find((p) => p.sessionId === hostSessionId);
+      const startMs = countingStartTimestamp ? Date.parse(countingStartTimestamp) : 0;
+      const elapsedSinceStart = Number.isFinite(startMs) && startMs > 0 ? (now - startMs) : (now - this.countingPhaseEnteredAt);
+      const hostMissing = !currentHost || !currentHost.connected;
+      const hostStalled = hostMissing || (elapsedSinceStart > (COUNT_TO * COUNTING_SPEED + 3000)) || (!countingStartTimestamp && (now - this.countingPhaseEnteredAt) > 2500);
+
+      if (hostStalled) {
+        const candidates = players.filter((p) => p.connected && p.alive && p.sessionId && p.sessionId !== hostSessionId);
+        candidates.sort((a, b) => a.id - b.id);
+        if (candidates.length > 0 && candidates[0].sessionId === sessionId) {
+          console.warn('[Peeranki Diagnostics] Host stalled or disconnected during counting phase. Claiming host authority.');
+          hostSessionId = sessionId;
+          void claimHost(roomCode, sessionId);
+
+          countingStartTimestamp = new Date().toISOString();
+          this.countingPhaseEnteredAt = now;
+          if (this.startIndex < 0) {
+            const aliveIndexes = activePlayers().map((p) => p.id - 1);
+            this.startIndex = aliveIndexes[0] ?? 0;
+            countingStartIndex = this.startIndex;
+          }
+          void syncGameState(null, 0, 'counting', countingStartTimestamp);
+          void broadcastRoomStateDelta(roomCode, {
+            game_status: 'counting',
+            current_shooter: null,
+            countdown: 0,
+            counting_start_timestamp: countingStartTimestamp,
+            counting_start_index: this.startIndex,
+          });
+        }
+      }
     }
 
     const calculated = this.getCalculatedCount();
     if (calculated !== this.countNumber) {
       this.countNumber = calculated;
-      const countedIndex = getCountedPlayerIndex(players, this.startIndex, this.countNumber);
+      const countedIndex = getCountedPlayerIndex(players, this.startIndex >= 0 ? this.startIndex : 0, this.countNumber);
       if (countedIndex >= 0) {
         this.currentShooter = countedIndex;
         this.countText?.setText(`Count ${this.countNumber} / 10`);
@@ -4570,29 +4791,18 @@ if (offlineMode) {
         }
       }
       this.markShooter();
+    } else if (this.countNumber === 0 && this.startIndex >= 0 && players[this.startIndex]) {
+      this.countText?.setText('Count 0 / 10');
+      this.statusText?.setText(`🎲 Starting at ${players[this.startIndex].name}...`);
     }
 
     if (this.countNumber >= COUNT_TO) {
       this.countingTimer?.remove(false);
       this.countingTimer = undefined;
 
-      // Check host health for failover recovery if original host stalled or disconnected
-      if (!amHost() && !offlineMode) {
-        const currentHost = players.find((p) => p.sessionId === hostSessionId);
-        const startMs = Date.parse(countingStartTimestamp);
-        const elapsedSinceStart = Number.isFinite(startMs) ? Date.now() - startMs : 0;
-        const hostStalled = (!currentHost || !currentHost.connected) || elapsedSinceStart > (COUNT_TO * COUNTING_SPEED + 4000);
-        if (hostStalled) {
-          const connectedLiving = players.filter((p) => p.connected && p.sessionId);
-          if (connectedLiving.length > 0 && connectedLiving[0].sessionId === sessionId) {
-            console.warn('[Peeranki] Host stalled or disconnected during counting. Claiming host authority.');
-            hostSessionId = sessionId;
-          }
-        }
-      }
+      const finalShooterIndex = getCountedPlayerIndex(players, this.startIndex >= 0 ? this.startIndex : 0, COUNT_TO);
 
       if (offlineMode || amHost()) {
-        const finalShooterIndex = getCountedPlayerIndex(players, this.startIndex, COUNT_TO);
         if (finalShooterIndex >= 0) {
           this.roundPhase = 'shooting';
           this.currentShooter = finalShooterIndex;
@@ -4609,6 +4819,11 @@ if (offlineMode) {
               COUNT_TO,
               'shooting',
             );
+            void broadcastRoomStateDelta(roomCode, {
+              game_status: 'shooting',
+              current_shooter: finalShooterIndex,
+              countdown: COUNT_TO,
+            });
           }
 
           if (offlineMode && players[finalShooterIndex].id !== 1) {
@@ -4620,12 +4835,36 @@ if (offlineMode) {
           }
         }
       } else {
-        const finalShooterIndex = getCountedPlayerIndex(players, this.startIndex, COUNT_TO);
         if (finalShooterIndex >= 0) {
           this.currentShooter = finalShooterIndex;
           this.markShooter();
         }
         this.statusText?.setText('10. Selecting shooter...');
+
+        // Non-host failover watchdog: If host fails to transition to shooting within 2000ms after count reaches 10
+        this.time.delayedCall(2000, () => {
+          if (this.roundPhase === 'counting' && !this.gameFinished && !offlineMode) {
+            const candidates = players.filter((p) => p.connected && p.alive && p.sessionId && p.sessionId !== hostSessionId);
+            candidates.sort((a, b) => a.id - b.id);
+            if (candidates.length > 0 && candidates[0].sessionId === sessionId) {
+              console.warn('[Peeranki Diagnostics] Host failed to advance room to shooting. Recovering host.');
+              hostSessionId = sessionId;
+              void claimHost(roomCode, sessionId);
+              if (finalShooterIndex >= 0) {
+                this.roundPhase = 'shooting';
+                this.currentShooter = finalShooterIndex;
+                shootingDeadlineAt = new Date(Date.now() + ACTION_LIMIT_MS).toISOString();
+                this.startActionClock();
+                void syncGameState(finalShooterIndex, COUNT_TO, 'shooting');
+                void broadcastRoomStateDelta(roomCode, {
+                  game_status: 'shooting',
+                  current_shooter: finalShooterIndex,
+                  countdown: COUNT_TO,
+                });
+              }
+            }
+          }
+        });
       }
     }
   }
@@ -4668,6 +4907,7 @@ if (offlineMode) {
 
     countingStartIndex = this.startIndex;
     countingStartTimestamp = new Date().toISOString();
+    this.countingPhaseEnteredAt = Date.now();
     players.forEach((player) => {
       player.countingStartIndex = countingStartIndex;
       player.countingStartTimestamp = countingStartTimestamp;
@@ -4679,6 +4919,8 @@ if (offlineMode) {
     this.roundPhase = 'counting';
     this.countNumber = 0;
 
+    console.log(`[Peeranki Diagnostics] startCounting: startIndex=${this.startIndex}, startTimestamp=${countingStartTimestamp}, roomCode=${roomCode}`);
+
     this.shooterText?.setText(`🎲 Start: ${players[this.startIndex].name}`);
     this.statusText?.setText(`Counting ${COUNT_TO} towers...`);
     this.countText?.setText(`Count 0 / ${COUNT_TO}`);
@@ -4689,6 +4931,13 @@ if (offlineMode) {
         0,
         'counting',
       );
+      void broadcastRoomStateDelta(roomCode, {
+        game_status: 'counting',
+        current_shooter: null,
+        countdown: 0,
+        counting_start_timestamp: countingStartTimestamp,
+        counting_start_index: countingStartIndex,
+      });
     }
 
     this.startLocalCountingLoop();
@@ -5520,11 +5769,13 @@ void this.recordShot();
       this.shutdown();
 
       if (offlineMode) {
+        resetMatchLifecycleState('offline');
         this.scene.start(
           'OfflineSetupScene',
         );
       } else {
         void leaveCurrentRoom();
+        resetMatchLifecycleState('none');
         this.scene.start(
           'OnlineModeScene',
         );
@@ -5540,12 +5791,10 @@ void this.recordShot();
     () => {
       this.shutdown();
 
-      if (offlineMode) {
-        offlineMode = false;
-        players = [];
-      } else {
+      if (!offlineMode) {
         void leaveCurrentRoom();
       }
+      resetMatchLifecycleState('none');
 
       this.scene.start(
         'MenuScene',
@@ -5563,6 +5812,8 @@ void this.recordShot();
     this.stopActionClock();
     this.duelBotTimer?.remove(false);
     this.duelBotTimer = undefined;
+    this.playingPhaseWatchdogTimer?.remove(false);
+    this.playingPhaseWatchdogTimer = undefined;
     this.clearDuelControls();
 
     if (this.uiSyncRafId !== null) {
@@ -5587,6 +5838,10 @@ void this.recordShot();
       this.game.canvas.style.opacity = '1';
       this.game.canvas.style.pointerEvents = 'auto';
     }
+
+    this.playerObjects.forEach((container) => container.destroy());
+    this.playerObjects = [];
+    this.initialized = false;
   }
 }
 

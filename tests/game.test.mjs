@@ -28,6 +28,7 @@ import {
   parseSupabaseError,
   MultiplayerError,
   isServiceRoleKey,
+  claimHost,
 } from '../src/supabase.ts';
 
 test('1. WEAPON DEFINITIONS & SEQUENCING', async (t) => {
@@ -475,7 +476,141 @@ test('7. MULTIPLAYER ERROR PARSING & RECOVERY', async (t) => {
   });
 });
 
-test('8. CLEANUP REALTIME CONNECTIONS', async () => {
+test('8. MULTIPLAYER 3-PLAYER FULL FLOW & COUNTDOWN SYNC', async () => {
+  const sessionIdHost = 'flow-host';
+  const sessionIdGuest1 = 'flow-guest1';
+  const sessionIdGuest2 = 'flow-guest2';
+
+  // 1. Host creates 3-player private room
+  const created = await createPrivateRoom(3, sessionIdHost, 'HostAlpha');
+  const code = created.room_code;
+  assert.equal(created.max_players, 3);
+  assert.equal(created.host_session_id, sessionIdHost);
+
+  // 2. Guest 1 and Guest 2 join
+  const joined1 = await joinRoom(code, 'GuestBravo', sessionIdGuest1);
+  assert.equal(joined1.players.filter((p) => p.connected).length, 2);
+
+  const joined2 = await joinRoom(code, 'GuestCharlie', sessionIdGuest2);
+  const connected = joined2.players.filter((p) => p.connected);
+  assert.equal(connected.length, 3);
+
+  // 3. Counting phase starts with timestamp & startIndex
+  const testTimestamp = new Date().toISOString();
+  const startIndex = 0;
+  const countingPlayers = connected.map((p) => ({
+    ...p,
+    counting_start_index: startIndex,
+    counting_start_timestamp: testTimestamp,
+  }));
+
+  await saveGameState(code, countingPlayers, 3, null, 0, 'counting', testTimestamp);
+  const countingState = await getGameState(code);
+  assert.equal(countingState.game_status, 'counting');
+  assert.equal(countingState.counting_start_timestamp, testTimestamp);
+
+  // 4. Verify all 3 clients derive consistent count progression locally
+  const COUNTING_SPEED = 200;
+  const COUNT_TO = 10;
+  const calcCount = (timestamp, nowMs) => {
+    const elapsed = Math.max(0, nowMs - Date.parse(timestamp));
+    return Math.min(COUNT_TO, Math.floor(elapsed / COUNTING_SPEED));
+  };
+
+  const startMs = Date.parse(testTimestamp);
+  assert.equal(calcCount(testTimestamp, startMs), 0);
+  assert.equal(calcCount(testTimestamp, startMs + 1000), 5);
+  assert.equal(calcCount(testTimestamp, startMs + 2000), 10);
+
+  // Count reaches 10 and selects shooter
+  const finalShooterIndex = getCountedPlayerIndex(countingState.players, startIndex, 10);
+  assert.equal(finalShooterIndex >= 0 && finalShooterIndex < 3, true);
+
+  // 5. Host transitions room to shooting with 10s deadline
+  const actionDeadline = new Date(Date.now() + 10_000).toISOString();
+  const shootingPlayers = countingPlayers.map((p) => ({
+    ...p,
+    shooting_deadline_at: actionDeadline,
+  }));
+  await saveGameState(code, shootingPlayers, 3, finalShooterIndex, 10, 'shooting');
+
+  const shootingState = await getGameState(code);
+  assert.equal(shootingState.game_status, 'shooting');
+  assert.equal(shootingState.current_shooter, finalShooterIndex);
+  assert.equal(shootingState.countdown, 10);
+
+  // Clean up
+  await leaveRoom(code, sessionIdHost);
+  await leaveRoom(code, sessionIdGuest1);
+  await leaveRoom(code, sessionIdGuest2);
+});
+
+test('9. HOST FAILURE & MIGRATION DURING COUNTING', async () => {
+  const sessionIdHost = 'fail-host';
+  const sessionIdGuest1 = 'fail-guest1';
+  const sessionIdGuest2 = 'fail-guest2';
+
+  const room = await createPrivateRoom(3, sessionIdHost, 'OriginalHost');
+  const code = room.room_code;
+  await joinRoom(code, 'Candidate1', sessionIdGuest1);
+  await joinRoom(code, 'Candidate2', sessionIdGuest2);
+
+  // Original host disconnects during match
+  await leaveRoom(code, sessionIdHost);
+
+  const roomAfterDisconnect = await getGameState(code);
+  const hostPlayer = roomAfterDisconnect.players.find((p) => p.session_id === sessionIdHost);
+  assert.equal(hostPlayer === undefined || hostPlayer.connected === false, true);
+
+  // Eligible living candidates excluding the failed host
+  const candidates = roomAfterDisconnect.players.filter(
+    (p) => p.connected && p.alive && p.session_id && p.session_id !== sessionIdHost
+  );
+  candidates.sort((a, b) => a.id - b.id);
+  assert.equal(candidates.length, 2);
+  const newHostCandidate = candidates[0];
+  assert.equal(newHostCandidate.session_id, sessionIdGuest1);
+
+  // Candidate claims host
+  await claimHost(code, newHostCandidate.session_id);
+  const migratedRoom = await getGameState(code);
+  assert.equal(migratedRoom.host_session_id, sessionIdGuest1);
+
+  // Clean up
+  await leaveRoom(code, sessionIdGuest1);
+  await leaveRoom(code, sessionIdGuest2);
+});
+
+test('10. OFFLINE BOT GAME STATE ISOLATION & LEGAL ACTIONS', async () => {
+  for (const playerCount of [3, 5, 8, 10]) {
+    const offlinePlayers = Array.from({ length: playerCount }, (_, i) => ({
+      id: i + 1,
+      name: i === 0 ? 'Human' : `Bot ${i}`,
+      stage: 0,
+      alive: true,
+      weapons: ['gun'],
+      hasCollectedAllWeapons: false,
+      eliminationPoints: 0,
+      shieldDisabledRound: -1,
+      connected: true,
+    }));
+
+    for (let botIndex = 1; botIndex < playerCount; botIndex++) {
+      const action = chooseBotAction(offlinePlayers, botIndex);
+      assert.ok(action, `Bot ${botIndex} in ${playerCount}-player game must choose an action`);
+      assert.equal(action.shooterId, botIndex + 1);
+      assert.equal(action.weapon, 'gun');
+      assert.notEqual(action.targetIds[0], botIndex + 1, 'Bot must not target itself');
+      assert.equal(action.targetIds[0] >= 1 && action.targetIds[0] <= playerCount, true);
+
+      const resolution = resolvePlayerAction(offlinePlayers, action, botIndex, 1);
+      assert.ok(resolution);
+      assert.equal(resolution.accepted, true);
+    }
+  }
+});
+
+test('11. CLEANUP REALTIME CONNECTIONS', async () => {
   if (supabase?.realtime) {
     try {
       await supabase.removeAllChannels();

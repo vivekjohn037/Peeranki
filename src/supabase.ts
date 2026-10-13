@@ -455,6 +455,9 @@ function persistMockRoom(room: MockRoomRecord, broadcast = true) {
 }
 
 function notifyRoomListeners(roomCode: string, state: any, broadcast: boolean) {
+  if (!shouldAcceptRoomState(roomCode, state)) {
+    return;
+  }
   const listeners = listenersByRoom.get(roomCode);
   if (listeners) {
     listeners.forEach((cb) => {
@@ -898,10 +901,16 @@ export async function fetchGameRoom(roomCode: string) {
         .maybeSingle();
 
       if (error) throw parseSupabaseError(error, `Could not load room ${cleanCode}`);
-      if (data && !data.counting_start_timestamp && Array.isArray(data.players)) {
-        const timestampHolder = data.players.find((p: any) => typeof p?.counting_start_timestamp === 'string' && p.counting_start_timestamp);
-        if (timestampHolder) {
-          data.counting_start_timestamp = timestampHolder.counting_start_timestamp;
+      if (data && Array.isArray(data.players)) {
+        if (!data.counting_start_timestamp) {
+          const timestampHolder = data.players.find((p: any) => typeof p?.counting_start_timestamp === 'string' && p.counting_start_timestamp);
+          if (timestampHolder) {
+            data.counting_start_timestamp = timestampHolder.counting_start_timestamp;
+          }
+        }
+        const indexHolder = data.players.find((p: any) => typeof p?.counting_start_index === 'number' && p.counting_start_index >= 0);
+        if (indexHolder && typeof data.counting_start_index !== 'number') {
+          data.counting_start_index = indexHolder.counting_start_index;
         }
       }
       return data;
@@ -922,30 +931,109 @@ let roomSequenceCounter = 0;
 const lastRoomStateSeq = new Map<string, number>();
 const lastRoomUpdatedAt = new Map<string, number>();
 
-function shouldAcceptRoomState(roomCode: string, state: any): boolean {
+interface LastAcceptedStateSummary {
+  seq: number;
+  time: number;
+  status: string;
+  shooter: number | null;
+  countingTimestamp: string | null;
+  countdown: number;
+}
+
+const lastAcceptedSummary = new Map<string, LastAcceptedStateSummary>();
+
+export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   if (!state || typeof state !== 'object') return false;
+  const cleanCode = roomCode.trim().toUpperCase();
   const seq = typeof state.state_seq === 'number' ? state.state_seq : -1;
   const time = state.updated_at ? Date.parse(state.updated_at) : 0;
-  const lastSeq = lastRoomStateSeq.get(roomCode) ?? -1;
-  const lastTime = lastRoomUpdatedAt.get(roomCode) ?? 0;
+  const status = typeof state.game_status === 'string' ? state.game_status : '';
+  const shooter = typeof state.current_shooter === 'number' ? state.current_shooter : null;
+  const countingTimestamp = typeof state.counting_start_timestamp === 'string' ? state.counting_start_timestamp : null;
+  const countdown = typeof state.countdown === 'number' ? state.countdown : -1;
 
-  if (seq > 0 && lastSeq > 0) {
-    if (seq <= lastSeq) return false;
-    lastRoomStateSeq.set(roomCode, seq);
-    if (time > lastTime) lastRoomUpdatedAt.set(roomCode, time);
+  const prev = lastAcceptedSummary.get(cleanCode);
+
+  if (!prev) {
+    lastAcceptedSummary.set(cleanCode, { seq, time, status, shooter, countingTimestamp, countdown });
+    if (seq > 0) lastRoomStateSeq.set(cleanCode, seq);
+    if (time > 0) lastRoomUpdatedAt.set(cleanCode, time);
     return true;
   }
 
-  if (time > 0 && lastTime > 0) {
-    if (time <= lastTime) return false;
-    lastRoomUpdatedAt.set(roomCode, time);
-    if (seq > lastSeq) lastRoomStateSeq.set(roomCode, seq);
+  // Critical state changes (phase transition, shooter selection, counting start timestamp, countdown tick)
+  const stateChanged =
+    (Boolean(status) && status !== prev.status) ||
+    (shooter !== prev.shooter) ||
+    (countingTimestamp !== prev.countingTimestamp) ||
+    (countdown >= 0 && prev.countdown !== countdown);
+
+  // Strict sequence check if both records have sequence numbers
+  if (seq > 0 && prev.seq > 0) {
+    if (seq > prev.seq || stateChanged) {
+      lastAcceptedSummary.set(cleanCode, {
+        seq: Math.max(seq, prev.seq),
+        time: Math.max(time, prev.time),
+        status: status || prev.status,
+        shooter,
+        countingTimestamp: countingTimestamp || prev.countingTimestamp,
+        countdown: countdown >= 0 ? countdown : prev.countdown,
+      });
+      lastRoomStateSeq.set(cleanCode, Math.max(seq, prev.seq));
+      return true;
+    }
+    return false;
+  }
+
+  // Accept if timestamp is forward, or if state changed, or initial
+  if (time > prev.time || stateChanged || (prev.time === 0 && time > 0)) {
+    lastAcceptedSummary.set(cleanCode, {
+      seq: Math.max(seq, prev.seq),
+      time: Math.max(time, prev.time),
+      status: status || prev.status,
+      shooter,
+      countingTimestamp: countingTimestamp || prev.countingTimestamp,
+      countdown: countdown >= 0 ? countdown : prev.countdown,
+    });
+    if (time > 0) lastRoomUpdatedAt.set(cleanCode, Math.max(time, prev.time));
     return true;
   }
 
-  if (seq > 0) lastRoomStateSeq.set(roomCode, seq);
-  if (time > 0) lastRoomUpdatedAt.set(roomCode, time);
-  return true;
+  return false;
+}
+
+export async function claimHost(roomCode: string, newHostSessionId: string) {
+  const cleanCode = roomCode.trim().toUpperCase();
+  if (!cleanCode || !newHostSessionId) return null;
+
+  console.log(`[Peeranki Diagnostics] Claiming host authority for room ${cleanCode} with session ${newHostSessionId}`);
+
+  if (hasAnySupabaseConfiguration) {
+    const client = configuredClient();
+    try {
+      const { data, error } = await client
+        .from('game_states')
+        .update({
+          host_session_id: newHostSessionId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('room_code', cleanCode)
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        console.warn('[Peeranki Diagnostics] Failed to claim host in Supabase:', error);
+      }
+      return data;
+    } catch (err) {
+      console.warn('[Peeranki Diagnostics] Error claiming host:', err);
+      return null;
+    }
+  }
+
+  return updateMockRoomPartial(cleanCode, {
+    host_session_id: newHostSessionId,
+  });
 }
 
 export async function saveGameState(
@@ -1066,6 +1154,7 @@ export async function broadcastRoomStateDelta(
     countdown?: number;
     game_status: string;
     counting_start_timestamp?: string | null;
+    counting_start_index?: number;
   },
 ) {
   const cleanCode = roomCode.trim().toUpperCase();
@@ -1293,7 +1382,17 @@ export function subscribeToGameState(
               filter: `room_code=eq.${cleanCode}`,
             },
             (payload) => {
-              const next = payload.new ?? null;
+              const next = (payload.new as any) ?? null;
+              if (next && Array.isArray(next.players)) {
+                if (!next.counting_start_timestamp) {
+                  const tsHolder = next.players.find((p: any) => typeof p?.counting_start_timestamp === 'string' && p.counting_start_timestamp);
+                  if (tsHolder) next.counting_start_timestamp = tsHolder.counting_start_timestamp;
+                }
+                const idxHolder = next.players.find((p: any) => typeof p?.counting_start_index === 'number' && p.counting_start_index >= 0);
+                if (idxHolder && typeof next.counting_start_index !== 'number') {
+                  next.counting_start_index = idxHolder.counting_start_index;
+                }
+              }
               if (next && shouldAcceptRoomState(cleanCode, next)) {
                 roomSubscribers.get(cleanCode)?.forEach((entry) => {
                   try {
@@ -1330,9 +1429,10 @@ export function subscribeToGameState(
               });
             }
           })
-          .subscribe((_status, error) => {
+          .subscribe((status, error) => {
+            console.log(`[Peeranki Diagnostics] Realtime subscription status for room ${cleanCode}: ${status}`);
             if (error) {
-              console.error('[Peeranki] Supabase realtime error:', error);
+              console.error(`[Peeranki Diagnostics] Supabase realtime error for room ${cleanCode}:`, error);
             }
           });
         activeRealtimeChannels.set(cleanCode, realChannel);
