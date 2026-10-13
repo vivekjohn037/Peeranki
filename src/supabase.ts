@@ -1000,10 +1000,11 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     counting: 2,
     action_requested: 3,
     shooting: 3,
-    shot: 4,
-    duel: 5,
-    round_won: 6,
-    finished: 7,
+    action_timeout: 4,
+    shot: 5,
+    duel: 6,
+    round_won: 7,
+    finished: 8,
   };
   if (
     countingTimestamp && countingTimestamp === prev.countingTimestamp &&
@@ -1173,6 +1174,40 @@ export async function saveGameState(
     game_status: gameStatus,
     state_seq: seq,
   }, false);
+}
+
+/** Store a shooter request atomically so stale player snapshots cannot overwrite combat state. */
+export async function requestPlayerAction(roomCode: string, sessionId: string, action: object) {
+  const actionPayload = action as Record<string, unknown>;
+  const cleanCode = roomCode.trim().toUpperCase();
+  if (!cleanCode || !sessionId || typeof actionPayload.nonce !== 'string') throw new Error('Invalid online action request.');
+  if (hasAnySupabaseConfiguration) {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const { data, error } = await configuredClient().rpc('request_player_action', { p_room_code: cleanCode, p_session_id: sessionId, p_action: actionPayload });
+        if (error) throw parseSupabaseError(error, 'Could not send your shot to the host.');
+        if (!data) throw new Error('The room did not confirm your shot request.');
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) await new Promise((resolve) => window.setTimeout(resolve, attempt * 250));
+      }
+    }
+    throw lastError;
+  }
+  const room = getStoredRoom(cleanCode);
+  if (!room || room.game_status !== 'shooting') throw new Error('This shooting turn has ended.');
+  const shooter = room.players.find((player: any) => player.session_id === sessionId && player.id === actionPayload.shooterId);
+  if (!shooter || room.current_shooter !== Number(actionPayload.shooterId) - 1 || !shooter.alive || !shooter.connected) throw new Error('It is no longer your turn to shoot.');
+  if (shooter.action_request) {
+    if (shooter.action_request.nonce === actionPayload.nonce) return room;
+    throw new Error('A shot from this turn is already being processed.');
+  }
+  shooter.action_request = { ...actionPayload, received_at: new Date().toISOString() };
+  const updated = updateMockRoomPartial(cleanCode, { players: room.players });
+  if (!updated) throw new Error('The room could not save your shot.');
+  return updated;
 }
 
 /** Send transient authoritative turn/count fields without persisting a database write per tick. */
