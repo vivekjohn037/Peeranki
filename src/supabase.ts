@@ -81,12 +81,30 @@ export class MultiplayerError extends Error {
 export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer request failed'): MultiplayerError {
   if (err instanceof MultiplayerError) return err;
 
-  const msg = err instanceof Error ? err.message : String(err || '');
-  const rawCode = String((err as any)?.code || '');
-  const details = String((err as any)?.details || '');
-  const hint = String((err as any)?.hint || '');
+  const errorObject = err && typeof err === 'object' ? err as Record<string, unknown> : undefined;
+  const asText = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (value instanceof Error) return value.message;
+    if (value === undefined || value === null) return '';
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  };
+  const msg = asText(errorObject?.message) || (err instanceof Error ? err.message : asText(err));
+  const rawCode = asText(errorObject?.code);
+  const details = asText(errorObject?.details);
+  const hint = asText(errorObject?.hint);
   const status = Number((err as any)?.status || 0);
   const searchStr = `${msg} ${details} ${hint} ${rawCode}`.toLowerCase();
+  const diagnosticDetails = [
+    msg,
+    details && `Details: ${details}`,
+    hint && `Hint: ${hint}`,
+    rawCode && `Code: ${rawCode}`,
+    status && `Status: ${status}`,
+  ].filter(Boolean).join('\n');
 
   // 1. Missing or invalid build-time configuration / API key
   if (
@@ -129,12 +147,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
   if (
     rawCode === 'PGRST202' ||
     searchStr.includes('could not find the function') ||
-    searchStr.includes('join_private_room') ||
-    searchStr.includes('find_or_create_public_room') ||
-    searchStr.includes('claim_room_host') ||
-    searchStr.includes('touch_player') ||
-    searchStr.includes('leave_room') ||
-    searchStr.includes('cleanup_stale_players')
+    searchStr.includes('schema cache') && searchStr.includes('function')
   ) {
     return new MultiplayerError(
       'RPC_MISSING',
@@ -144,18 +157,18 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     );
   }
 
-  // 4. Room not found / expired (PostgreSQL P0001, P0002)
+  // 4. P0001 is PostgreSQL's generic raise_exception code, so classify a missing
+  // room by its message rather than by SQLSTATE alone.
   if (
-    rawCode === 'P0001' ||
-    rawCode === 'P0002' ||
     searchStr.includes('room does not exist') ||
     searchStr.includes('room not found') ||
-    searchStr.includes('could not find room')
+    searchStr.includes('could not find room') ||
+    searchStr.includes('room could not be found')
   ) {
     return new MultiplayerError(
       'ROOM_NOT_FOUND',
       'Room not found. Check the 6-character code or ask host for a new room.',
-      msg || details,
+      diagnosticDetails,
       err,
     );
   }
@@ -170,7 +183,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     return new MultiplayerError(
       'ROOM_FULL',
       'Room is full. Maximum players already joined.',
-      msg || details,
+      diagnosticDetails,
       err,
     );
   }
@@ -185,7 +198,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     return new MultiplayerError(
       'GAME_IN_PROGRESS',
       'This match has already started and cannot accept new players.',
-      msg || details,
+      diagnosticDetails,
       err,
     );
   }
@@ -220,12 +233,12 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     return new MultiplayerError(
       'NETWORK_ERROR',
       'Network connection failed. Could not reach Supabase servers.',
-      msg,
+      diagnosticDetails,
       err,
     );
   }
 
-  return new MultiplayerError('UNKNOWN_ERROR', defaultMessage, msg, err);
+  return new MultiplayerError('UNKNOWN_ERROR', defaultMessage, diagnosticDetails || defaultMessage, err);
 }
 
 let realClient: SupabaseClient | null = null;
@@ -944,6 +957,15 @@ interface LastAcceptedStateSummary {
 
 const lastAcceptedSummary = new Map<string, LastAcceptedStateSummary>();
 
+function stableRoomJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableRoomJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableRoomJson(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   if (!state || typeof state !== 'object') return false;
   const cleanCode = roomCode.trim().toUpperCase();
@@ -954,8 +976,8 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   const countingTimestamp = typeof state.counting_start_timestamp === 'string' ? state.counting_start_timestamp : null;
   const countdown = typeof state.countdown === 'number' ? state.countdown : -1;
   const roomFingerprint = Array.isArray(state.players)
-    ? JSON.stringify({
-      host_session_id: state.host_session_id ?? '',
+    ? stableRoomJson({
+      // The durable broadcast omits host_session_id, and Postgres may reorder JSONB keys.
       max_players: state.max_players ?? null,
       players: state.players,
     })
@@ -968,6 +990,27 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     if (seq > 0) lastRoomStateSeq.set(cleanCode, seq);
     if (time > 0) lastRoomUpdatedAt.set(cleanCode, time);
     return true;
+  }
+
+  // Count ticks share one start timestamp. Ignore delayed/out-of-order ticks, and do
+  // not let stale phase packets undo a later hit/duel state within the same count phase.
+  const phaseRank: Record<string, number> = {
+    waiting: 0,
+    playing: 1,
+    counting: 2,
+    action_requested: 3,
+    shooting: 3,
+    shot: 4,
+    duel: 5,
+    round_won: 6,
+    finished: 7,
+  };
+  if (
+    countingTimestamp && countingTimestamp === prev.countingTimestamp &&
+    ((prev.status === 'counting' && status === 'counting' && countdown >= 0 && countdown < prev.countdown) ||
+      (phaseRank[status] !== undefined && phaseRank[prev.status] !== undefined && phaseRank[status] < phaseRank[prev.status]))
+  ) {
+    return false;
   }
 
   // Critical state changes (phase transition, shooter selection, counting start timestamp, countdown tick)

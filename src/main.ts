@@ -630,6 +630,29 @@ async function syncGameState(
   );
 }
 
+/** Retry idempotent state snapshots when Supabase briefly drops a write. */
+async function syncGameStateWithRetry(
+  currentShooter: number | null,
+  countNumber: number,
+  gameStatus: string,
+  explicitCountingTimestamp?: string | null,
+) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await syncGameState(currentShooter, countNumber, gameStatus, explicitCountingTimestamp);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        console.warn(`[Peeranki Diagnostics] ${gameStatus} state save failed (attempt ${attempt}/3); retrying.`, error);
+        await new Promise((resolve) => window.setTimeout(resolve, attempt * 250));
+      }
+    }
+  }
+  throw lastError;
+}
+
 function startRoomHeartbeat() {
   stopRoomHeartbeat();
 
@@ -3153,13 +3176,10 @@ class LobbyScene extends Phaser.Scene {
       return;
     }
 
-    if (isPublicRoom && amHost()) {
+    if (isPublicRoom) {
       const count = connectedPlayers().length;
 
-      if (
-        count === maxPlayers &&
-        result.game_status === 'waiting'
-      ) {
+      if (count === maxPlayers && result.game_status === 'waiting') {
         void this.startGame();
       }
     }
@@ -3223,7 +3243,7 @@ class LobbyScene extends Phaser.Scene {
     if (
       this.starting ||
       !this.isCurrentLobby() ||
-      !amHost() ||
+      (!isPublicRoom && !amHost()) ||
       connected.length !== maxPlayers
     ) {
       return;
@@ -3269,7 +3289,7 @@ class LobbyScene extends Phaser.Scene {
       }),
     );
 
-    const { error } = await supabase
+    const { data: startedRows, error } = await supabase
       .from('game_states')
       .update({
         players: cleanPlayers,
@@ -3278,7 +3298,9 @@ class LobbyScene extends Phaser.Scene {
         game_status: 'playing',
         updated_at: new Date().toISOString(),
       })
-      .eq('room_code', roomCode);
+      .eq('room_code', this.roomCodeAtStart)
+      .eq('game_status', 'waiting')
+      .select('room_code');
 
     if (!this.isCurrentLobby()) return;
 
@@ -3293,6 +3315,15 @@ class LobbyScene extends Phaser.Scene {
       this.startButton?.setInteractive({
         useHandCursor: true,
       });
+      return;
+    }
+
+    if (!startedRows?.length) {
+      // Another full-room client won the atomic start race. Follow its persisted state.
+      const room = await fetchGameRoom(this.roomCodeAtStart);
+      if (!this.isCurrentLobby()) return;
+      this.starting = false;
+      if (room) this.applyRoomState(room);
       return;
     }
 
@@ -3369,6 +3400,7 @@ private nextStartIndex = -1;
   private playingPhaseWatchdogTimer?: Phaser.Time.TimerEvent;
   private hostRecoveryInProgress = false;
   private lastHostRecoveryAttemptAt = 0;
+  private endingAfterPlayerDeparture = false;
   private lifecycleGeneration = 0;
   private roomCodeAtStart = '';
 
@@ -4242,6 +4274,19 @@ if (offlineMode) {
       return;
     }
 
+    const incomingStatus = typeof gameState.game_status === 'string' ? gameState.game_status : '';
+    const incomingMaxPlayers = Number(gameState.max_players ?? maxPlayers);
+    const incomingRosterHasDeparture = Array.isArray(gameState.players) &&
+      gameState.players.filter((player: any) => player?.connected !== false).length < incomingMaxPlayers;
+    const endsThreePlayerMatch = incomingMaxPlayers === 3 &&
+      incomingStatus !== 'waiting' && incomingStatus !== 'finished' && incomingRosterHasDeparture;
+    if (this.duelActive && incomingStatus !== 'duel' && incomingStatus !== 'round_won' && incomingStatus !== 'finished' && !endsThreePlayerMatch) {
+      // A delayed shot/count snapshot must not dismiss an active RPS duel. Only the
+      // authoritative duel result or match end is allowed to close the duel UI.
+      console.warn(`[Peeranki Diagnostics] Ignoring stale ${incomingStatus || 'unknown'} state while duel is active.`);
+      return;
+    }
+
     if (
       Number.isFinite(Number(gameState.max_players))
     ) {
@@ -4268,6 +4313,13 @@ if (offlineMode) {
 
       loadPlayersFromRoom(gameState.players);
       this.refreshWeaponPicker();
+
+      // The database leave RPC normally marks a live 3-player room finished. Keep
+      // remaining clients safe if an older deployed RPC only marks the slot offline.
+      if (endsThreePlayerMatch) {
+        this.finishAfterThreePlayerDeparture();
+        return;
+      }
 
       // Non-host (and host client) rich combat audio & visual feedbacks
       if (this.initialized && prevPlayers.length > 0) {
@@ -4364,11 +4416,9 @@ if (offlineMode) {
       this.currentShooter = -1;
     }
 
-    const remoteCount = Number(
-      gameState.countdown,
-    );
+    const remoteCount = Number(gameState.countdown);
 
-    if (Number.isFinite(remoteCount) && gameState.game_status !== 'counting') {
+    if (Number.isFinite(remoteCount)) {
       this.countNumber = remoteCount;
     }
 
@@ -4456,7 +4506,6 @@ if (offlineMode) {
 
       if (!this.countingTimer) {
         this.countingPhaseEnteredAt = Date.now();
-        this.countNumber = 0;
         this.startLocalCountingLoop();
       } else {
         this.updateLocalCountingProgress();
@@ -4566,12 +4615,37 @@ if (offlineMode) {
     if (
       gameState.game_status === 'finished'
     ) {
+      this.gameFinished = true;
+      this.roundPhase = 'finished';
+      matchOver = true;
       this.countingTimer?.remove(false);
       this.countingTimer = undefined;
       this.nextRoundTimer?.remove(false);
       this.nextRoundTimer = undefined;
       this.showFinishedState();
     }
+  }
+
+  private finishAfterThreePlayerDeparture() {
+    if (offlineMode || this.gameFinished || this.endingAfterPlayerDeparture || maxPlayers !== 3) return;
+
+    const connectedAlive = connectedPlayers()
+      .filter((player) => player.alive && player.sessionId)
+      .sort((a, b) => a.id - b.id);
+
+    if (amHost()) {
+      void this.finishMatch();
+      return;
+    }
+
+    if (connectedAlive[0]?.sessionId !== sessionId || !hostSessionId) return;
+    this.endingAfterPlayerDeparture = true;
+    const expectedHost = hostSessionId;
+    void this.claimHostIfCurrent(expectedHost).then((claimed) => {
+      this.endingAfterPlayerDeparture = false;
+      if (!claimed || !this.isCurrentOnlineGame() || this.gameFinished || maxPlayers !== 3 || connectedPlayers().length >= 3) return;
+      void this.finishMatch();
+    });
   }
   private beginDuel() {
     if (this.duelActive || this.gameFinished) return;
@@ -4781,9 +4855,11 @@ if (offlineMode) {
       this.startIndex = countingStartIndex;
     }
 
-    // Host self-healing: If host is in counting phase but count hasn't started or timestamp is missing
+    // Host self-healing only repairs a missing/invalid start time. A valid timestamp
+    // must be preserved so failover cannot replay a count that already started.
     if (amHost() && !offlineMode) {
-      if (!countingStartTimestamp || (this.countNumber === 0 && (now - this.countingPhaseEnteredAt) > 1500)) {
+      const countingStartedAt = Date.parse(countingStartTimestamp);
+      if (!Number.isFinite(countingStartedAt) || countingStartedAt <= 0) {
         console.warn('[Peeranki Diagnostics] Host detected missing or stalled counting start timestamp. Re-initializing count.');
         countingStartTimestamp = new Date().toISOString();
         this.countingPhaseEnteredAt = now;
@@ -4819,19 +4895,25 @@ if (offlineMode) {
           const expectedHost = hostSessionId;
           void this.claimHostIfCurrent(expectedHost).then((claimed) => {
             if (!claimed || this.roundPhase !== 'counting' || this.gameFinished) return;
-            const recoveredAt = new Date().toISOString();
+            const savedStart = Date.parse(countingStartTimestamp);
+            const hasSavedStart = Number.isFinite(savedStart) && savedStart > 0;
+            const recoveredAt = hasSavedStart
+              ? countingStartTimestamp
+              : new Date().toISOString();
             countingStartTimestamp = recoveredAt;
-            this.countingPhaseEnteredAt = Date.now();
+            if (!hasSavedStart) this.countingPhaseEnteredAt = Date.now();
             if (this.startIndex < 0) {
               const aliveIndexes = activePlayers().map((p) => p.id - 1);
               this.startIndex = aliveIndexes[0] ?? 0;
               countingStartIndex = this.startIndex;
             }
-            void syncGameState(null, 0, 'counting', recoveredAt);
+            const resumedCount = this.getCalculatedCount();
+            this.countNumber = resumedCount;
+            void syncGameState(null, resumedCount, 'counting', recoveredAt);
             void broadcastRoomStateDelta(roomCode, {
               game_status: 'counting',
               current_shooter: null,
-              countdown: 0,
+              countdown: resumedCount,
               counting_start_timestamp: recoveredAt,
               counting_start_index: this.startIndex,
             });
@@ -4840,7 +4922,11 @@ if (offlineMode) {
       }
     }
 
-    const calculated = this.getCalculatedCount();
+    // The host owns the online count. Clients use its Realtime ticks so players with
+    // different device clocks cannot select different shooters.
+    const calculated = !offlineMode && !amHost()
+      ? this.countNumber
+      : this.getCalculatedCount();
     if (calculated !== this.countNumber) {
       this.countNumber = calculated;
       const countedIndex = getCountedPlayerIndex(players, this.startIndex >= 0 ? this.startIndex : 0, this.countNumber);
@@ -4857,9 +4943,28 @@ if (offlineMode) {
         }
       }
       this.markShooter();
+      if (!offlineMode && amHost() && this.countNumber < COUNT_TO) {
+        void broadcastRoomStateDelta(roomCode, {
+          game_status: 'counting',
+          current_shooter: this.currentShooter >= 0 ? this.currentShooter : null,
+          countdown: this.countNumber,
+          counting_start_timestamp: countingStartTimestamp,
+          counting_start_index: this.startIndex,
+        });
+      }
     } else if (this.countNumber === 0 && this.startIndex >= 0 && players[this.startIndex]) {
       this.countText?.setText('Count 0 / 10');
       this.statusText?.setText(`🎲 Starting at ${players[this.startIndex].name}...`);
+    }
+
+    if (!offlineMode && !amHost() && this.countNumber > 0 && this.countNumber < COUNT_TO) {
+      const countedIndex = getCountedPlayerIndex(players, this.startIndex >= 0 ? this.startIndex : 0, this.countNumber);
+      if (countedIndex >= 0) {
+        this.currentShooter = countedIndex;
+        this.countText?.setText(`Count ${this.countNumber} / ${COUNT_TO}`);
+        this.statusText?.setText(`${this.countNumber}. ${players[countedIndex]?.name ?? 'Player'}`);
+        this.markShooter();
+      }
     }
 
     if (this.countNumber >= COUNT_TO) {
@@ -5100,7 +5205,14 @@ private async requestHostAction(action: PlayerAction) {
   const nonce = `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
   shooter.actionRequest = { ...action, nonce };
   this.statusText?.setText('Sending action to the host...');
-  await syncGameState(this.currentShooter, this.countNumber, 'action_requested');
+  try {
+    await syncGameStateWithRetry(this.currentShooter, this.countNumber, 'action_requested');
+  } catch (error) {
+    console.error('[Peeranki Diagnostics] Could not confirm the online shot request:', error);
+    this.statusText?.setText('Shot request could not reach the host. Check the connection before trying again.');
+    this.uiManager.showToast('⚠️ Shot request was not confirmed. Check your connection.', 'alert');
+    this.syncUI();
+  }
 }
 
 private async processPendingAction() {
@@ -5396,18 +5508,26 @@ void this.recordShot();
 
     if (alive.length <= 1) {
       if (!offlineMode && !amHost()) {
-        await syncGameState(this.currentShooter, COUNT_TO, 'shot');
+        await syncGameStateWithRetry(this.currentShooter, COUNT_TO, 'shot');
         return;
       }
       await this.finishRound();
       return;
     }
 
-    await syncGameState(
-      this.currentShooter,
-      COUNT_TO,
-      'shot',
-    );
+    try {
+      await syncGameStateWithRetry(this.currentShooter, COUNT_TO, 'shot');
+    } catch (error) {
+      console.error('[Peeranki Diagnostics] Could not persist online shot; will retry the same state:', error);
+      this.statusText?.setText('Shot applied. Reconnecting to sync it with everyone…');
+      this.uiManager.showToast('⚠️ Sync interrupted. Retrying this shot with everyone…', 'alert');
+      const roomAtFailure = roomCode;
+      this.time.delayedCall(1_000, () => {
+        if (this.isCurrentOnlineGame() && roomCode === roomAtFailure && this.roundPhase === 'waiting' && !this.gameFinished) {
+          void this.recordShot();
+        }
+      });
+    }
   }
 
   private refreshWeaponPicker() {
@@ -5519,14 +5639,40 @@ void this.recordShot();
     const winnerIndex = players.findIndex((player) => player.id === winner.id);
     const winnerCard = this.playerObjects[winnerIndex];
     if (winnerCard) this.tweens.add({ targets: winnerCard, scale: { from: 1, to: 1.12 }, duration: 300, yoyo: true, repeat: 2, ease: 'Back.Out' });
-    if (!offlineMode) await syncGameState(null, 0, 'round_won');
-    this.markShooter();
-    if (!this.nextRoundTimer) {
-      this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
-        this.nextRoundTimer = undefined;
-        this.startCounting();
-      });
+    if (!offlineMode) {
+      try {
+        await syncGameStateWithRetry(null, 0, 'round_won');
+      } catch (error) {
+        console.error('[Peeranki Diagnostics] Could not persist round result; retrying without awarding it twice:', error);
+        this.statusText?.setText('Round result is ready. Reconnecting to sync it with everyone…');
+        this.uiManager.showToast('⚠️ Round result is waiting to sync. Retrying…', 'alert');
+        this.retryRoundWinSync();
+        return;
+      }
     }
+    this.markShooter();
+    this.scheduleNextRound();
+  }
+
+  private retryRoundWinSync() {
+    this.time.delayedCall(1_000, () => {
+      if (!this.isCurrentOnlineGame() || this.gameFinished || this.roundPhase !== 'waiting') return;
+      void syncGameStateWithRetry(null, 0, 'round_won').then(() => {
+        this.markShooter();
+        this.scheduleNextRound();
+      }).catch((error) => {
+        console.warn('[Peeranki Diagnostics] Round result is still waiting for Supabase:', error);
+        this.retryRoundWinSync();
+      });
+    });
+  }
+
+  private scheduleNextRound() {
+    if (this.nextRoundTimer || this.gameFinished) return;
+    this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
+      this.nextRoundTimer = undefined;
+      this.startCounting();
+    });
   }
 
   private async finishMatch() {
@@ -5548,7 +5694,13 @@ void this.recordShot();
     const eligiblePlayers = connectedPlayers();
     const winners = findMatchWinners(eligiblePlayers);
     const topCount = winners[0]?.weapons.length ?? 0;
-    if (!offlineMode) await syncGameState(this.currentShooter >= 0 ? this.currentShooter : null, this.countNumber, 'finished');
+    if (!offlineMode) {
+      try {
+        await syncGameState(this.currentShooter >= 0 ? this.currentShooter : null, this.countNumber, 'finished');
+      } catch (error) {
+        console.error('[Peeranki Diagnostics] Could not persist the finished match state:', error);
+      }
+    }
     this.showFinishedState(winners, topCount);
   }
 
