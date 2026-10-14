@@ -10,6 +10,7 @@ import {
   MATCH_DURATIONS,
   getCountedPlayerIndex,
   getNextCountingStartIndex,
+  getVisibleWeapons,
   hasAllWeapons,
   findMatchWinners,
 } from '../src/game/rules.ts';
@@ -79,6 +80,13 @@ test('1. WEAPON DEFINITIONS & SEQUENCING', async (t) => {
 });
 
 test('2. COMBAT & SHIELD DAMAGE MECHANICS', async (t) => {
+  await t.test('Shattered shield icon is hidden for its owner current round only', () => {
+    const weapons = ['gun', 'peeranki', 'shield'];
+    assert.deepEqual(getVisibleWeapons(weapons, 2, 2), ['gun', 'peeranki']);
+    assert.deepEqual(getVisibleWeapons(weapons, 2, 3), weapons);
+    assert.deepEqual(getVisibleWeapons(weapons, -1, 2), weapons);
+  });
+
   await t.test('Gun is absorbed by active shield without health loss', () => {
     const target = { stage: 0, alive: true, weapons: ['gun', 'shield'], shieldDisabledRound: -1 };
     const res = calculateHitResult(target, 'gun', 1);

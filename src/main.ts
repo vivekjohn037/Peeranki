@@ -19,6 +19,7 @@ import {
   findMatchWinners,
   getCountedPlayerIndex,
   getNextCountingStartIndex,
+  getVisibleWeapons,
   hasAllWeapons,
   MATCH_DURATIONS,
   nextWeaponUpgrade,
@@ -4176,7 +4177,11 @@ if (offlineMode) {
         : 'Empty',
     );
 
-    const visibleWeapons = player.weapons.filter((weapon) => weapon !== 'shield' || player.shieldDisabledRound !== matchRound);
+    const visibleWeapons = getVisibleWeapons(
+      player.weapons,
+      player.shieldDisabledRound,
+      player.matchRound,
+    );
     inventory.removeAll(true);
     if (player.connected) {
       const iconStep = 25;
