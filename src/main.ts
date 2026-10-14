@@ -4275,6 +4275,14 @@ if (offlineMode) {
       return;
     }
 
+    const incomingStatus = typeof gameState.game_status === 'string' ? gameState.game_status : '';
+    if (this.duelActive && incomingStatus !== 'duel' && incomingStatus !== 'round_won' && incomingStatus !== 'finished') {
+      // A delayed shot/count snapshot must not dismiss an active RPS duel. Only the
+      // authoritative duel result or match end is allowed to close the duel UI.
+      console.warn(`[Peeranki Diagnostics] Ignoring stale ${incomingStatus || 'unknown'} state while duel is active.`);
+      return;
+    }
+
     if (
       Number.isFinite(Number(gameState.max_players))
     ) {
