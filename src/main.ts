@@ -4277,6 +4277,10 @@ if (offlineMode) {
     }
 
     const incomingStatus = typeof gameState.game_status === 'string' ? gameState.game_status : '';
+    if (this.gameFinished && incomingStatus !== 'finished') {
+      // A delayed duel/count snapshot must never reopen a finished match.
+      return;
+    }
     const incomingMaxPlayers = Number(gameState.max_players ?? maxPlayers);
     const incomingRosterHasDeparture = Array.isArray(gameState.players) &&
       gameState.players.filter((player: any) => player?.connected !== false).length < incomingMaxPlayers;
@@ -4595,8 +4599,9 @@ if (offlineMode) {
       this.clearDuelControls();
       this.roundPhase = 'waiting';
       this.refreshPreviousRoundText();
-      PeerankiAudio.effect('round_win');
-      if (lastRoundMessage) {
+      if (lastRoundMessage && lastRoundMessage !== this.lastAnnouncedRoundMessage) {
+        this.lastAnnouncedRoundMessage = lastRoundMessage;
+        PeerankiAudio.effect('round_win');
         this.uiManager.showToast(`🏆 ${lastRoundMessage}`, 'success');
       }
       this.statusText?.setText(lastRoundMessage || 'Round winner advances!');
@@ -5586,7 +5591,7 @@ void this.recordShot();
         this.matchText?.setText(`MATCH ${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} • ROUND ${matchRound}`);
         this.syncUI();
       }
-      if (remaining === 0 && (offlineMode || amHost()) && !this.gameFinished) void this.finishMatch();
+      if (remaining === 0 && !this.gameFinished) void this.finishMatch();
     };
     update();
     this.matchTimer = this.time.addEvent({ delay: 250, loop: true, callback: update });
@@ -5686,7 +5691,9 @@ void this.recordShot();
   }
 
   private async finishMatch() {
-    if (this.gameFinished || (!offlineMode && !amHost())) return;
+    if (this.gameFinished) return;
+    const canPersistResult = offlineMode || amHost();
+    if (!canPersistResult && !this.matchTimeExpired()) return;
     this.gameFinished = true;
     this.duelActive = false;
     this.duelBotTimer?.remove(false);
@@ -5704,9 +5711,9 @@ void this.recordShot();
     const eligiblePlayers = connectedPlayers();
     const winners = findMatchWinners(eligiblePlayers);
     const topCount = winners[0]?.weapons.length ?? 0;
-    if (!offlineMode) {
+    if (!offlineMode && canPersistResult) {
       try {
-        await syncGameState(this.currentShooter >= 0 ? this.currentShooter : null, this.countNumber, 'finished');
+        await syncGameStateWithRetry(this.currentShooter >= 0 ? this.currentShooter : null, this.countNumber, 'finished');
       } catch (error) {
         console.error('[Peeranki Diagnostics] Could not persist the finished match state:', error);
       }
@@ -5726,6 +5733,10 @@ void this.recordShot();
   finalists = connectedPlayers(),
   weaponCount?: number,
 ) {
+  this.gameFinished = true;
+  this.roundPhase = 'finished';
+  matchOver = true;
+  players.forEach((player) => { player.matchOver = true; });
   this.duelActive = false;
   this.duelBotTimer?.remove(false);
   this.duelBotTimer = undefined;

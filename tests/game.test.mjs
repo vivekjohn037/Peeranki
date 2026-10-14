@@ -467,6 +467,14 @@ test('6a2. Action timeout is a distinct forward room transition', () => {
   assert.equal(shouldAcceptRoomState(roomCode, { game_status: 'shooting', current_shooter: 0, countdown: 10, counting_start_timestamp: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:12.000Z', players }), false);
 });
 
+test('6a3. A finished room rejects delayed duel updates but accepts a fresh waiting match', () => {
+  const roomCode = `FINISH${Date.now()}`;
+  const players = [{ id: 1, session_id: 'terminal-host', stage: 0, alive: true, connected: true }];
+  assert.equal(shouldAcceptRoomState(roomCode, { game_status: 'finished', updated_at: '2026-10-14T12:00:02.000Z', players }), true);
+  assert.equal(shouldAcceptRoomState(roomCode, { game_status: 'duel', updated_at: '2026-10-14T12:00:01.000Z', players }), false);
+  assert.equal(shouldAcceptRoomState(roomCode, { game_status: 'waiting', updated_at: '2026-10-14T12:00:03.000Z', players }), true);
+});
+
 test('6b. Leaving a live 3-player room finishes the shared match only for that size', async (t) => {
   await t.test('3-player active match becomes finished', async () => {
     const created = await createPrivateRoom(3, 'leave-three-host', 'Host');

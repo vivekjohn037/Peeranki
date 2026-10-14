@@ -992,6 +992,12 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     return true;
   }
 
+  // A terminal match state cannot be rolled back by a delayed realtime snapshot.
+  // Permit a strictly newer waiting state so a room can start a fresh match.
+  if (prev.status === 'finished' && status !== 'finished') {
+    if (status !== 'waiting' || time <= prev.time) return false;
+  }
+
   // Count ticks share one start timestamp. Ignore delayed/out-of-order ticks, and do
   // not let stale phase packets undo a later hit/duel state within the same count phase.
   const phaseRank: Record<string, number> = {
