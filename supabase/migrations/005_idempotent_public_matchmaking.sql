@@ -208,4 +208,3 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.find_or_create_public_room(INTEGER, TEXT, TEXT)
 TO anon, authenticated;
-
