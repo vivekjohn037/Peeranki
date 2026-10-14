@@ -35,6 +35,7 @@ import type { RpsChoice, WeaponType } from './game/rules';
 
 import {
   saveGameState,
+  requestPlayerAction,
   subscribeToGameState,
   createPrivateRoom,
   joinRoom,
@@ -76,7 +77,7 @@ interface Player {
   duelChoiceRequest: OnlineDuelChoiceRequest | null;
 }
 
-type OnlineAction = PlayerAction & { nonce: string };
+type OnlineAction = PlayerAction & { nonce: string; receivedAt?: string };
 type OnlineDuelChoiceRequest = { nonce: string; playerId: number; round: number; choice: RpsChoice };
 
 function normalizeOnlineAction(value: unknown): OnlineAction | null {
@@ -86,7 +87,7 @@ function normalizeOnlineAction(value: unknown): OnlineAction | null {
       typeof raw.weapon !== 'string' || !ACTIVE_WEAPONS.includes(raw.weapon as WeaponType) ||
       !Array.isArray(raw.targetIds) || raw.targetIds.length < 1 || raw.targetIds.length > 2 ||
       !raw.targetIds.every((id) => Number.isInteger(id))) return null;
-  return { nonce: raw.nonce, shooterId: raw.shooterId as number, weapon: raw.weapon as WeaponType, targetIds: raw.targetIds as number[] };
+  return { nonce: raw.nonce, shooterId: raw.shooterId as number, weapon: raw.weapon as WeaponType, targetIds: raw.targetIds as number[], receivedAt: typeof raw.received_at === 'string' ? raw.received_at : undefined };
 }
 
 let matchDurationMinutes: (typeof MATCH_DURATIONS)[number] = 5;
@@ -274,6 +275,7 @@ function createOfflinePlayers(
 
 const COUNT_TO = 10;
 const ACTION_LIMIT_MS = 10_000;
+const ACTION_NETWORK_GRACE_MS = 3_000;
 const COUNTING_SPEED = 200;
 const NEXT_ROUND_DELAY = 900;
 const HEARTBEAT_INTERVAL = 5000;
@@ -628,6 +630,29 @@ async function syncGameState(
     gameStatus,
     effectiveTimestamp,
   );
+}
+
+/** Retry idempotent state snapshots when Supabase briefly drops a write. */
+async function syncGameStateWithRetry(
+  currentShooter: number | null,
+  countNumber: number,
+  gameStatus: string,
+  explicitCountingTimestamp?: string | null,
+) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await syncGameState(currentShooter, countNumber, gameStatus, explicitCountingTimestamp);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        console.warn(`[Peeranki Diagnostics] ${gameStatus} state save failed (attempt ${attempt}/3); retrying.`, error);
+        await new Promise((resolve) => window.setTimeout(resolve, attempt * 250));
+      }
+    }
+  }
+  throw lastError;
 }
 
 function startRoomHeartbeat() {
@@ -4424,8 +4449,6 @@ if (offlineMode) {
       this.uiManager.showToast(`🏆 ${lastRoundMessage}`, 'success');
     }
 
-    if (amHost()) void this.processPendingAction();
-
     if (gameState.game_status === 'playing' && amHost() && this.roundPhase === 'waiting' && !this.countingTimer) {
       console.log('[Peeranki Diagnostics] Authoritative host transitioning room from playing to counting.');
       this.startCounting();
@@ -4475,9 +4498,7 @@ if (offlineMode) {
       this.countingTimer = undefined;
     }
 
-    if (
-      gameState.game_status === 'shooting'
-    ) {
+    if (gameState.game_status === 'shooting' || gameState.game_status === 'action_requested') {
       this.countingTimer?.remove(false);
       this.countingTimer = undefined;
       this.roundPhase = 'shooting';
@@ -4505,17 +4526,18 @@ if (offlineMode) {
           : 'Waiting for the shooter...',
       );
       this.markShooter();
+      if (amHost()) void this.processPendingAction();
       return;
     }
 
     if (
-      gameState.game_status === 'shot'
+      gameState.game_status === 'shot' || gameState.game_status === 'action_timeout'
     ) {
       this.stopActionClock();
       this.roundPhase = 'waiting';
-      this.statusText?.setText(
-        'Shot recorded. Next round...',
-      );
+      this.statusText?.setText(gameState.game_status === 'action_timeout'
+        ? 'No shot arrived before time ran out. The turn was skipped.'
+        : 'Shot confirmed. Next round...');
       this.markShooter();
 
       if (
@@ -5064,7 +5086,10 @@ if (offlineMode) {
       }
       this.syncUI();
     }
-    if (remaining === 0 && (offlineMode || amHost())) this.endActionOnTimeout();
+    if (remaining === 0 && (offlineMode || amHost())) {
+      if (offlineMode || Date.now() >= deadline + ACTION_NETWORK_GRACE_MS) this.endActionOnTimeout();
+      else this.countText?.setText('ACTION 0s • waiting for shot sync...');
+    }
   }
 
   private stopActionClock() {
@@ -5076,7 +5101,7 @@ if (offlineMode) {
     if (
       this.gameFinished || this.roundPhase !== 'shooting' ||
       (!offlineMode && !amHost()) || !shootingDeadlineAt ||
-      Date.now() < Date.parse(shootingDeadlineAt)
+      Date.now() < Date.parse(shootingDeadlineAt) + (offlineMode ? 0 : ACTION_NETWORK_GRACE_MS)
     ) return;
 
     const shooterIndex = this.currentShooter;
@@ -5088,7 +5113,7 @@ if (offlineMode) {
     this.roundPhase = 'waiting';
     this.statusText?.setText('Time is up. Starting the next tower count...');
     this.countText?.setText('ACTION TIME UP');
-    if (!offlineMode) void syncGameState(shooterIndex, COUNT_TO, 'shot');
+    if (!offlineMode) void syncGameState(shooterIndex, COUNT_TO, 'action_timeout');
 
     if (!this.nextRoundTimer) {
       this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
@@ -5128,7 +5153,15 @@ private async requestHostAction(action: PlayerAction) {
   const nonce = `${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
   shooter.actionRequest = { ...action, nonce };
   this.statusText?.setText('Sending action to the host...');
-  await syncGameState(this.currentShooter, this.countNumber, 'action_requested');
+  try {
+    await requestPlayerAction(roomCode, sessionId, shooter.actionRequest);
+    this.statusText?.setText('Shot sent. Waiting for the host to confirm the result...');
+  } catch (error) {
+    console.error('[Peeranki Diagnostics] Could not confirm the online shot request:', error);
+    this.statusText?.setText('Shot request could not reach the host. Check the connection before trying again.');
+    this.uiManager.showToast('⚠️ Shot request was not confirmed. Check your connection.', 'alert');
+    this.syncUI();
+  }
 }
 
 private async processPendingAction() {
@@ -5153,12 +5186,16 @@ private async processPendingAction() {
     );
     return;
   }
-  if (!shootingDeadlineAt || Date.now() >= Date.parse(shootingDeadlineAt)) {
+  const receivedAt = action.receivedAt ? Date.parse(action.receivedAt) : 0;
+  const deadline = Date.parse(shootingDeadlineAt);
+  const expired = !shootingDeadlineAt || !Number.isFinite(deadline) ||
+    (receivedAt > 0 ? receivedAt > deadline + ACTION_NETWORK_GRACE_MS : Date.now() > deadline + ACTION_NETWORK_GRACE_MS);
+  if (expired) {
     this.endActionOnTimeout();
     return;
   }
 
-  if (!authorized || !this.runPlayerAction(action)) {
+  if (!authorized || !this.runPlayerAction(action, action.receivedAt)) {
     this.statusText?.setText('The host rejected an invalid or expired action.');
     await syncGameState(this.currentShooter, this.countNumber, 'shooting');
   }
@@ -5171,10 +5208,10 @@ private shootPlayer(index: number) {
     this.roundPhase !== 'shooting' ||
     this.currentShooter < 0 ||
     !shootingDeadlineAt ||
-    ((offlineMode || amHost()) && Date.now() >= Date.parse(shootingDeadlineAt)) ||
+    ((offlineMode || amHost()) && Date.now() >= Date.parse(shootingDeadlineAt) + (offlineMode ? 0 : ACTION_NETWORK_GRACE_MS)) ||
     this.matchTimeExpired()
   ) {
-    if (shootingDeadlineAt && Date.now() >= Date.parse(shootingDeadlineAt) && (offlineMode || amHost())) {
+    if (shootingDeadlineAt && Date.now() >= Date.parse(shootingDeadlineAt) + (offlineMode ? 0 : ACTION_NETWORK_GRACE_MS) && (offlineMode || amHost())) {
       this.endActionOnTimeout();
     }
     if (this.matchTimeExpired() && (offlineMode || amHost())) void this.finishMatch();
@@ -5265,13 +5302,16 @@ private submitPlayerAction(action: PlayerAction, previewTarget?: Player) {
   this.runPlayerAction(action);
 }
 
-private runPlayerAction(action: PlayerAction): boolean {
+private runPlayerAction(action: PlayerAction, receivedAt?: string): boolean {
   if (this.gameFinished || this.roundPhase !== 'shooting' || (!offlineMode && !amHost())) return false;
   if (this.matchTimeExpired()) {
     if (offlineMode || amHost()) void this.finishMatch();
     return false;
   }
-  if (!shootingDeadlineAt || Date.now() >= Date.parse(shootingDeadlineAt)) {
+  const deadline = Date.parse(shootingDeadlineAt);
+  const receivedAtMs = receivedAt ? Date.parse(receivedAt) : 0;
+  const actionTime = receivedAtMs > 0 ? receivedAtMs : Date.now();
+  if (!shootingDeadlineAt || !Number.isFinite(deadline) || actionTime > deadline + (offlineMode ? 0 : ACTION_NETWORK_GRACE_MS)) {
     if (offlineMode || amHost()) this.endActionOnTimeout();
     return false;
   }
@@ -5424,18 +5464,26 @@ void this.recordShot();
 
     if (alive.length <= 1) {
       if (!offlineMode && !amHost()) {
-        await syncGameState(this.currentShooter, COUNT_TO, 'shot');
+        await syncGameStateWithRetry(this.currentShooter, COUNT_TO, 'shot');
         return;
       }
       await this.finishRound();
       return;
     }
 
-    await syncGameState(
-      this.currentShooter,
-      COUNT_TO,
-      'shot',
-    );
+    try {
+      await syncGameStateWithRetry(this.currentShooter, COUNT_TO, 'shot');
+    } catch (error) {
+      console.error('[Peeranki Diagnostics] Could not persist online shot; will retry the same state:', error);
+      this.statusText?.setText('Shot applied. Reconnecting to sync it with everyone…');
+      this.uiManager.showToast('⚠️ Sync interrupted. Retrying this shot with everyone…', 'alert');
+      const roomAtFailure = roomCode;
+      this.time.delayedCall(1_000, () => {
+        if (this.isCurrentOnlineGame() && roomCode === roomAtFailure && this.roundPhase === 'waiting' && !this.gameFinished) {
+          void this.recordShot();
+        }
+      });
+    }
   }
 
   private refreshWeaponPicker() {
@@ -5547,14 +5595,40 @@ void this.recordShot();
     const winnerIndex = players.findIndex((player) => player.id === winner.id);
     const winnerCard = this.playerObjects[winnerIndex];
     if (winnerCard) this.tweens.add({ targets: winnerCard, scale: { from: 1, to: 1.12 }, duration: 300, yoyo: true, repeat: 2, ease: 'Back.Out' });
-    if (!offlineMode) await syncGameState(null, 0, 'round_won');
-    this.markShooter();
-    if (!this.nextRoundTimer) {
-      this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
-        this.nextRoundTimer = undefined;
-        this.startCounting();
-      });
+    if (!offlineMode) {
+      try {
+        await syncGameStateWithRetry(null, 0, 'round_won');
+      } catch (error) {
+        console.error('[Peeranki Diagnostics] Could not persist round result; retrying without awarding it twice:', error);
+        this.statusText?.setText('Round result is ready. Reconnecting to sync it with everyone…');
+        this.uiManager.showToast('⚠️ Round result is waiting to sync. Retrying…', 'alert');
+        this.retryRoundWinSync();
+        return;
+      }
     }
+    this.markShooter();
+    this.scheduleNextRound();
+  }
+
+  private retryRoundWinSync() {
+    this.time.delayedCall(1_000, () => {
+      if (!this.isCurrentOnlineGame() || this.gameFinished || this.roundPhase !== 'waiting') return;
+      void syncGameStateWithRetry(null, 0, 'round_won').then(() => {
+        this.markShooter();
+        this.scheduleNextRound();
+      }).catch((error) => {
+        console.warn('[Peeranki Diagnostics] Round result is still waiting for Supabase:', error);
+        this.retryRoundWinSync();
+      });
+    });
+  }
+
+  private scheduleNextRound() {
+    if (this.nextRoundTimer || this.gameFinished) return;
+    this.nextRoundTimer = this.time.delayedCall(NEXT_ROUND_DELAY, () => {
+      this.nextRoundTimer = undefined;
+      this.startCounting();
+    });
   }
 
   private async finishMatch() {
