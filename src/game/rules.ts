@@ -112,6 +112,17 @@ export function normalizeWeapons(value: unknown): WeaponType[] {
   return normalized;
 }
 
+/** Shield stays owned, but is hidden from the player's card for the round it was shattered. */
+export function getVisibleWeapons(
+  weapons: WeaponType[],
+  shieldDisabledRound: number,
+  playerMatchRound: number,
+): WeaponType[] {
+  return weapons.filter((weapon) =>
+    weapon !== 'shield' || shieldDisabledRound !== playerMatchRound,
+  );
+}
+
 export function nextWeaponUpgrade(weapons: WeaponType[], round: number): WeaponType | undefined {
   const eligible = WEAPON_ORDER.slice(1, Math.min(round, WEAPON_ORDER.length - 1) + 1);
   return eligible.find((weapon) => {
