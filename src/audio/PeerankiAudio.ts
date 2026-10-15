@@ -179,11 +179,6 @@ export class PeerankiAudioSystem {
     if (typeof window === 'undefined') return;
 
     // Immediately preload only primary UI sounds to prevent network congestion at startup
-    const immediateSFX: PeerankiAudioEffect[] = ['click', 'select'];
-    immediateSFX.forEach((name) => {
-      void this.loadAudioBuffer(name);
-    });
-
     // Lazily preload common gameplay sounds during browser idle time so game boot is immediate
     const scheduleLazy =
       (window as any).requestIdleCallback ||
@@ -194,7 +189,6 @@ export class PeerankiAudioSystem {
         'shoot',
         'cannon',
         'hit',
-        'count_tick',
         'shooter_selected',
       ];
       gameplaySFX.forEach((name) => {
@@ -524,6 +518,9 @@ export class PeerankiAudioSystem {
    * with real-time procedural audio synthesis fallback.
    */
   public effect(effectName: PeerankiAudioEffect) {
+    // Routine UI taps and every-step counting ticks became repetitive, especially on mobile.
+    // Keep the calls harmless for older UI code, but do not create audio or fetch their samples.
+    if (effectName === 'click' || effectName === 'select' || effectName === 'count_tick') return;
     if (this.isMuted()) return;
     const sfxVol = getStoredSfxVolume();
     if (sfxVol === 0) return;
