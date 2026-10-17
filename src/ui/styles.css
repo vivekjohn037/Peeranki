@@ -71,13 +71,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 14px;
-  background: rgba(24, 32, 41, 0.92);
+  padding: 8px 16px;
+  background: rgba(24, 32, 41, 0.88);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--pk-border-subtle);
-  min-height: 44px;
-  max-height: 48px;
+  min-height: 52px;
   box-sizing: border-box;
   flex-shrink: 0;
 }
@@ -316,28 +315,24 @@
    ============================================================== */
 .pk-board-scroll-area {
   flex: 1 1 auto;
-  overflow: hidden;
-  padding: 6px 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  min-height: 0;
-  width: 100%;
-  height: 100%;
+  -webkit-overflow-scrolling: touch;
 }
 
 .pk-board-grid {
   display: grid;
-  gap: 6px;
+  gap: 12px;
   width: 100%;
-  max-width: 1100px;
-  height: 100%;
-  max-height: 100%;
+  max-width: 960px;
   margin: auto;
-  align-content: stretch;
+  align-content: center;
   justify-content: center;
-  box-sizing: border-box;
 }
 
 /* Card item */
@@ -345,21 +340,19 @@
   position: relative;
   background: linear-gradient(180deg, #17212d 0%, #121922 100%);
   border: 1.5px solid var(--pk-border-subtle);
-  border-radius: 12px;
-  padding: 5px 6px;
+  border-radius: 14px;
+  padding: 10px 8px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between;
   text-align: center;
   box-sizing: border-box;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 3px 12px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 16px rgba(0, 0, 0, 0.35);
   transition: border-color 0.15s ease,
               box-shadow 0.15s ease,
               background-color 0.15s ease,
               transform 0.1s ease;
-  min-height: 0;
-  height: 100%;
+  min-height: 135px;
   cursor: default;
   touch-action: manipulation;
   user-select: none;
@@ -481,25 +474,19 @@
 /* Tower Visual */
 .pk-tower-stage-wrapper {
   position: relative;
-  width: 100%;
-  max-width: 64px;
-  height: 100%;
-  max-height: 56px;
-  min-height: 22px;
-  flex: 1 1 auto;
+  width: 60px;
+  height: 60px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 2px 0;
+  margin: 4px 0;
 }
 
 .pk-tower-img {
-  width: auto;
-  height: 100%;
-  max-width: 58px;
-  max-height: 52px;
+  width: 56px;
+  height: 56px;
   object-fit: contain;
-  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.4));
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.4));
   transition: transform 0.2s ease;
 }
 
@@ -1136,73 +1123,51 @@
 
 /* --- PORTRAIT ORIENTATION (Mobile phones held vertically) --- */
 #game-ui-root.pk-orientation-portrait .pk-board-grid {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  justify-content: center;
+  align-content: center;
+  gap: 10px;
   width: 100%;
   max-width: 100%;
-  height: 100%;
-  max-height: 100%;
-  align-content: stretch;
-  justify-content: stretch;
-  box-sizing: border-box;
 }
 
 #game-ui-root.pk-orientation-portrait .pk-player-card {
-  min-height: 0;
-  height: 100%;
-  padding: 4px 6px;
+  min-height: 120px;
+  padding: 8px 8px;
   width: 100%;
 }
 
 #game-ui-root.pk-orientation-portrait .pk-tower-stage-wrapper {
-  max-height: 44px;
-  min-height: 20px;
+  width: 48px;
+  height: 48px;
 }
 
 #game-ui-root.pk-orientation-portrait .pk-tower-img {
-  max-height: 42px;
+  width: 44px;
+  height: 44px;
 }
 
 #game-ui-root.pk-orientation-portrait .pk-hud-bottombar {
-  padding: 6px 10px;
+  padding: 8px 12px;
 }
 
 #game-ui-root.pk-orientation-portrait .pk-weapon-chip {
-  padding: 0 8px;
-  font-size: 11.5px;
-  min-height: 36px;
+  padding: 0 9px;
+  font-size: 12px;
 }
 
 /* --- LANDSCAPE ORIENTATION (Mobile phones held horizontally or Desktop) --- */
 #game-ui-root.pk-orientation-landscape .pk-board-grid {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  justify-content: center;
+  align-content: center;
+  gap: 12px;
   width: 100%;
   max-width: 100%;
-  height: 100%;
-  max-height: 100%;
-  align-content: stretch;
-  justify-content: stretch;
-  box-sizing: border-box;
 }
 
 #game-ui-root.pk-orientation-landscape .pk-player-card {
-  min-height: 0;
-  height: 100%;
   width: 100%;
-}
-
-.pk-card-compact {
-  padding: 2px 4px !important;
-  border-radius: 8px !important;
-}
-
-.pk-card-compact .pk-card-header {
-  margin-bottom: 1px !important;
-}
-
-.pk-card-compact .pk-card-stage-name {
-  margin-bottom: 1px !important;
-}
-
-.pk-card-compact .pk-card-points {
-  margin-top: 1px !important;
 }
 
 /* Compact height landscape (Mobile landscape, e.g. < 480px height) */
@@ -2096,52 +2061,10 @@
 }
 
 .pk-duellog-body {
-  padding: clamp(10px, 1.8vh, 18px) clamp(12px, 2vw, 22px);
+  padding: 18px 22px;
   overflow-y: auto;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-@media (max-width: 480px) {
-  .pk-hide-on-tiny-screen {
-    display: none !important;
-  }
-}
-
-@media (max-height: 540px) {
-  .pk-duellog-header {
-    padding: 8px 14px 6px;
-  }
-  .pk-duellog-title {
-    font-size: 15px;
-  }
-  .pk-duellog-badge {
-    display: none;
-  }
-  .pk-duellog-tabs {
-    padding: 6px 12px;
-  }
-  .pk-duellog-tab {
-    padding: 6px 8px;
-    font-size: 11px;
-  }
-  .pk-duellog-footer {
-    padding: 6px 14px;
-  }
-  .pk-fighter-avatar {
-    font-size: 20px;
-  }
-  .pk-fighter-name {
-    font-size: 11px;
-    margin-bottom: 4px;
-  }
-  .pk-fighter-weapon-emoji {
-    font-size: 18px;
-  }
-  .pk-clash-arena {
-    padding: 8px;
-    gap: 8px;
-  }
+  flex: 1;
+  min-height: 320px;
 }
 
 /* Watch View */

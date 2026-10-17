@@ -382,10 +382,7 @@ test('5. SUPABASE MULTIPLAYER ROOM LIFECYCLE', async (t) => {
 
     const reloaded = await getGameState(roomCode);
     assert.equal(reloaded.game_status, 'counting');
-    assert.equal(
-      new Date(reloaded.counting_start_timestamp).toISOString(),
-      new Date(testTimestamp).toISOString()
-    );
+    assert.equal(reloaded.counting_start_timestamp, testTimestamp);
 
     const COUNTING_SPEED = 200;
     const COUNT_TO = 10;
@@ -643,10 +640,7 @@ test('8. MULTIPLAYER 3-PLAYER FULL FLOW & COUNTDOWN SYNC', async () => {
   await saveGameState(code, countingPlayers, 3, null, 0, 'counting', testTimestamp);
   const countingState = await getGameState(code);
   assert.equal(countingState.game_status, 'counting');
-  assert.equal(
-    new Date(countingState.counting_start_timestamp).toISOString(),
-    new Date(testTimestamp).toISOString()
-  );
+  assert.equal(countingState.counting_start_timestamp, testTimestamp);
 
   // 4. Verify all 3 clients derive consistent count progression locally
   const COUNTING_SPEED = 200;
