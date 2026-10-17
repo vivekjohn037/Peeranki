@@ -1,5 +1,6 @@
 import type { GameOverState, UICallbacks } from './types';
 import { addFastTapListener } from './touchUtils';
+import { escapeHtml } from './html';
 
 const CONFETTI_COUNT = 44;
 const CONFETTI_COLORS = [
@@ -70,7 +71,7 @@ export class GameOverModalComponent {
 
     this.backdropEl.style.display = 'flex';
 
-    const winnerNames = state.winners.map((w) => w.name).join(' & ') || 'Match Finished';
+    const winnerNames = escapeHtml(state.winners.map((w) => w.name).join(' & ') || 'Match Finished');
     const winnerKey = `${state.winners.map((w) => `${w.id}-${w.eliminationPoints}`).join(',')}:${state.allPlayers.length}`;
 
     if (this.isShowing && this.currentWinnerKey === winnerKey) {
@@ -93,8 +94,8 @@ export class GameOverModalComponent {
       const isWinner = state.winners.some((w) => w.id === player.id);
       statsRowsHtml += `
         <div class="pk-gameover-stat-row">
-          <span>${rank === 0 ? '🥇' : rank === 1 ? '🥈' : rank === 2 ? '🥉' : `${rank + 1}.`} ${player.name}${isWinner ? ' (Winner)' : ''}</span>
-          <span style="font-weight: 700; color: #f2cf66;">⭐ ${player.eliminationPoints} pts · ${player.weapons.length} weapons</span>
+          <span>${rank === 0 ? '🥇' : rank === 1 ? '🥈' : rank === 2 ? '🥉' : `${rank + 1}.`} ${escapeHtml(player.name)}${isWinner ? ' (Winner)' : ''}</span>
+          <span style="font-weight: 700; color: #f2cf66;">⭐ ${escapeHtml(player.eliminationPoints)} pts · ${escapeHtml(player.weapons.length)} weapons</span>
         </div>
       `;
     });

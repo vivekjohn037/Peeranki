@@ -24,6 +24,9 @@ DECLARE
     char_index INTEGER;
     stale_cutoff TIMESTAMPTZ := now() - interval '30 seconds';
 BEGIN
+    IF auth.uid() IS NULL THEN
+        RAISE EXCEPTION 'An authenticated player session is required';
+    END IF;
     IF p_max_players IS NULL OR p_max_players < 3 OR p_max_players > 10 THEN
         RAISE EXCEPTION 'Player count must be between 3 and 10';
     END IF;
@@ -33,6 +36,15 @@ BEGIN
 
     IF p_player_name = '' OR p_session_id = '' THEN
         RAISE EXCEPTION 'Player name and session are required';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM public.game_states AS g,
+             jsonb_array_elements(COALESCE(g.players, '[]'::JSONB)) AS p
+        WHERE p->>'session_id' = p_session_id
+          AND COALESCE(p->>'auth_uid', '') <> auth.uid()::TEXT
+    ) THEN
+        RAISE EXCEPTION 'This player session belongs to another account';
     END IF;
 
     -- Serialize retries from the same client session to prevent duplicate rooms.
@@ -76,7 +88,7 @@ BEGIN
         SELECT COALESCE(
             jsonb_agg(
                 CASE WHEN p->>'session_id' = p_session_id
-                    THEN p || jsonb_build_object('connected', true, 'last_seen', now()::TEXT)
+                    THEN p || jsonb_build_object('connected', true, 'last_seen', now()::TEXT, 'auth_uid', auth.uid()::TEXT)
                     ELSE p
                 END
                 ORDER BY (p->>'id')::INTEGER
@@ -139,6 +151,7 @@ BEGIN
                 'stage', 0,
                 'alive', true,
                 'session_id', p_session_id,
+                'auth_uid', auth.uid()::TEXT,
                 'connected', true,
                 'last_seen', now()::TEXT
             )
@@ -177,6 +190,7 @@ BEGIN
                     'stage', 0,
                     'alive', true,
                     'session_id', p_session_id,
+                    'auth_uid', auth.uid()::TEXT,
                     'connected', true,
                     'last_seen', now()::TEXT,
                     'weapons', jsonb_build_array('gun'),

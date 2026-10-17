@@ -4,7 +4,9 @@ import { GameUIManager } from './ui/GameUIManager';
 import type { HUDState, UIPlayer, DuelState, GameOverState } from './ui/types';
 import { PeerankiAudio } from './audio/PeerankiAudio';
 import { showHowToPlayModal } from './ui/HowToPlayModalComponent';
-import { showExitGameModal } from './ui/ExitGameModalComponent';
+import { getExitGameModal, showExitGameModal } from './ui/ExitGameModalComponent';
+import { App } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import {
   type AnimalAvatarId,
   AVATAR_IDS,
@@ -34,9 +36,21 @@ import {
 } from './game/rules';
 import type { RpsChoice, WeaponType } from './game/rules';
 
+if (Capacitor.isNativePlatform()) {
+  void App.addListener('backButton', () => {
+    const exitModal = getExitGameModal();
+    if (exitModal.isOpen()) {
+      exitModal.close();
+      return;
+    }
+    showExitGameModal();
+  });
+}
+
 import {
   saveGameState,
   requestPlayerAction,
+  submitDuelChoice as submitDuelChoiceAtomic,
   subscribeToGameState,
   createPrivateRoom,
   joinRoom,
@@ -47,8 +61,6 @@ import {
   touchPlayer,
   cleanupStalePlayers,
   claimHost,
-  getStoredServerRegion,
-  setStoredServerRegion,
   supabase,
   broadcastRoomStateDelta,
 } from './supabase';
@@ -61,6 +73,7 @@ interface Player {
   stage: number;
   alive: boolean;
   sessionId: string;
+  authUid?: string;
   connected: boolean;
   lastSeen: string;
   weapons: WeaponType[];
@@ -498,6 +511,7 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
           : typeof rawPlayer?.sessionId === 'string'
             ? rawPlayer.sessionId
             : '',
+      authUid: typeof rawPlayer?.auth_uid === 'string' ? rawPlayer.auth_uid : undefined,
       connected:
         typeof rawPlayer?.connected === 'boolean'
           ? rawPlayer.connected
@@ -601,6 +615,7 @@ async function syncGameState(
       stage: player.stage,
       alive: player.alive,
       session_id: player.sessionId,
+      auth_uid: player.authUid,
       connected: true,
       last_seen: player.lastSeen,
       weapons: player.weapons,
@@ -1421,16 +1436,6 @@ class SettingsScene extends Phaser.Scene {
         redraw();
       });
 
-      const serverInfo = getStoredServerRegion();
-      const serverBtn = makeButton(this, rightColX, height * 0.58,
-        `🌐 SERVER: ${serverInfo.flag} ${serverInfo.isMumbai ? 'MUMBAI (ap-south-1)' : 'SINGAPORE'}`, '#1e293b', 12, colWidth, 40);
-      serverBtn.on('pointerdown', () => {
-        const next = serverInfo.isMumbai ? 'singapore' : 'mumbai';
-        setStoredServerRegion(next);
-        PeerankiAudio.effect('select');
-        redraw();
-      });
-
       const guideBtn = makeButton(this, rightColX, height * 0.70,
         '📖 HOW TO PLAY GUIDE', '#1e293b', 13, colWidth, 40);
       guideBtn.on('pointerdown', () => {
@@ -1540,16 +1545,6 @@ class SettingsScene extends Phaser.Scene {
       keyboard.on('pointerdown', () => {
         settings.keyboardControls = !settings.keyboardControls;
         saveSettings(settings);
-        redraw();
-      });
-
-      const serverInfo = getStoredServerRegion();
-      const serverBtn = makeButton(this, width / 2, 412,
-        `🌐 SERVER: ${serverInfo.flag} ${serverInfo.isMumbai ? 'MUMBAI (ap-south-1)' : 'SINGAPORE'}`, '#1e293b', 12, contentWidth, 38);
-      serverBtn.on('pointerdown', () => {
-        const next = serverInfo.isMumbai ? 'singapore' : 'mumbai';
-        setStoredServerRegion(next);
-        PeerankiAudio.effect('select');
         redraw();
       });
 
@@ -1884,15 +1879,7 @@ class OnlineModeScene extends Phaser.Scene {
         color: '#8a99a8',
       }).setOrigin(0.5);
 
-      const serverInfo = getStoredServerRegion();
-      this.add.text(leftColX, height * 0.30, `🌐 SERVER: ${serverInfo.flag} ${serverInfo.name}`, {
-        fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-        fontSize: '12px',
-        color: '#60a5fa',
-        fontStyle: 'bold',
-      }).setOrigin(0.5);
-
-      addMatchDurationPicker(this, leftColX, height * 0.48);
+      addMatchDurationPicker(this, leftColX, height * 0.40);
 
       const backButton = makeButton(
         this,
@@ -1956,15 +1943,7 @@ class OnlineModeScene extends Phaser.Scene {
         fontStyle: 'bold',
       }).setOrigin(0.5);
 
-      const serverInfo = getStoredServerRegion();
-      this.add.text(width / 2, titleY + 28, `🌐 SERVER: ${serverInfo.flag} ${serverInfo.name}`, {
-        fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-        fontSize: '11.5px',
-        color: '#60a5fa',
-        fontStyle: 'bold',
-      }).setOrigin(0.5);
-
-      const pickerY = titleY + 62;
+      const pickerY = titleY + 46;
       addMatchDurationPicker(this, width / 2, pickerY);
 
       const btnH = 54;
@@ -3272,6 +3251,7 @@ class LobbyScene extends Phaser.Scene {
         stage: 0,
         alive: true,
         session_id: player.sessionId,
+        auth_uid: player.authUid,
         connected: true,
         last_seen: player.lastSeen,
         weapons: ['gun'],
@@ -3794,7 +3774,6 @@ if (offlineMode) {
       isMuted: PeerankiAudio.isMuted(),
       roomCode: offlineMode ? undefined : roomCode,
       latencyMs: this.currentLatencyMs,
-      serverRegionName: getStoredServerRegion().name,
       connectedCount: connectedPlayers().length,
       maxPlayers,
     };
@@ -4053,7 +4032,7 @@ if (offlineMode) {
     });
   }
 
-  private updatePlayerVisual(index: number) {
+  private updatePlayerVisual(index: number, sync = true) {
     const player = players[index];
     const container =
       this.playerObjects[index];
@@ -4078,24 +4057,27 @@ if (offlineMode) {
       container.list[6] as Phaser.GameObjects.Container;
 
     const avatarDef = getAvatarDef(player.avatar);
-    avatarBadge.removeAll(true);
-    if (player.connected) {
-      const ring = this.add.circle(0, 0, 14, 0x0f172a, 0.95)
-        .setStrokeStyle(2, avatarDef.borderColorHex, 0.95);
-      let visual: Phaser.GameObjects.GameObject;
-      if (this.textures.exists(`avatar_${avatarDef.id}`)) {
-        visual = this.add.image(0, 0, `avatar_${avatarDef.id}`).setDisplaySize(24, 24);
-      } else {
-        visual = this.add.text(0, 0, avatarDef.emoji, { fontSize: '15px' }).setOrigin(0.5);
+    const avatarRenderKey = `${player.connected}:${avatarDef.id}`;
+    if (container.getData('renderedAvatarKey') !== avatarRenderKey) {
+      avatarBadge.removeAll(true);
+      if (player.connected) {
+        const ring = this.add.circle(0, 0, 14, 0x0f172a, 0.95)
+          .setStrokeStyle(2, avatarDef.borderColorHex, 0.95);
+        let visual: Phaser.GameObjects.GameObject;
+        if (this.textures.exists(`avatar_${avatarDef.id}`)) {
+          visual = this.add.image(0, 0, `avatar_${avatarDef.id}`).setDisplaySize(24, 24);
+        } else {
+          visual = this.add.text(0, 0, avatarDef.emoji, { fontSize: '15px' }).setOrigin(0.5);
+        }
+        avatarBadge.add([ring, visual]);
       }
-      avatarBadge.add([ring, visual]);
+      container.setData('renderedAvatarKey', avatarRenderKey);
     }
 
-    name.setText(
-      player.connected
-        ? `${avatarDef.emoji} ${player.name}`
-        : `Player ${player.id}`,
-    );
+    const nameText = player.connected
+      ? `${avatarDef.emoji} ${player.name}`
+      : `Player ${player.id}`;
+    if (name.text !== nameText) name.setText(nameText);
 
     const previousStage = tower.getData('renderedStage') as number | undefined;
     const previousConnected = tower.getData('renderedConnected') as boolean | undefined;
@@ -4171,56 +4153,52 @@ if (offlineMode) {
       }
     }
 
-    stage.setText(
-      player.connected
-        ? stageNames[player.stage]
-        : 'Empty',
-    );
+    const stageText = player.connected ? stageNames[player.stage] : 'Empty';
+    if (stage.text !== stageText) stage.setText(stageText);
 
     const visibleWeapons = getVisibleWeapons(
       player.weapons,
       player.shieldDisabledRound,
       player.matchRound,
     );
-    inventory.removeAll(true);
-    if (player.connected) {
-      const iconStep = 25;
-      visibleWeapons.forEach((weapon, iconIndex) => {
-        inventory.add(this.add.image((iconIndex - (visibleWeapons.length - 1) / 2) * iconStep, 0, `weapon-${weapon}`).setDisplaySize(23, 23));
-      });
+    const weaponKey = player.connected ? visibleWeapons.join(',') : '';
+    if (container.getData('renderedWeaponKey') !== weaponKey) {
+      inventory.removeAll(true);
+      if (player.connected) {
+        const iconStep = 25;
+        visibleWeapons.forEach((weapon, iconIndex) => {
+          inventory.add(this.add.image((iconIndex - (visibleWeapons.length - 1) / 2) * iconStep, 0, `weapon-${weapon}`).setDisplaySize(23, 23));
+        });
+      }
+      container.setData('renderedWeaponKey', weaponKey);
     }
-    slot.setText(player.connected ? `⭐ ${player.eliminationPoints} elimination point${player.eliminationPoints === 1 ? '' : 's'}` : 'Available slot');
-    slot.setStyle({ fontSize: '10px', color: '#f2cf66', align: 'center' });
+    const pointsText = player.connected
+      ? `⭐ ${player.eliminationPoints} elimination point${player.eliminationPoints === 1 ? '' : 's'}`
+      : 'Available slot';
+    if (slot.text !== pointsText) slot.setText(pointsText);
 
-    container.setAlpha(
-      player.connected
-        ? player.alive
-          ? 1
-          : 0.35
-        : 0.28,
-    );
+    const targetAlpha = player.connected ? (player.alive ? 1 : 0.35) : 0.28;
+    if (container.alpha !== targetAlpha) container.setAlpha(targetAlpha);
 
-    background.setStrokeStyle(
-      index === this.currentShooter &&
-        player.connected
-        ? 3
-        : 2,
-      index === this.currentShooter &&
-        player.connected
-        ? 0x4da3ff
-        : 0x444c55,
-    );
-    this.tweens.killTweensOf(container);
-    if (index === this.currentShooter && player.connected && player.alive) {
-      this.tweens.add({ targets: container, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
-    } else {
+    const isShooter = index === this.currentShooter && player.connected;
+    if (container.getData('renderedShooterHighlight') !== isShooter) {
+      background.setStrokeStyle(isShooter ? 3 : 2, isShooter ? 0x4da3ff : 0x444c55);
+      container.setData('renderedShooterHighlight', isShooter);
+    }
+    const shouldPulse = isShooter && player.alive;
+    if (container.getData('renderedShooterPulse') !== shouldPulse) {
+      this.tweens.killTweensOf(container);
       container.setScale(1);
+      if (shouldPulse) {
+        this.tweens.add({ targets: container, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
+      }
+      container.setData('renderedShooterPulse', shouldPulse);
     }
 
     container.setInteractive(
       player.connected && player.alive,
     );
-    this.syncUI();
+    if (sync) this.syncUI();
   }
 
   private markShooter() {
@@ -4229,8 +4207,9 @@ if (offlineMode) {
       index < this.playerObjects.length;
       index += 1
     ) {
-      this.updatePlayerVisual(index);
+      this.updatePlayerVisual(index, false);
     }
+    this.syncUI();
   }
 
   private startRealtimeSync() {
@@ -4715,7 +4694,7 @@ if (offlineMode) {
     }
   }
 
-  private submitDuelChoice(choice: RpsChoice) {
+  private async submitDuelChoice(choice: RpsChoice) {
     if (!this.duelActive || this.gameFinished) return;
     const playerId = offlineMode ? 1 : myPlayerId;
     const player = players[playerId - 1];
@@ -4738,11 +4717,25 @@ if (offlineMode) {
       round: duelRound,
       choice,
     };
+    const choiceNonce = player.duelChoiceRequest.nonce;
     this.statusText?.setText('Choice sent. Waiting for both players...');
     this.renderDuelControls();
-    void syncGameState(null, 0, 'duel').then(() => {
-      if (amHost()) return this.processPendingDuelChoices();
-    });
+    try {
+      await submitDuelChoiceAtomic(this.roomCodeAtStart, sessionId, duelRound, choice, choiceNonce);
+      if (!this.isCurrentOnlineGame() || player.duelChoiceRequest?.nonce !== choiceNonce) return;
+      // Realtime room updates remain the only source for other players' choices;
+      // applying an RPC response here could roll back a newer simultaneous choice.
+      player.duelChoice = choice;
+      player.duelChoiceRequest = null;
+      this.renderDuelControls();
+      if (amHost()) await this.processPendingDuelChoices();
+    } catch (error) {
+      if (player.duelChoiceRequest?.nonce !== choiceNonce || !this.isCurrentOnlineGame()) return;
+      player.duelChoiceRequest = null;
+      this.statusText?.setText('Choice was not saved. Please choose again.');
+      this.renderDuelControls();
+      this.uiManager?.showToast(error instanceof Error ? error.message : 'Could not save your duel choice. Try again.', 'alert');
+    }
   }
 
   private scheduleOfflineBotChoices() {
@@ -4959,7 +4952,7 @@ if (offlineMode) {
           countdown: this.countNumber,
           counting_start_timestamp: countingStartTimestamp,
           counting_start_index: this.startIndex,
-        });
+        }, false);
       }
     } else if (this.countNumber === 0 && this.startIndex >= 0 && players[this.startIndex]) {
       this.countText?.setText('Count 0 / 10');
