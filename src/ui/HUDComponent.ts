@@ -63,6 +63,9 @@ export class HUDComponent {
         <button type="button" class="pk-btn-icon pk-btn-help" aria-label="How to Play Guide" title="How to Play Guide">
           ❓
         </button>
+        <button type="button" class="pk-btn-icon pk-voice-btn-top" aria-label="Voice Chat Options" title="Voice Chat Options">
+          🎙️
+        </button>
         <button type="button" class="pk-btn-icon pk-audio-btn" aria-label="Mute Background Music" title="Mute Background Music">
           🔊
         </button>
@@ -138,6 +141,17 @@ export class HUDComponent {
       this.updateAudioButtonState(isInitiallyMuted);
     } catch {
       // ignore
+    }
+
+    const voiceBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-voice-btn-top');
+    if (voiceBtn) {
+      addFastTapListener(voiceBtn, () => {
+        if (this.callbacks.onOpenVoiceSettings) {
+          this.callbacks.onOpenVoiceSettings();
+        } else if (this.callbacks.onToggleVoiceChat) {
+          this.callbacks.onToggleVoiceChat();
+        }
+      });
     }
 
     addFastTapListener(this.audioBtnEl, () => {
@@ -248,6 +262,33 @@ export class HUDComponent {
 
     // Audio status
     this.updateAudioButtonState(state.isMuted);
+
+    // Voice status button
+    const voiceBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-voice-btn-top');
+    if (voiceBtn) {
+      if (state.isOffline) {
+        voiceBtn.style.display = 'none';
+      } else {
+        voiceBtn.style.display = 'inline-flex';
+        if (state.isVoiceActive) {
+          if (state.isVoiceMuted) {
+            voiceBtn.textContent = '🔇';
+            voiceBtn.title = 'Voice Chat (Muted) - Tap for Settings';
+            voiceBtn.classList.add('is-voice-muted');
+            voiceBtn.classList.remove('is-voice-active');
+          } else {
+            voiceBtn.textContent = '🎙️';
+            voiceBtn.title = `Voice Chat Active (${state.voicePeerCount ?? 0} in call) - Tap for Settings`;
+            voiceBtn.classList.add('is-voice-active');
+            voiceBtn.classList.remove('is-voice-muted');
+          }
+        } else {
+          voiceBtn.textContent = '🎙️';
+          voiceBtn.title = 'Join Voice Chat';
+          voiceBtn.classList.remove('is-voice-active', 'is-voice-muted');
+        }
+      }
+    }
 
     // Network Status Badge
     if (state.isOffline) {

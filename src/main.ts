@@ -66,6 +66,8 @@ import {
   broadcastRoomStateDelta,
 } from './supabase';
 import { showMultiplayerErrorModal } from './ui/multiplayerModal';
+import { VoiceChatService } from './audio/VoiceChatService';
+import { VoiceModalComponent } from './ui/VoiceModalComponent';
 
 interface Player {
   id: number;
@@ -922,6 +924,7 @@ class MenuScene extends Phaser.Scene {
   private nameInputX = 0;
   private nameInputY = 0;
   private nameInputW = 300;
+  private scaleResizeHandler?: (gameSize: Phaser.Structs.Size) => void;
   private resizeHandler = () => {
     if (this.nameInput) {
       positionHtmlInput(this, this.nameInput, this.nameInputX, this.nameInputY, this.nameInputW);
@@ -960,12 +963,19 @@ class MenuScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(-5);
 
-      this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-        bg.setPosition(gameSize.width / 2, gameSize.height / 2);
-        bg.setScale(Math.max(gameSize.width / bg.width, gameSize.height / bg.height));
-        overlay.setPosition(gameSize.width / 2, gameSize.height / 2);
-        overlay.setSize(gameSize.width, gameSize.height);
-      });
+      this.scaleResizeHandler = (gameSize: Phaser.Structs.Size) => {
+        if (!this.scene.isActive('MenuScene')) return;
+        if (bg && bg.active && bg.width && bg.height) {
+          bg.setPosition(gameSize.width / 2, gameSize.height / 2);
+          bg.setScale(Math.max(gameSize.width / bg.width, gameSize.height / bg.height));
+        }
+        if (overlay && overlay.active && overlay.geom) {
+          overlay.setPosition(gameSize.width / 2, gameSize.height / 2);
+          overlay.setSize(gameSize.width, gameSize.height);
+        }
+      };
+
+      this.scale.on('resize', this.scaleResizeHandler);
     }
 
     const isLandscape = width >= 640 && width > height * 1.12;
@@ -1303,14 +1313,16 @@ class MenuScene extends Phaser.Scene {
       this.scene.restart();
     });
 
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      muteButton.setPosition(24, 24);
-      rightTopBtn.setPosition(gameSize.width - 26, 24);
-      guideTopBtn.setPosition(gameSize.width - 82, 24);
+    const topBtnsResizeHandler = (gameSize: Phaser.Structs.Size) => {
+      if (!this.scene.isActive('MenuScene')) return;
+      if (muteButton && muteButton.active) muteButton.setPosition(24, 24);
+      if (rightTopBtn && rightTopBtn.active) rightTopBtn.setPosition(gameSize.width - 26, 24);
+      if (guideTopBtn && guideTopBtn.active) guideTopBtn.setPosition(gameSize.width - 82, 24);
       if (this.nameInput) {
         positionHtmlInput(this, this.nameInput, this.nameInputX, this.nameInputY, this.nameInputW);
       }
-    });
+    };
+    this.scale.on('resize', topBtnsResizeHandler);
 
     rightTopBtn.on('pointerdown', () => {
       PeerankiAudio.effect('select');
@@ -1319,6 +1331,11 @@ class MenuScene extends Phaser.Scene {
   }
 
   private cleanup() {
+    if (this.scaleResizeHandler) {
+      this.scale.off('resize', this.scaleResizeHandler);
+      this.scaleResizeHandler = undefined;
+    }
+    this.scale.removeAllListeners('resize');
     window.removeEventListener('resize', this.resizeHandler);
     this.nameInput?.remove();
     this.nameInput = undefined;
@@ -2835,6 +2852,9 @@ class LobbyScene extends Phaser.Scene {
   private lastPlayerCount = 0;
   private lifecycleGeneration = 0;
   private roomCodeAtStart = '';
+  private voiceService: VoiceChatService | null = null;
+  private voiceModal: VoiceModalComponent | null = null;
+  private voiceButton?: Phaser.GameObjects.Text;
 
   constructor() {
     super('LobbyScene');
@@ -2929,6 +2949,21 @@ class LobbyScene extends Phaser.Scene {
           void this.startGame();
         });
       }
+
+      this.voiceButton = makeButton(
+        this,
+        leftColX,
+        height * 0.72,
+        '🎙️ VOICE CHAT SETTINGS',
+        '#0284c7',
+        13,
+        Math.min(260, colWidth * 0.85),
+        38,
+      );
+
+      this.voiceButton.on('pointerdown', () => {
+        this.openVoiceSettings();
+      });
 
       this.leaveButton = makeButton(
         this,
@@ -3065,15 +3100,33 @@ class LobbyScene extends Phaser.Scene {
         });
       }
 
+      const vBtnY = amHost() && !isPublicRoom ? height - 60 : height - 42;
+      const lBtnY = amHost() && !isPublicRoom ? height - 20 : height - 80;
+
+      this.voiceButton = makeButton(
+        this,
+        width / 2,
+        vBtnY,
+        '🎙️ VOICE CHAT SETTINGS',
+        '#0284c7',
+        12,
+        Math.min(220, lobbyBtnW * 0.75),
+        36,
+      );
+
+      this.voiceButton.on('pointerdown', () => {
+        this.openVoiceSettings();
+      });
+
       this.leaveButton = makeButton(
         this,
         width / 2,
-        amHost() && !isPublicRoom ? height - 24 : height - 48,
+        lBtnY,
         'LEAVE ROOM',
         '#9b3030',
-        14,
+        13,
         Math.min(180, lobbyBtnW * 0.65),
-        38,
+        36,
       );
 
       this.leaveButton.on('pointerdown', async () => {
@@ -3091,7 +3144,14 @@ class LobbyScene extends Phaser.Scene {
         if (!this.isCurrentLobby()) return;
         this.applyRoomState(gameState);
       },
+      (event, payload) => {
+        if (event === 'voice_signal' && this.voiceService) {
+          void this.voiceService.handleSignalingMessage(payload);
+        }
+      },
     );
+
+    this.initVoiceChat();
 
     void this.refreshLobby();
 
@@ -3102,6 +3162,45 @@ class LobbyScene extends Phaser.Scene {
         void this.refreshLobby();
       },
     });
+  }
+
+  private initVoiceChat() {
+    if (this.voiceService || !this.isCurrentLobby()) return;
+    const currentCode = this.roomCodeAtStart;
+    const localPlayer = players.find((p) => p.sessionId === sessionId);
+    const myName = localPlayer?.name || getStoredPlayerName() || 'Player';
+
+    this.voiceModal = new VoiceModalComponent();
+    document.body.appendChild(this.voiceModal.getElement());
+
+    this.voiceService = new VoiceChatService({
+      roomCode: currentCode,
+      localSessionId: sessionId,
+      localPlayerName: myName,
+      signalingSend: async (event, payload) => {
+        if (this.realtimeChannel) {
+          await this.realtimeChannel.sendEvent(event, payload);
+        }
+      },
+      onPeersChange: () => {
+        this.voiceModal?.renderPeers();
+      },
+      onLocalAudioLevel: (level) => {
+        this.voiceModal?.updateLocalAudioLevel(level);
+      },
+      onStatusChange: () => {
+        this.voiceModal?.updateView();
+      },
+    });
+
+    this.voiceModal.setVoiceService(this.voiceService);
+  }
+
+  private openVoiceSettings() {
+    if (!this.voiceService) {
+      this.initVoiceChat();
+    }
+    this.voiceModal?.show();
   }
 
   private applyRoomState(gameState: any) {
@@ -3344,6 +3443,16 @@ class LobbyScene extends Phaser.Scene {
       void this.realtimeChannel.unsubscribe();
       this.realtimeChannel = undefined;
     }
+
+    if (this.voiceService) {
+      this.voiceService.cleanup();
+      this.voiceService = null;
+    }
+
+    if (this.voiceModal) {
+      this.voiceModal.getElement().remove();
+      this.voiceModal = null;
+    }
   }
 }
 
@@ -3397,6 +3506,7 @@ private nextStartIndex = -1;
   private endingAfterPlayerDeparture = false;
   private lifecycleGeneration = 0;
   private roomCodeAtStart = '';
+  private voiceService: VoiceChatService | null = null;
 
   constructor() {
     super('GameScene');
@@ -3524,6 +3634,15 @@ private nextStartIndex = -1;
       onOpenDuelLog: () => {
         this.uiManager.openDuelLog();
       },
+      onOpenVoiceSettings: () => {
+        this.uiManager.openVoiceSettings();
+      },
+      onToggleVoiceChat: () => {
+        if (!this.voiceService) {
+          this.initVoiceChat();
+        }
+        this.uiManager.openVoiceSettings();
+      },
     });
 
     this.events.on('shutdown', () => {
@@ -3635,9 +3754,13 @@ if (offlineMode) {
       .setInteractive({ useHandCursor: true });
 
     // Keep the touch target inside the visible game area as Phaser FIT resizes.
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      this.leaveButton?.setPosition(gameSize.width - 54, 32);
-    });
+    const gameResizeHandler = (gameSize: Phaser.Structs.Size) => {
+      if (!this.scene.isActive('GameScene')) return;
+      if (this.leaveButton && this.leaveButton.active) {
+        this.leaveButton.setPosition(gameSize.width - 54, 32);
+      }
+    };
+    this.scale.on('resize', gameResizeHandler);
 
     this.leaveButton.on(
       'pointerdown',
@@ -3790,6 +3913,10 @@ if (offlineMode) {
       latencyMs: this.currentLatencyMs,
       connectedCount: connectedPlayers().length,
       maxPlayers,
+      isVoiceActive: this.voiceService ? this.voiceService.isVoiceActive() : false,
+      isVoiceMuted: this.voiceService ? this.voiceService.isMuted() : false,
+      voiceMode: this.voiceService ? this.voiceService.getVoiceMode() : undefined,
+      voicePeerCount: this.voiceService ? this.voiceService.getPeerStates().size : 0,
     };
 
     const uiPlayers: UIPlayer[] = players.slice(0, maxPlayers).map((p) => ({
@@ -4206,7 +4333,44 @@ if (offlineMode) {
         if (!this.isCurrentOnlineGame()) return;
         this.applyRemoteGameState(gameState);
       },
+      (event, payload) => {
+        if (event === 'voice_signal' && this.voiceService) {
+          void this.voiceService.handleSignalingMessage(payload);
+        }
+      },
     );
+
+    this.initVoiceChat();
+  }
+
+  private initVoiceChat() {
+    if (offlineMode || !this.isCurrentOnlineGame() || this.voiceService) return;
+    const currentCode = this.roomCodeAtStart;
+    const localPlayer = players.find((p) => p.sessionId === sessionId);
+    const myName = localPlayer?.name || getStoredPlayerName() || 'Player';
+
+    this.voiceService = new VoiceChatService({
+      roomCode: currentCode,
+      localSessionId: sessionId,
+      localPlayerName: myName,
+      signalingSend: async (event, payload) => {
+        if (this.realtimeChannel) {
+          await this.realtimeChannel.sendEvent(event, payload);
+        }
+      },
+      onPeersChange: () => {
+        this.uiManager.refreshVoicePeers();
+        this.scheduleUiSync();
+      },
+      onLocalAudioLevel: (level) => {
+        this.uiManager.updateVoiceLocalAudioLevel(level);
+      },
+      onStatusChange: () => {
+        this.scheduleUiSync();
+      },
+    });
+
+    this.uiManager.setVoiceService(this.voiceService);
   }
 
   private isCurrentOnlineGame() {
@@ -6054,6 +6218,13 @@ void this.recordShot();
       void this.realtimeChannel.unsubscribe();
       this.realtimeChannel = undefined;
     }
+
+    if (this.voiceService) {
+      this.voiceService.cleanup();
+      this.voiceService = null;
+    }
+
+    this.scale.removeAllListeners('resize');
 
     this.uiManager.unmount();
     if (this.game.canvas) {
