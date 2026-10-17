@@ -93,6 +93,9 @@ DECLARE
     v_elem JSONB;
     v_now TEXT := to_jsonb(now()::timestamptz)#>>'{}';
 BEGIN
+    IF auth.uid() IS NULL THEN
+        RAISE EXCEPTION 'An authenticated player session is required' USING ERRCODE = '42501';
+    END IF;
     IF length(v_code) != 6 THEN
         RAISE EXCEPTION 'Room does not exist' USING ERRCODE = 'P0001';
     END IF;
@@ -123,6 +126,9 @@ BEGIN
     FOR v_i IN 0 .. (jsonb_array_length(v_players) - 1) LOOP
         v_elem := v_players->v_i;
         IF (v_elem->>'session_id') = v_session THEN
+            IF coalesce(v_elem->>'auth_uid', '') <> auth.uid()::TEXT THEN
+                RAISE EXCEPTION 'This player session belongs to another account' USING ERRCODE = '42501';
+            END IF;
             v_player_idx := v_i;
         END IF;
         IF (v_elem->>'connected')::boolean = true THEN
@@ -171,6 +177,7 @@ BEGIN
                 'stage', 0,
                 'alive', true,
                 'session_id', v_session,
+                'auth_uid', auth.uid()::TEXT,
                 'connected', true,
                 'last_seen', v_now,
                 'weapons', jsonb_build_array('gun'),
@@ -333,6 +340,13 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    IF auth.uid() IS NULL OR NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(coalesce(v_room.players, '[]'::jsonb)) AS p
+        WHERE p->>'session_id' = v_session AND p->>'auth_uid' = auth.uid()::TEXT
+    ) THEN
+        RAISE EXCEPTION 'This player session does not belong to the authenticated user' USING ERRCODE = '42501';
+    END IF;
+
     v_players := coalesce(v_room.players, '[]'::jsonb);
 
     FOR v_i IN 0 .. (jsonb_array_length(v_players) - 1) LOOP
@@ -398,6 +412,13 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    IF auth.uid() IS NULL OR NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(coalesce(v_room.players, '[]'::jsonb)) AS p
+        WHERE p->>'auth_uid' = auth.uid()::TEXT
+    ) THEN
+        RAISE EXCEPTION 'Only a room member can clean up stale players' USING ERRCODE = '42501';
+    END IF;
+
     v_players := coalesce(v_room.players, '[]'::jsonb);
 
     FOR v_i IN 0 .. (jsonb_array_length(v_players) - 1) LOOP
@@ -457,6 +478,13 @@ BEGIN
 
     IF NOT FOUND THEN
         RETURN NULL;
+    END IF;
+
+    IF auth.uid() IS NULL OR NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(coalesce(v_room.players, '[]'::jsonb)) AS p
+        WHERE p->>'session_id' = v_session AND p->>'auth_uid' = auth.uid()::TEXT
+    ) THEN
+        RAISE EXCEPTION 'This player session does not belong to the authenticated user' USING ERRCODE = '42501';
     END IF;
 
     v_players := coalesce(v_room.players, '[]'::jsonb);

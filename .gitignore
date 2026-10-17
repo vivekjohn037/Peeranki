@@ -16,9 +16,16 @@ dist-ssr
 .env
 .env.*
 !.env.example
+.dev.vars*
+.wrangler/
+.npmrc
+!.npmrc.example
 *.key
 *.pem
 *.keystore
+*.jks
+*.p12
+*.pfx
 keystore.properties
 *.secret
 

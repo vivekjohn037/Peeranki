@@ -29,6 +29,7 @@ export class HUDComponent {
   private weaponChipsContainer!: HTMLElement;
   private countdownNumEl!: HTMLElement;
   private countdownSubEl!: HTMLElement;
+  private weaponChipRenderKey = '';
 
   constructor(callbacks: UICallbacks) {
     this.callbacks = callbacks;
@@ -257,10 +258,9 @@ export class HUDComponent {
     } else {
       this.currentRoomCode = state.roomCode ?? null;
       this.netBadgeEl.className = 'pk-net-status-badge is-online';
-      const regionText = state.serverRegionName ? ` • ${state.serverRegionName}` : ' • 🇮🇳 Mumbai';
       const pingText = typeof state.latencyMs === 'number' ? ` • ${state.latencyMs}ms` : '';
-      this.netBadgeEl.innerHTML = `<span class="pk-net-dot">🟢</span><span class="pk-net-label">${state.roomCode ? `ROOM ${state.roomCode}` : 'ONLINE'}${regionText}${pingText}</span><span class="pk-net-copy-hint">📋</span>`;
-      this.netBadgeEl.title = state.roomCode ? `Room Code: ${state.roomCode}${regionText} (Tap to copy)` : 'Connected to Online Match';
+      this.netBadgeEl.innerHTML = `<span class="pk-net-dot">🟢</span><span class="pk-net-label">${state.roomCode ? `ROOM ${state.roomCode}` : 'ONLINE'}${pingText}</span><span class="pk-net-copy-hint">📋</span>`;
+      this.netBadgeEl.title = state.roomCode ? `Room Code: ${state.roomCode} (Tap to copy)` : 'Connected to Online Match';
     }
 
     // 2. Announcer Banner
@@ -332,14 +332,16 @@ export class HUDComponent {
   }
 
   private renderWeaponChips(state: HUDState) {
-    this.weaponChipsContainer.innerHTML = '';
-
     const activeWeapons = state.availableWeapons.filter(
       (w): w is WeaponType => w !== 'shield' && Boolean(WEAPON_INFO[w]),
     );
 
     // If active weapons is empty, default to gun
     const list = activeWeapons.length > 0 ? activeWeapons : (['gun'] as WeaponType[]);
+    const renderKey = `${list.join(',')}|${state.selectedWeapon}`;
+    if (renderKey === this.weaponChipRenderKey) return;
+    this.weaponChipRenderKey = renderKey;
+    this.weaponChipsContainer.innerHTML = '';
 
     list.forEach((weapon) => {
       const chip = document.createElement('button');

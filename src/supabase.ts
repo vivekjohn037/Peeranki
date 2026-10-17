@@ -204,6 +204,14 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
   }
 
   // 7. Permission / RLS failure (PostgreSQL 42501: insufficient_privilege)
+  if (searchStr.includes('anonymous') && (searchStr.includes('disabled') || searchStr.includes('not enabled'))) {
+    return new MultiplayerError(
+      'PERMISSION_DENIED',
+      'Guest sign-in is disabled for online play.',
+      'Enable Anonymous Sign-Ins in Supabase Authentication settings, then retry.',
+      err,
+    );
+  }
   if (
     rawCode === '42501' ||
     status === 401 ||
@@ -215,7 +223,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
     return new MultiplayerError(
       'PERMISSION_DENIED',
       'Database permission denied (Row Level Security check failed).',
-      'Ensure anon and authenticated roles have permissions on game_states and RPC functions.',
+      'Enable Anonymous Sign-Ins and apply migrations 001 through 008. Room access is limited to the signed-in room members.',
       err,
     );
   }
@@ -243,6 +251,7 @@ export function parseSupabaseError(err: unknown, defaultMessage = 'Multiplayer r
 
 let realClient: SupabaseClient | null = null;
 let clientInitializationError: unknown;
+let anonymousAuthPromise: Promise<void> | null = null;
 
 if (isServiceRoleKey(supabaseKey)) {
   console.error(
@@ -276,70 +285,6 @@ try {
     localStorage.removeItem('peeranki_custom_supabase_key');
   }
 } catch {}
-
-export interface ServerRegionInfo {
-  id: string;
-  name: string;
-  flag: string;
-  location: string;
-  isMumbai: boolean;
-  endpoint: string;
-}
-
-const REGION_STORAGE_KEY = 'peeranki_server_region';
-const CUSTOM_URL_STORAGE_KEY = 'peeranki_custom_supabase_url';
-
-export function getStoredServerRegion(): ServerRegionInfo {
-  let regionId = 'mumbai';
-  try {
-    const saved = localStorage.getItem(REGION_STORAGE_KEY);
-    if (saved) regionId = saved;
-  } catch {}
-
-  const customUrl = getStoredCustomUrl();
-  const endpoint = customUrl || (typeof supabaseUrl === 'string' && supabaseUrl ? supabaseUrl : 'https://srygfddukkmrqgdnrbqp.supabase.co');
-
-  if (regionId === 'mumbai' || !regionId) {
-    return {
-      id: 'mumbai',
-      name: 'Mumbai (ap-south-1)',
-      flag: '🇮🇳',
-      location: 'Mumbai, India',
-      isMumbai: true,
-      endpoint,
-    };
-  }
-
-  return {
-    id: regionId,
-    name: 'Singapore (ap-southeast-1)',
-    flag: '🇸🇬',
-    location: 'Singapore',
-    isMumbai: false,
-    endpoint,
-  };
-}
-
-export function setStoredServerRegion(regionId: string, customUrl?: string) {
-  try {
-    localStorage.setItem(REGION_STORAGE_KEY, regionId);
-    if (customUrl !== undefined) {
-      if (customUrl.trim()) {
-        localStorage.setItem(CUSTOM_URL_STORAGE_KEY, customUrl.trim());
-      } else {
-        localStorage.removeItem(CUSTOM_URL_STORAGE_KEY);
-      }
-    }
-  } catch {}
-}
-
-function getStoredCustomUrl(): string | null {
-  try {
-    return localStorage.getItem(CUSTOM_URL_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
 
 export function getSupabaseConfigStatus() {
   return {
@@ -389,6 +334,28 @@ function configuredClient(): SupabaseClient {
     `Initialization error: ${errorMessage(clientInitializationError)}. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.`,
     clientInitializationError,
   );
+}
+
+/** Establish a persistent Supabase anonymous-auth identity before room data access. */
+async function authenticatedClient(): Promise<SupabaseClient> {
+  const client = configuredClient();
+  const { data, error } = await client.auth.getSession();
+  if (error) throw parseSupabaseError(error, 'Could not restore online player identity.');
+  if (data.session?.user?.id) return client;
+
+  if (!anonymousAuthPromise) {
+    anonymousAuthPromise = client.auth.signInAnonymously().then(({ data: signInData, error: signInError }) => {
+      if (signInError) throw signInError;
+      if (!signInData.user?.id) throw new Error('Supabase did not return an anonymous player identity.');
+    });
+  }
+  try {
+    await anonymousAuthPromise;
+  } catch (authError) {
+    anonymousAuthPromise = null;
+    throw parseSupabaseError(authError, 'Could not create an online player identity.');
+  }
+  return client;
 }
 
 // -------------------------------------------------------------
@@ -629,7 +596,11 @@ export async function createPrivateRoom(
   const hostName = playerName.trim() || 'Player 1';
 
   if (isProduction || hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
+    const { data: authData, error: authError } = await client.auth.getSession();
+    if (authError || !authData.session?.user.id) {
+      throw parseSupabaseError(authError ?? new Error('Missing anonymous session.'), 'Online identity is unavailable.');
+    }
     try {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const roomCode = generateRoomCode();
@@ -640,6 +611,7 @@ export async function createPrivateRoom(
             stage: 0,
             alive: true,
             session_id: sessionId,
+            auth_uid: authData.session.user.id,
             connected: true,
             last_seen: new Date().toISOString(),
           },
@@ -744,7 +716,7 @@ export async function joinRoom(
   }
 
   if (isProduction || hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const { data, error } = await client.rpc('join_private_room', {
         p_room_code: cleanCode,
@@ -827,7 +799,7 @@ export async function findOrCreateRandomRoom(
   }
 
   if (isProduction || hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const { data, error } = await client.rpc('find_or_create_public_room', {
         p_max_players: maxPlayers,
@@ -906,7 +878,7 @@ export async function fetchGameRoom(roomCode: string) {
   if (!cleanCode) return null;
 
   if (isProduction || hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const { data, error } = await client
         .from('game_states')
@@ -1056,7 +1028,7 @@ export async function claimHost(roomCode: string, newHostSessionId: string, expe
   console.log(`[Peeranki Diagnostics] Claiming host authority for room ${cleanCode} with session ${newHostSessionId}`);
 
   if (hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const { data, error } = await client.rpc('claim_room_host', {
         p_room_code: cleanCode,
@@ -1115,7 +1087,7 @@ export async function saveGameState(
   };
 
   if (hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const updateData: Record<string, any> = {
         players,
@@ -1191,7 +1163,7 @@ export async function requestPlayerAction(roomCode: string, sessionId: string, a
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        const { data, error } = await configuredClient().rpc('request_player_action', { p_room_code: cleanCode, p_session_id: sessionId, p_action: actionPayload });
+        const { data, error } = await (await authenticatedClient()).rpc('request_player_action', { p_room_code: cleanCode, p_session_id: sessionId, p_action: actionPayload });
         if (error) throw parseSupabaseError(error, 'Could not send your shot to the host.');
         if (!data) throw new Error('The room did not confirm your shot request.');
         return data;
@@ -1216,6 +1188,51 @@ export async function requestPlayerAction(roomCode: string, sessionId: string, a
   return updated;
 }
 
+/** Persist one player's duel choice under a database row lock. */
+export async function submitDuelChoice(
+  roomCode: string,
+  sessionId: string,
+  duelRound: number,
+  choice: string,
+  nonce: string,
+) {
+  const cleanCode = roomCode.trim().toUpperCase();
+  if (!cleanCode || !sessionId || !Number.isInteger(duelRound) || duelRound < 1 || !nonce) {
+    throw new Error('Invalid duel choice request.');
+  }
+
+  if (hasAnySupabaseConfiguration) {
+    const { data, error } = await (await authenticatedClient()).rpc('submit_duel_choice', {
+      p_room_code: cleanCode,
+      p_session_id: sessionId,
+      p_duel_round: duelRound,
+      p_choice: choice,
+      p_nonce: nonce,
+    });
+    if (error) throw parseSupabaseError(error, 'Could not lock your duel choice.');
+    if (!data) throw new Error('The room did not confirm your duel choice.');
+    return data;
+  }
+
+  const room = getStoredRoom(cleanCode);
+  if (!room || room.game_status !== 'duel') throw new Error('The duel is no longer accepting choices.');
+  const contenders = room.players.filter((player: any) => player.connected && player.alive);
+  const player = room.players.find((candidate: any) => candidate.session_id === sessionId && candidate.connected && candidate.alive);
+  if (contenders.length !== 2 || !player || Number(player.duel_round ?? 1) !== duelRound) {
+    throw new Error('This session is not an active contestant in that duel round.');
+  }
+  if (player.duel_choice) {
+    if (player.duel_choice === choice) return room;
+    throw new Error('A choice is already locked for this duel round.');
+  }
+  player.duel_choice = choice;
+  player.duel_choice_request = null;
+  player.duel_choice_nonce = nonce;
+  const updated = updateMockRoomPartial(cleanCode, { players: room.players });
+  if (!updated) throw new Error('The room could not save your duel choice.');
+  return updated;
+}
+
 /** Send transient authoritative turn/count fields without persisting a database write per tick. */
 export async function broadcastRoomStateDelta(
   roomCode: string,
@@ -1226,6 +1243,7 @@ export async function broadcastRoomStateDelta(
     counting_start_timestamp?: string | null;
     counting_start_index?: number;
   },
+  allowHttpFallback = true,
 ) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode) return;
@@ -1248,13 +1266,15 @@ export async function broadcastRoomStateDelta(
       const status = await channel.send({ type: 'broadcast', event: 'state_delta', payload: state });
       if (status === 'ok') return;
     } catch {
-      // Fall through to the HTTP broadcast path.
+      // Fall through only for durable/low-frequency phase updates.
     }
-    try {
-      const result = await channel.httpSend('state_delta', state, { timeout: 5_000 });
-      if (result?.success) return;
-    } catch {
-      // A count animation is best effort; durable game state is written at phase changes.
+    if (allowHttpFallback) {
+      try {
+        const result = await channel.httpSend('state_delta', state, { timeout: 5_000 });
+        if (result?.success) return;
+      } catch {
+        // Transient UI state is best effort; durable game state is written at phase changes.
+      }
     }
   }
 
@@ -1272,7 +1292,7 @@ export async function touchPlayer(roomCode: string, sessionId: string) {
   if (!cleanCode || !sessionId) return null;
 
   if (isProduction || hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const { data, error } = await client.rpc('touch_player', {
         p_room_code: cleanCode,
@@ -1304,7 +1324,7 @@ export async function cleanupStalePlayers(roomCode: string, staleSeconds = 30) {
   if (!cleanCode) return null;
 
   if (isProduction || hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const { data, error } = await client.rpc('cleanup_stale_players', {
         p_room_code: cleanCode,
@@ -1341,7 +1361,7 @@ export async function leaveRoom(roomCode: string, sessionId: string) {
   if (!cleanCode || !sessionId) return null;
 
   if (isProduction || hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const { data, error } = await client.rpc('leave_room', {
         p_room_code: cleanCode,
@@ -1600,7 +1620,7 @@ export async function updatePlayerAvatar(
   if (!cleanCode || !sessionId) return;
 
   if (hasAnySupabaseConfiguration) {
-    const client = configuredClient();
+    const client = await authenticatedClient();
     try {
       const room = await fetchGameRoom(cleanCode);
       if (room && Array.isArray(room.players)) {

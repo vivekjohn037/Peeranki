@@ -1,5 +1,6 @@
 import type { DuelState, UICallbacks, RpsChoice } from './types';
 import { addFastTapListener } from './touchUtils';
+import { escapeHtml } from './html';
 
 const RPS_CHOICES: { id: RpsChoice; label: string; emoji: string }[] = [
   { id: 'rock', label: 'Rock', emoji: '🪨' },
@@ -38,9 +39,11 @@ export class DuelModalComponent {
 
     this.backdropEl.style.display = 'flex';
     this.currentChoice = state.myChoice;
+    const opponentNameHtml = escapeHtml(state.opponentName);
+    const roundHtml = escapeHtml(state.round);
 
     this.dialogEl.innerHTML = `
-      <div class="pk-duel-title">⚔️ DUEL ROUND ${state.round}</div>
+      <div class="pk-duel-title">⚔️ DUEL ROUND ${roundHtml}</div>
       <div class="pk-duel-subtitle">
         ${state.canChoose ? 'Both remaining players choose simultaneously!' : 'Watching duel showdown...'}
       </div>
@@ -51,7 +54,7 @@ export class DuelModalComponent {
         </div>
         <div class="pk-duel-vs-divider">VS</div>
         <div class="pk-duel-fighter ${state.opponentSubmitted ? 'is-ready' : 'is-waiting'}">
-          <span class="pk-fighter-name">${state.opponentName}</span>
+          <span class="pk-fighter-name">${opponentNameHtml}</span>
           <span class="pk-fighter-badge">${state.opponentSubmitted ? '🔒 LOCKED IN' : '⏳ CHOOSING...'}</span>
         </div>
       </div>
@@ -66,7 +69,7 @@ export class DuelModalComponent {
             <div class="pk-clash-vs-text">VS</div>
             <div class="pk-clash-card">
               <span class="pk-clash-icon">${RPS_CHOICES.find((c) => c.id === state.opponentChoice)?.emoji ?? '❓'}</span>
-              <span class="pk-clash-label">${state.opponentName}</span>
+              <span class="pk-clash-label">${opponentNameHtml}</span>
             </div>
           </div>
           `

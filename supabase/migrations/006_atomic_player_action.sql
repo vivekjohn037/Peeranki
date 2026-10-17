@@ -59,6 +59,13 @@ BEGIN
         RAISE EXCEPTION 'Room does not exist.' USING ERRCODE = 'P0001';
     END IF;
 
+    IF auth.uid() IS NULL OR NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(coalesce(v_room.players, '[]'::JSONB)) AS p
+        WHERE p->>'session_id' = v_session AND p->>'auth_uid' = auth.uid()::TEXT
+    ) THEN
+        RAISE EXCEPTION 'This player session does not belong to the authenticated user.' USING ERRCODE = '42501';
+    END IF;
+
     IF v_room.game_status <> 'shooting' OR v_room.current_shooter <> v_shooter_id - 1 THEN
         RAISE EXCEPTION 'This shooting turn has ended or belongs to another player.' USING ERRCODE = 'P0001';
     END IF;

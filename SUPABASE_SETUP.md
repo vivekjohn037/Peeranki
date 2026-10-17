@@ -14,6 +14,15 @@ Apply the SQL files in `supabase/migrations/` in numeric order:
 3. `003_atomic_host_handoff.sql` adds guarded, atomic host failover.
 4. `004_online_state_reliability.sql` allows every phase persisted by the client and ends a live 3-player match when a player leaves.
 5. `005_idempotent_public_matchmaking.sql` makes public matchmaking retries safe and avoids duplicate-session/name failures.
+6. `006_atomic_player_action.sql` stores online shots atomically so stale client snapshots cannot overwrite them.
+7. `007_atomic_duel_choice.sql` stores each duel choice under a row lock so simultaneous choices are preserved.
+8. `008_authenticated_room_access.sql` removes public table access and restricts room reads and writes to anonymous-authenticated room members.
+
+**Do not stop after migration 001.** It creates the initial table and policies needed by the later migrations; migration 008 replaces those permissive policies and revokes the anonymous role's direct table/RPC access. On the new project, apply all eight migrations in order before connecting a game build.
+
+### Enable guest authentication
+
+In the new Supabase project, open **Authentication → Sign In / Providers → Anonymous Sign-Ins** and enable anonymous sign-ins before launching the game. Peeranki signs players in anonymously and stores the Auth user ID in each room roster. The final RLS policies use that ID to scope room access. Players do not need to register or provide an email address.
 
 This migration provisions:
 1. **`public.game_states` table**:
@@ -28,7 +37,8 @@ This migration provisions:
    - `game_status`: Phase (`waiting`, `playing`, `counting`, `shooting`, `action_requested`, `shot`, `round_won`, `duel`, `finished`)
    - `created_at` & `updated_at`: Timestamps
 2. **Row Level Security (RLS)**:
-   - SELECT, INSERT, and UPDATE policies granted to `anon` and `authenticated` roles.
+   - After migration 008, only `authenticated` players listed in a room's roster may read or update that room.
+   - Direct deletes are not granted. Joining and atomic shot/duel submissions use restricted RPC functions; room-state writes remain available only to members of that room.
 3. **Room RPC Functions**:
    - `public.join_private_room(p_room_code, p_player_name, p_session_id)`: Joins an existing room or reconnects an existing session.
    - `public.find_or_create_public_room(p_max_players, p_player_name, p_session_id)`: Atomic matchmaking that joins open lobbies or provisions a new one.
@@ -48,7 +58,7 @@ This migration provisions:
 3. In the left navigation menu, click **SQL Editor**.
 4. Click **New Query** (or the **+** button).
 5. Open each migration file in numeric order, copy its entire contents, and run it in the SQL Editor.
-6. Verify that each query executes successfully before running the next one.
+6. Verify each query succeeds. Do not connect or deploy a game build until migration 008 succeeds.
 
 ### How to Verify Database Setup
 
@@ -113,7 +123,7 @@ Peeranki includes a diagnostic modal that surfaces actionable error reports in t
 | `ROOM_NOT_FOUND` | Room code does not exist or lobby has closed. | Verify 6-character code with host. |
 | `ROOM_FULL` | Room has reached maximum capacity. | Ask host to start a match with higher player count or create a new room. |
 | `GAME_IN_PROGRESS` | Battle has already started. | Wait for the round to finish or create a new room. |
-| `PERMISSION_DENIED` | Row Level Security (RLS) rejected the request. | Verify table and RPC grants for `anon` role in migration script. |
+| `PERMISSION_DENIED` | Row Level Security (RLS) rejected the request. | Confirm Anonymous Sign-Ins are enabled and all migrations through 008 succeeded. |
 | `NETWORK_ERROR` | Network timeout or could not reach Supabase servers. | Check internet connection or verify Supabase project is active (not paused). |
 
 ---

@@ -21,6 +21,14 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    IF auth.uid() IS NULL OR NOT EXISTS (
+        SELECT 1 FROM public.game_states AS g,
+             jsonb_array_elements(coalesce(g.players, '[]'::jsonb)) AS p
+        WHERE g.room_code = v_code AND p->>'auth_uid' = auth.uid()::TEXT
+    ) THEN
+        RAISE EXCEPTION 'Only a room member can transfer host authority' USING ERRCODE = '42501';
+    END IF;
+
     SELECT * INTO v_room
     FROM public.game_states
     WHERE room_code = v_code
