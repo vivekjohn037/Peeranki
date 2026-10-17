@@ -634,6 +634,7 @@ export async function createPrivateRoom(
           .single();
 
         if (!error && data) {
+          shouldAcceptRoomState(roomCode, data);
           return data;
         }
 
@@ -730,6 +731,7 @@ export async function joinRoom(
       if (!data) {
         throw new MultiplayerError('ROOM_NOT_FOUND', `Room ${cleanCode} not found or is closed.`);
       }
+      shouldAcceptRoomState(cleanCode, data);
       return data;
     } catch (err) {
       throw parseSupabaseError(err, `Could not join room ${cleanCode}`);
@@ -992,6 +994,11 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     return false;
   }
 
+  // An update with a timestamp strictly older than the last accepted state is stale.
+  if (time > 0 && prev.time > 0 && time < prev.time) {
+    return false;
+  }
+
   // Critical state changes (phase transition, shooter selection, counting start timestamp, countdown tick)
   const stateChanged =
     (Boolean(status) && status !== prev.status) ||
@@ -1169,7 +1176,7 @@ export async function requestPlayerAction(roomCode: string, sessionId: string, a
         return data;
       } catch (error) {
         lastError = error;
-        if (attempt < 3) await new Promise((resolve) => window.setTimeout(resolve, attempt * 250));
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 250));
       }
     }
     throw lastError;

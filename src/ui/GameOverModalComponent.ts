@@ -113,17 +113,25 @@ export class GameOverModalComponent {
         </div>
         <div class="pk-gameover-actions-row">
           <button type="button" class="pk-btn-primary pk-btn-play-again">PLAY AGAIN</button>
+          <button type="button" class="pk-btn-secondary pk-btn-duel-log" title="Watch replay and text summary of recent duel clashes">📜 DUEL LOG & SUMMARY</button>
           <button type="button" class="pk-btn-secondary pk-btn-main-menu">LEAVE</button>
         </div>
       </div>
     `;
 
     const playAgainBtn = this.dialogEl.querySelector('.pk-btn-play-again')!;
+    const duelLogBtn = this.dialogEl.querySelector('.pk-btn-duel-log');
     const mainMenuBtn = this.dialogEl.querySelector('.pk-btn-main-menu')!;
 
     addFastTapListener(playAgainBtn as HTMLElement, () => {
       this.callbacks.onPlayAgain();
     });
+
+    if (duelLogBtn) {
+      addFastTapListener(duelLogBtn as HTMLElement, () => {
+        this.callbacks.onOpenDuelLog?.();
+      });
+    }
 
     addFastTapListener(mainMenuBtn as HTMLElement, () => {
       this.callbacks.onLeaveGame();

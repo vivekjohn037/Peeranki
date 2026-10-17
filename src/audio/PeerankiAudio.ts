@@ -67,8 +67,11 @@ const SFX_ASSET_EXTENSIONS: Partial<Record<PeerankiAudioEffect, 'wav' | 'mp3'>> 
   select: 'wav',
   shoot: 'wav',
   cannon: 'wav',
+  peeranki: 'wav',
   double_peeranki: 'wav',
   hit: 'wav',
+  tower_damage: 'wav',
+  tower_destroyed: 'wav',
   hook: 'wav',
   hook_strip: 'wav',
   elimination: 'wav',
@@ -76,6 +79,7 @@ const SFX_ASSET_EXTENSIONS: Partial<Record<PeerankiAudioEffect, 'wav' | 'mp3'>> 
   duel_start: 'wav',
   rps_clash: 'wav',
   rps_tie: 'mp3',
+  rps_win: 'wav',
   round_win: 'wav',
   victory: 'wav',
   defeat: 'wav',
@@ -208,9 +212,17 @@ export class PeerankiAudioSystem {
     const extension = SFX_ASSET_EXTENSIONS[name as PeerankiAudioEffect];
     if (!extension) return null;
 
+    const fileNameMap: Partial<Record<PeerankiAudioEffect, string>> = {
+      tower_damage: 'hit',
+      tower_destroyed: 'elimination',
+      rps_win: 'round_win',
+      peeranki: 'cannon',
+    };
+    const assetFile = fileNameMap[name as PeerankiAudioEffect] ?? name;
+
     this.pendingBufferFetches.add(name);
     try {
-      const response = await fetch(`/assets/audio/${name}.${extension}`);
+      const response = await fetch(`/assets/audio/${assetFile}.${extension}`);
       if (response.ok) {
         const arrayBuffer = await response.arrayBuffer();
         const ctx = this.getContext();

@@ -152,3 +152,24 @@ export function chooseBotAction(
   const best = options.filter(({ score }) => score === highestScore);
   return pick(best).action;
 }
+
+import { SoundEffectManager, soundEffectManager } from './SoundEffectManager.ts';
+export { SoundEffectManager, soundEffectManager };
+
+/**
+ * Triggers sound feedback for an action resolution through the sound effect manager.
+ */
+export function playResolutionSoundEffects(
+  action: PlayerAction,
+  resolution: Extract<ActionResolution, { accepted: true }>,
+  sfxManager: SoundEffectManager = soundEffectManager,
+): void {
+  // 1. Trigger weapon firing sound clip
+  sfxManager.playShoot(action.weapon);
+
+  // 2. Trigger tower damage / shield / elimination sound clips
+  resolution.hits.forEach((hit) => {
+    sfxManager.playTowerDamage(hit);
+  });
+}
+

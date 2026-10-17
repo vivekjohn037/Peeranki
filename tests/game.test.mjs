@@ -14,7 +14,8 @@ import {
   hasAllWeapons,
   findMatchWinners,
 } from '../src/game/rules.ts';
-import { chooseBotAction, resolvePlayerAction } from '../src/game/engine.ts';
+import { chooseBotAction, resolvePlayerAction, SoundEffectManager, soundEffectManager, playResolutionSoundEffects } from '../src/game/engine.ts';
+import { DuelLogManager, duelLogManager } from '../src/game/DuelLogManager.ts';
 import {
   broadcastRoomStateDelta,
   createPrivateRoom,
@@ -357,7 +358,12 @@ test('5. SUPABASE MULTIPLAYER ROOM LIFECYCLE', async (t) => {
 
   await t.test('online shot requests update only the active shooter entry', async () => {
     const room = await getGameState(roomCode);
-    const players = room.players.map((player) => ({ ...player, action_request: null }));
+    const deadline = new Date(Date.now() + 10_000).toISOString();
+    const players = room.players.map((player) => ({
+      ...player,
+      action_request: null,
+      shooting_deadline_at: deadline,
+    }));
     await saveGameState(roomCode, players, room.max_players, 0, 10, 'shooting');
     await requestPlayerAction(roomCode, sessionIdHost, { shooterId: 1, weapon: 'gun', targetIds: [2], nonce: 'atomic-shot-test' });
     const updated = await getGameState(roomCode);
@@ -742,6 +748,129 @@ test('10. OFFLINE BOT GAME STATE ISOLATION & LEGAL ACTIONS', async () => {
       assert.equal(resolution.accepted, true);
     }
   }
+});
+
+test('10b. SOUND EFFECT MANAGER AUDIO CLIPS & FEEDBACK LOOP', () => {
+  assert.ok(soundEffectManager, 'soundEffectManager singleton must be defined');
+  assert.ok(SoundEffectManager.getInstance(), 'SoundEffectManager.getInstance() must return an instance');
+
+  // Verify core gameplay action methods exist
+  assert.equal(typeof soundEffectManager.playShoot, 'function');
+  assert.equal(typeof soundEffectManager.playTowerDamage, 'function');
+  assert.equal(typeof soundEffectManager.playDuelStart, 'function');
+  assert.equal(typeof soundEffectManager.playDuelClash, 'function');
+  assert.equal(typeof soundEffectManager.playDuelTie, 'function');
+  assert.equal(typeof soundEffectManager.playDuelWin, 'function');
+  assert.equal(typeof soundEffectManager.playRoundWin, 'function');
+  assert.equal(typeof soundEffectManager.playMatchVictory, 'function');
+  assert.equal(typeof soundEffectManager.playMatchDefeat, 'function');
+
+  // Verify volume and mute helpers
+  assert.equal(typeof soundEffectManager.getStoredVolume(), 'number');
+  assert.equal(typeof soundEffectManager.isMuted(), 'boolean');
+
+  // Mock audio triggers for all weapons
+  soundEffectManager.playShoot('gun');
+  soundEffectManager.playShoot('peeranki');
+  soundEffectManager.playShoot('doublePeeranki');
+  soundEffectManager.playShoot('hook');
+
+  // Mock audio triggers for tower damage, shield removal, and elimination
+  soundEffectManager.playTowerDamage({ action: 'tower_damage', stage: 1 });
+  soundEffectManager.playTowerDamage({ action: 'shield_absorbed' });
+  soundEffectManager.playTowerDamage({ action: 'shield_destroyed_for_round' });
+  soundEffectManager.playTowerDamage({ shieldRemoved: true });
+  soundEffectManager.playTowerDamage({ eliminated: true });
+
+  // Mock audio triggers for duel showdown
+  soundEffectManager.playDuelStart();
+  soundEffectManager.playDuelClash();
+  soundEffectManager.playDuelTie();
+  soundEffectManager.playDuelWin();
+
+  // Test action resolution sound helper
+  const mockResolution = {
+    accepted: true,
+    shooterIndex: 0,
+    lastTargetIndex: 1,
+    hits: [
+      {
+        targetIndex: 1,
+        weapon: 'gun',
+        action: 'last_tower',
+        shieldRemoved: false,
+        eliminated: false,
+      },
+    ],
+  };
+
+  playResolutionSoundEffects({ shooterId: 1, weapon: 'gun', targetIds: [2] }, mockResolution);
+});
+
+test('10c. DUEL LOG MANAGER POST-MATCH SUMMARY & AUDIT', async (t) => {
+  await t.test('Records clash outcomes for ties and decisive wins', () => {
+    duelLogManager.clearCurrentMatchLog();
+
+    const tie = duelLogManager.recordDuelOutcome({
+      round: 1,
+      clashNumber: 1,
+      player1: { id: 1, name: 'Alpha', choice: 'rock' },
+      player2: { id: 2, name: 'Beta', choice: 'rock' },
+      result: 'tie',
+    });
+    assert.equal(tie.result, 'tie');
+    assert.equal(tie.round, 1);
+    assert.match(tie.summaryText, /Both picked/);
+
+    const win = duelLogManager.recordDuelOutcome({
+      round: 1,
+      clashNumber: 2,
+      player1: { id: 1, name: 'Alpha', choice: 'paper' },
+      player2: { id: 2, name: 'Beta', choice: 'rock' },
+      result: 'win',
+      winnerId: 1,
+      winnerName: 'Alpha',
+      winnerChoice: 'paper',
+      loserId: 2,
+      loserName: 'Beta',
+      loserChoice: 'rock',
+    });
+    assert.equal(win.result, 'win');
+    assert.equal(win.winnerName, 'Alpha');
+    assert.match(win.narrative, /covers/);
+
+    const matchLog = duelLogManager.getCurrentMatchLog();
+    assert.equal(matchLog.length, 2);
+  });
+
+  await t.test('Computes aggregate stats and hand frequencies accurately', () => {
+    const stats = duelLogManager.getDuelStats();
+    assert.equal(stats.totalClashes, 2);
+    assert.equal(stats.totalTies, 1);
+    assert.equal(stats.totalDecisiveWins, 1);
+    assert.equal(stats.rockCount, 3);
+    assert.equal(stats.paperCount, 1);
+    assert.equal(stats.scissorsCount, 0);
+    assert.equal(stats.mostFavoredChoice, 'rock');
+    assert.equal(stats.winLeaderboard[0]?.name, 'Alpha');
+    assert.equal(stats.winLeaderboard[0]?.wins, 1);
+  });
+
+  await t.test('Generates formatted text-based summary with ASCII report', () => {
+    const summary = duelLogManager.generateFormattedTextSummary();
+    assert.match(summary, /PEERANKI · DUEL SHOWDOWN COMBAT LOG & SUMMARY/);
+    assert.match(summary, /Alpha/);
+    assert.match(summary, /Beta/);
+    assert.match(summary, /Total Clashes Fought : 2/);
+    assert.match(summary, /END OF PEERANKI DUEL COMBAT RECORD/);
+  });
+
+  await t.test('Provides fallback sample log when no duels occurred yet', () => {
+    const freshManager = new DuelLogManager();
+    const effective = freshManager.getEffectiveLog();
+    assert.ok(effective.entries.length > 0);
+    assert.equal(effective.entries[0]?.isSample, true);
+  });
 });
 
 test('11. CLEANUP REALTIME CONNECTIONS', async () => {

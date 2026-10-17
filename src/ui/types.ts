@@ -72,6 +72,7 @@ export interface UICallbacks {
   onLeaveGame: () => void;
   onPlayAgain: () => void;
   onToggleAudio: () => boolean;
+  onOpenDuelLog?: () => void;
 }
 
 export type OrientationMode = 'portrait' | 'landscape';

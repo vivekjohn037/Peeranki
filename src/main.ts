@@ -14,7 +14,8 @@ import {
   getAvatarDef,
   getBotAvatarId,
 } from './game/avatars';
-import { chooseBotAction, resolvePlayerAction } from './game/engine';
+import { chooseBotAction, resolvePlayerAction, soundEffectManager } from './game/engine';
+import { duelLogManager } from './game/DuelLogManager';
 import type { ActionResolution, PlayerAction } from './game/engine';
 import {
   ACTIVE_WEAPONS,
@@ -192,6 +193,7 @@ function clampSetting(value: unknown, fallback: number) {
 function saveSettings(settings: PeerankiSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   PeerankiAudio.applySettings();
+  soundEffectManager.syncVolume();
 }
 
 declare global {
@@ -291,7 +293,7 @@ const COUNT_TO = 10;
 const ACTION_LIMIT_MS = 10_000;
 const ACTION_NETWORK_GRACE_MS = 3_000;
 const COUNTING_SPEED = 200;
-const NEXT_ROUND_DELAY = 900;
+const NEXT_ROUND_DELAY = 450;
 const HEARTBEAT_INTERVAL = 5000;
 const STALE_PLAYER_SECONDS = 30;
 
@@ -368,6 +370,7 @@ function resetMatchLifecycleState(targetMode: 'offline' | 'online' | 'none') {
   countingStartIndex = -1;
   countingStartTimestamp = '';
   shootingDeadlineAt = '';
+  duelLogManager.clearCurrentMatchLog();
   if (targetMode !== 'online' || !matchStartedAt) {
     matchStartedAt = '';
   }
@@ -831,7 +834,7 @@ function makeButton(
 
   const button = scene.add
     .text(x, y, label, {
-      fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       fontSize: `${fontSize}px`,
       fontStyle: 'bold',
       color: '#ffffff',
@@ -848,6 +851,13 @@ function makeButton(
         x: 8,
         y: padY,
       },
+      shadow: {
+        offsetX: 0,
+        offsetY: 2,
+        color: 'rgba(0, 0, 0, 0.4)',
+        blur: 4,
+        fill: true,
+      },
     })
     .setOrigin(0.5, 0.5);
 
@@ -857,10 +867,13 @@ function makeButton(
     button.input.cursor = 'pointer';
   }
 
-  button.on('pointerdown', () => PeerankiAudio.effect('click'));
-  button.on('pointerover', () => scene.tweens.add({ targets: button, scale: 1.025, duration: 80, ease: 'Quad.Out' }));
-  button.on('pointerout', () => scene.tweens.add({ targets: button, scale: 1, duration: 80, ease: 'Quad.Out' }));
-  button.on('pointerdown', () => scene.tweens.add({ targets: button, scale: 0.96, duration: 60, yoyo: true }));
+  button.on('pointerdown', () => {
+    PeerankiAudio.effect('click');
+    button.setScale(0.97);
+  });
+  button.on('pointerup', () => button.setScale(1));
+  button.on('pointerover', () => button.setScale(1.02));
+  button.on('pointerout', () => button.setScale(1));
   return button;
 }
 
@@ -963,8 +976,7 @@ class MenuScene extends Phaser.Scene {
       const rightColX = width * 0.72;
       const colWidth = Math.min(460, width * 0.42);
 
-      const glow = this.add.circle(leftColX, height * 0.16, 56, 0x2878ff, 0.15);
-      this.tweens.add({ targets: glow, alpha: 0.28, scale: 1.15, duration: 1500, yoyo: true, repeat: -1 });
+      this.add.circle(leftColX, height * 0.16, 56, 0x2878ff, 0.18);
       this.add.image(leftColX, height * 0.16, 'peeranki-logo').setDisplaySize(92, 92);
 
       this.add.text(leftColX, height * 0.27, 'PEERANKI', {
@@ -1108,8 +1120,7 @@ class MenuScene extends Phaser.Scene {
 
       // Logo placed safely below top header bar (top buttons finish by y ~39)
       const logoY = Math.max(118, Math.min(142, Math.floor(height * 0.16)));
-      const glow = this.add.circle(width / 2, logoY, 38, 0x2878ff, 0.14);
-      this.tweens.add({ targets: glow, alpha: 0.28, scale: 1.15, duration: 1500, yoyo: true, repeat: -1 });
+      this.add.circle(width / 2, logoY, 38, 0x2878ff, 0.18);
       this.add.image(width / 2, logoY, 'peeranki-logo').setDisplaySize(64, 64);
 
       const titleY = logoY + 48;
@@ -3510,6 +3521,9 @@ private nextStartIndex = -1;
         this.scheduleUiSync();
         return isMuted;
       },
+      onOpenDuelLog: () => {
+        this.uiManager.openDuelLog();
+      },
     });
 
     this.events.on('shutdown', () => {
@@ -4108,47 +4122,21 @@ if (offlineMode) {
       tower.setData('renderedConnected', player.connected);
 
       if (stageChanged) {
-        const eliminated = player.stage >= 3;
         const targetScaleX = newVisuals[0]?.scaleX ?? 1;
         const targetScaleY = newVisuals[0]?.scaleY ?? 1;
+        oldVisuals.forEach((visual) => visual.destroy());
         newVisuals.forEach((visual) => {
-          visual.setAlpha(0);
-          visual.setScale(targetScaleX * 0.72, targetScaleY * 0.72);
+          visual.setScale(targetScaleX, targetScaleY);
+          visual.setAlpha(0.7);
         });
-        const impact = this.add.circle(0, 0, eliminated ? 23 : 16,
-          eliminated ? 0xff5b35 : 0xffd166, eliminated ? 0.55 : 0.4)
-          .setStrokeStyle(eliminated ? 3 : 2, eliminated ? 0xffd166 : 0xffffff)
-          .setDepth(-1);
-        tower.addAt(impact, 0);
         this.tweens.killTweensOf(tower);
+        tower.setX(0);
+        tower.setScale(1);
         this.tweens.add({
-          targets: tower,
-          x: { from: - (eliminated ? 9 : 5), to: eliminated ? 9 : 5 },
-          scale: eliminated ? 1.2 : 1.1,
-          duration: eliminated ? 65 : 55,
-          yoyo: true,
-          repeat: eliminated ? 3 : 2,
-          onComplete: () => {
-            tower.setX(0);
-            tower.setScale(1);
-            oldVisuals.forEach((visual) => visual.destroy());
-            this.tweens.add({
-              targets: newVisuals,
-              alpha: 1,
-              scaleX: targetScaleX,
-              scaleY: targetScaleY,
-              duration: eliminated ? 240 : 180,
-              ease: 'Back.Out',
-              onComplete: () => newVisuals.forEach((visual) => visual.setScale(targetScaleX, targetScaleY)),
-            });
-          },
-        });
-        this.tweens.add({
-          targets: impact,
-          scale: eliminated ? 2.2 : 1.7,
-          alpha: 0,
-          duration: eliminated ? 330 : 220,
-          onComplete: () => impact.destroy(),
+          targets: newVisuals,
+          alpha: 1,
+          duration: 100,
+          ease: 'Quad.Out',
         });
       }
     }
@@ -4189,9 +4177,6 @@ if (offlineMode) {
     if (container.getData('renderedShooterPulse') !== shouldPulse) {
       this.tweens.killTweensOf(container);
       container.setScale(1);
-      if (shouldPulse) {
-        this.tweens.add({ targets: container, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
-      }
       container.setData('renderedShooterPulse', shouldPulse);
     }
 
@@ -4323,16 +4308,16 @@ if (offlineMode) {
             this.uiManager.triggerDamageFlash(idx, isLocal);
 
             if (!p.alive || p.stage >= 3) {
-              PeerankiAudio.effect('tower_destroyed');
+              soundEffectManager.playTowerDamage({ eliminated: true });
               if (isLocal) {
-                PeerankiAudio.effect('defeat');
+                soundEffectManager.playMatchDefeat();
                 try { navigator.vibrate?.([200, 100, 200]); } catch {}
                 this.uiManager.showToast('💥 YOUR TOWER WAS DEMOLISHED! You are eliminated!', 'alert');
               } else {
                 this.uiManager.showToast(`⚡ ${p.name}'s tower was destroyed! Eliminated!`, 'alert');
               }
             } else {
-              PeerankiAudio.effect('tower_damage');
+              soundEffectManager.playTowerDamage({ action: 'tower_damage', stage: p.stage });
               if (isLocal) {
                 try { navigator.vibrate?.([80, 40, 80]); } catch {}
                 this.uiManager.showToast(`🚨 WARNING: Your tower took damage! (Stage ${p.stage}/3)`, 'alert');
@@ -4344,13 +4329,13 @@ if (offlineMode) {
 
           // 2. Shield stripped permanently by hook
           if (prev.weapons.includes('shield') && !p.weapons.includes('shield')) {
-            PeerankiAudio.effect('hook_strip');
+            soundEffectManager.playTowerDamage({ shieldRemoved: true });
             this.uiManager.showToast(`🪝 ${p.name}'s Shield was stripped permanently!`, 'alert');
           }
 
           // 3. Shield shattered for round
           if (prev.shieldDisabledRound !== matchRound && p.shieldDisabledRound === matchRound) {
-            PeerankiAudio.effect('shield_hit');
+            soundEffectManager.playTowerDamage({ action: 'shield_destroyed_for_round' });
             this.uiManager.showToast(`🛡️💥 ${p.name}'s Shield was shattered for this round!`, 'alert');
           }
 
@@ -4637,7 +4622,7 @@ if (offlineMode) {
   }
   private beginDuel() {
     if (this.duelActive || this.gameFinished) return;
-    PeerankiAudio.effect('duel_start');
+    soundEffectManager.playDuelStart();
     this.duelActive = true;
     this.resolvingDuel = false;
     duelRound = 1;
@@ -4742,7 +4727,7 @@ if (offlineMode) {
     if (!offlineMode || !this.duelActive || this.duelBotTimer) return;
     const missingBots = activePlayers().filter((player) => player.alive && player.id !== 1 && !player.duelChoice);
     if (missingBots.length === 0) return;
-    this.duelBotTimer = this.time.delayedCall(420, () => {
+    this.duelBotTimer = this.time.delayedCall(200, () => {
       this.duelBotTimer = undefined;
       if (!this.duelActive) return;
       activePlayers().filter((player) => player.alive && player.id !== 1 && !player.duelChoice)
@@ -4783,9 +4768,16 @@ if (offlineMode) {
     const firstChoice = first.duelChoice!;
     const secondChoice = second.duelChoice!;
     const duelResult = resolveRpsWinner(firstChoice, secondChoice);
-    PeerankiAudio.effect('rps_clash');
+    soundEffectManager.playDuelClash();
     if (duelResult === 'tie') {
-      PeerankiAudio.effect('rps_tie');
+      soundEffectManager.playDuelTie();
+      duelLogManager.recordDuelOutcome({
+        round: matchRound,
+        clashNumber: duelRound,
+        player1: { id: first.id, name: first.name, choice: firstChoice },
+        player2: { id: second.id, name: second.name, choice: secondChoice },
+        result: 'tie',
+      });
       this.uiManager?.showToast(`🤝 Tie! Both chose ${RPS_LABELS[firstChoice]}! Choose again.`, 'info');
       first.duelChoice = null;
       second.duelChoice = null;
@@ -4800,13 +4792,28 @@ if (offlineMode) {
       return;
     }
 
-    PeerankiAudio.effect('rps_win');
+    soundEffectManager.playDuelWin();
     const winner = duelResult === 'first' ? first : second;
     const loser = winner.id === first.id ? second : first;
     const winnerChoice = winner.id === first.id ? firstChoice : secondChoice;
     const loserChoice = winner.id === first.id ? secondChoice : firstChoice;
     loser.alive = false;
     loser.stage = 3;
+
+    duelLogManager.recordDuelOutcome({
+      round: matchRound,
+      clashNumber: duelRound,
+      player1: { id: first.id, name: first.name, choice: firstChoice },
+      player2: { id: second.id, name: second.name, choice: secondChoice },
+      result: 'win',
+      winnerId: winner.id,
+      winnerName: winner.name,
+      winnerChoice,
+      loserId: loser.id,
+      loserName: loser.name,
+      loserChoice,
+    });
+
     players.forEach((player) => {
       player.duelChoice = null;
       player.duelChoiceRequest = null;
@@ -5193,7 +5200,7 @@ private botShoot(shooterIndex: number) {
     return;
   }
   this.statusText?.setText(`${players[shooterIndex].name} is thinking...`);
-  this.time.delayedCall(Phaser.Math.Between(500, 1_200), () => {
+  this.time.delayedCall(Phaser.Math.Between(250, 450), () => {
     if (this.currentShooter !== shooterIndex || this.roundPhase !== 'shooting' || this.gameFinished) return;
     const targetNames = action.targetIds
       .map((id) => players.find((player) => player.id === id)?.name)
@@ -5341,16 +5348,9 @@ private shootPlayer(index: number) {
 private submitPlayerAction(action: PlayerAction, previewTarget?: Player) {
   if (!offlineMode && !amHost()) {
     this.statusText?.setText(`Firing ${WEAPON_NAMES[action.weapon]}...`);
-    if (action.weapon === 'peeranki') PeerankiAudio.effect('cannon');
-    else if (action.weapon === 'hook') PeerankiAudio.effect('hook');
-    else if (action.weapon === 'doublePeeranki') PeerankiAudio.effect('double_peeranki');
-    else PeerankiAudio.effect('shoot');
-    // Immediate visual recoil so non-host player feels zero latency
+    soundEffectManager.playShoot(action.weapon);
+    // Immediate visual feedback so non-host player feels zero latency
     if (previewTarget) this.uiManager.triggerDamageFlash(previewTarget.id - 1, false);
-    const targetCard = previewTarget ? this.playerObjects[previewTarget.id - 1] : undefined;
-    if (targetCard) {
-      this.tweens.add({ targets: targetCard, scale: 1.08, duration: 80, yoyo: true, repeat: 1 });
-    }
     this.scheduleUiSync();
     void this.requestHostAction(action);
     return;
@@ -5394,36 +5394,25 @@ private runPlayerAction(action: PlayerAction, receivedAt?: string): boolean {
 
 private presentActionResolution(action: PlayerAction, resolution: Extract<ActionResolution, { accepted: true }>) {
   const attacker = players[resolution.shooterIndex];
-  if (action.weapon === 'doublePeeranki') PeerankiAudio.effect('double_peeranki');
-  else if (action.weapon === 'hook') PeerankiAudio.effect('hook');
-  else if (action.weapon === 'peeranki') PeerankiAudio.effect('cannon');
-  else PeerankiAudio.effect('shoot');
+  soundEffectManager.playShoot(action.weapon);
 
   resolution.hits.forEach((hit) => {
     const target = players[hit.targetIndex];
     if (!target) return;
+    soundEffectManager.playTowerDamage(hit);
     if (hit.action === 'shield_absorbed') {
-      PeerankiAudio.effect('shield_hit');
       this.statusText?.setText(`${target.name}'s Shield blocked the Gun shot.`);
       this.uiManager?.showToast(`🛡️ ${target.name}'s Shield blocked ${attacker?.name ?? 'Attacker'}'s Gun shot!`, 'info');
     } else if (hit.action === 'shield_destroyed_for_round') {
-      PeerankiAudio.effect('shield_hit');
       this.statusText?.setText(`${target.name}'s Shield was disabled for this round.`);
       this.uiManager?.showToast(`🛡️💥 ${target.name}'s Shield was disabled for this round!`, 'alert');
-      const targetCard = this.playerObjects[hit.targetIndex];
-      if (targetCard) this.tweens.add({ targets: targetCard, alpha: { from: 0.35, to: 1 }, duration: 110, yoyo: true, repeat: 2 });
     } else if (hit.shieldRemoved) {
-      PeerankiAudio.effect('hook_strip');
       this.statusText?.setText(`${target.name}'s Shield was destroyed permanently!`);
       this.uiManager?.showToast(`🪝 ${attacker?.name ?? 'Attacker'} stripped ${target.name}'s Shield permanently!`, 'alert');
-      const targetCard = this.playerObjects[hit.targetIndex];
-      if (targetCard) this.tweens.add({ targets: targetCard, angle: { from: -5, to: 5 }, alpha: { from: 0.45, to: 1 }, duration: 90, yoyo: true, repeat: 2, onComplete: () => targetCard.setAngle(0) });
     } else if (hit.eliminated) {
-      PeerankiAudio.effect('tower_destroyed');
       const attack = hit.weapon === 'peeranki' ? ' was demolished by Peeranki' : ' fell';
       this.uiManager?.showToast(`⚡ ${target.name}'s Tower${attack}! Eliminated!`, 'alert');
     } else {
-      PeerankiAudio.effect('tower_damage');
       this.uiManager?.showToast(`💥 ${target.name}'s Tower took damage (Stage ${target.stage})!`, 'alert');
     }
     this.updatePlayerVisual(hit.targetIndex);
@@ -5443,9 +5432,8 @@ private completePlayerShot(index: number) {
   const hitContainer = this.playerObjects[index];
   if (hitContainer) {
     this.tweens.killTweensOf(hitContainer);
-    this.tweens.add({ targets: hitContainer, scale: 1.12, angle: 2, duration: 90, yoyo: true, repeat: 1,
-      onComplete: () => { hitContainer.setAngle(0); if (this.currentShooter === index) this.updatePlayerVisual(index); },
-    });
+    hitContainer.setScale(1);
+    hitContainer.setAngle(0);
   }
 
  this.updatePlayerVisual(index);
@@ -5496,7 +5484,7 @@ if (offlineMode) {
     const nextStartIndex =
   getNextCountingStartIndex(players, index);
 
-this.time.delayedCall(1200, () => {
+this.time.delayedCall(400, () => {
   this.startCounting(
     nextStartIndex >= 0
       ? nextStartIndex
@@ -5607,10 +5595,10 @@ void this.recordShot();
     if (upgrade) {
       winner.weapons = normalizeWeapons([...winner.weapons, upgrade]);
       message += ` Earned ${WEAPON_LABELS[upgrade]}.`;
-      PeerankiAudio.effect('weapon_upgrade');
+      soundEffectManager.playWeaponUpgrade();
     } else {
       message += ' No new weapon unlocked this round.';
-      PeerankiAudio.effect('round_win');
+      soundEffectManager.playRoundWin();
     }
     if (hasAllWeapons(winner.weapons)) winner.hasCollectedAllWeapons = true;
     lastRoundMessage = message;
@@ -5651,7 +5639,10 @@ void this.recordShot();
     this.renderPlayers();
     const winnerIndex = players.findIndex((player) => player.id === winner.id);
     const winnerCard = this.playerObjects[winnerIndex];
-    if (winnerCard) this.tweens.add({ targets: winnerCard, scale: { from: 1, to: 1.12 }, duration: 300, yoyo: true, repeat: 2, ease: 'Back.Out' });
+    if (winnerCard) {
+      this.tweens.killTweensOf(winnerCard);
+      winnerCard.setScale(1);
+    }
     if (!offlineMode) {
       try {
         await syncGameStateWithRetry(null, 0, 'round_won');
@@ -5753,9 +5744,9 @@ void this.recordShot();
     const localId = offlineMode ? 1 : myPlayerId;
     const localWon = winners.some((player) => player.id === localId);
     if (localWon) {
-      PeerankiAudio.effect('victory');
+      soundEffectManager.playMatchVictory();
     } else {
-      PeerankiAudio.effect('defeat');
+      soundEffectManager.playMatchDefeat();
     }
   }
 
@@ -5932,26 +5923,37 @@ void this.recordShot();
 
   // Buttons.
   const buttonY = panelHeight / 2 - 36;
-  const btnW = Math.min(145, Math.floor((panelWidth - 36) / 2));
+  const btnW = Math.min(130, Math.floor((panelWidth - 44) / 3));
 
   const replay = makeButton(
     this,
-    -btnW / 2 - 6,
+    -btnW - 6,
     buttonY,
     'PLAY AGAIN',
     '#20a060',
-    14,
+    12,
+    btnW,
+    42,
+  );
+
+  const duelLogBtn = makeButton(
+    this,
+    0,
+    buttonY,
+    'DUEL LOG',
+    '#d97706',
+    12,
     btnW,
     42,
   );
 
   const menu = makeButton(
     this,
-    btnW / 2 + 6,
+    btnW + 6,
     buttonY,
     'MAIN MENU',
     '#2878ff',
-    14,
+    12,
     btnW,
     42,
   );
@@ -5966,37 +5968,19 @@ void this.recordShot();
     details,
     resultsText,
     replay,
+    duelLogBtn,
     menu,
   ]);
+
+  duelLogBtn.on('pointerdown', () => {
+    this.uiManager.openDuelLog();
+  });
 
   /*
    * Winner entrance animation.
    */
-  panel.setAlpha(0);
-  panel.setScale(0.82);
-
-  this.tweens.add({
-    targets: panel,
-    alpha: 1,
-    scale: 1,
-    duration: 500,
-    ease: 'Back.Out',
-  });
-
-  /*
-   * Trophy animation.
-   */
-  this.tweens.add({
-    targets: trophy,
-    scale: {
-      from: 0.85,
-      to: 1.15,
-    },
-    duration: 700,
-    yoyo: true,
-    repeat: -1,
-    ease: 'Sine.InOut',
-  });
+  panel.setAlpha(1);
+  panel.setScale(1);
 
   /*
    * Play Again.

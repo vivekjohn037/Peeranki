@@ -239,12 +239,6 @@ export class BoardComponent {
           view.stageName.textContent = stageLabel;
         }
 
-        const prevStage = this.previousStages.get(player.id);
-        if (prevStage !== undefined && player.stage > prevStage && player.alive) {
-          view.towerImg.classList.remove('pk-tower-shake');
-          void view.towerImg.offsetWidth; // Trigger reflow for clean re-shake
-          view.towerImg.classList.add('pk-tower-shake');
-        }
       } else {
         const stageLabel = player.connected ? STAGE_NAMES[stageIdx] : 'Available Slot';
         if (view.stageName.textContent !== stageLabel) {
@@ -254,7 +248,8 @@ export class BoardComponent {
       this.previousStages.set(player.id, player.stage);
 
       // Weapons inventory row
-      const weaponsKey = player.connected && player.weapons ? player.weapons.join(',') : '';
+      const shieldDisabled = player.shieldDisabledRound > 0;
+      const weaponsKey = player.connected && player.weapons ? `${player.weapons.join(',')}|${shieldDisabled}` : '';
       if (view.weaponsKey !== weaponsKey) {
         view.weaponsKey = weaponsKey;
         view.weaponsRow.innerHTML = '';
@@ -265,7 +260,18 @@ export class BoardComponent {
             const fileName = weapon === 'doublePeeranki' ? 'double_peeranki' : weapon;
             icon.src = `assets/weapons/${fileName}.png`;
             icon.alt = weapon;
-            icon.title = weapon;
+            if (weapon === 'shield') {
+              if (shieldDisabled) {
+                icon.style.opacity = '0.35';
+                icon.style.filter = 'grayscale(100%)';
+                icon.title = 'Shield (Disabled this round)';
+              } else {
+                icon.style.filter = 'drop-shadow(0 0 4px rgba(56, 189, 248, 0.6))';
+                icon.title = 'Shield (Active protection)';
+              }
+            } else {
+              icon.title = weapon;
+            }
             view.weaponsRow.appendChild(icon);
           });
         }
@@ -318,12 +324,10 @@ export class BoardComponent {
   public triggerDamageFlash(targetIndex: number) {
     for (const view of this.cards.values()) {
       if (view.targetIndex === targetIndex) {
-        view.card.classList.remove('pk-card-damage-flash');
-        void view.card.offsetWidth;
         view.card.classList.add('pk-card-damage-flash');
-        view.towerImg.classList.remove('pk-tower-shake');
-        void view.towerImg.offsetWidth;
-        view.towerImg.classList.add('pk-tower-shake');
+        setTimeout(() => {
+          view.card.classList.remove('pk-card-damage-flash');
+        }, 160);
         break;
       }
     }

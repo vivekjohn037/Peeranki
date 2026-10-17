@@ -10,6 +10,7 @@ import { HUDComponent } from './HUDComponent';
 import { BoardComponent } from './BoardComponent';
 import { DuelModalComponent } from './DuelModalComponent';
 import { GameOverModalComponent } from './GameOverModalComponent';
+import { DuelLogModalComponent } from './DuelLogModalComponent';
 import './styles.css';
 
 export class GameUIManager {
@@ -19,6 +20,7 @@ export class GameUIManager {
   private board: BoardComponent | null = null;
   private duelModal: DuelModalComponent | null = null;
   private gameOverModal: GameOverModalComponent | null = null;
+  private duelLogModal: DuelLogModalComponent | null = null;
 
   private currentOrientation: OrientationMode = 'landscape';
   private resizeObserver: ResizeObserver | null = null;
@@ -54,11 +56,23 @@ export class GameUIManager {
     this.containerEl.className = 'pk-layout-container';
     this.rootEl.appendChild(this.containerEl);
 
+    const wrappedCallbacks: UICallbacks = {
+      ...callbacks,
+      onOpenDuelLog: () => {
+        if (callbacks.onOpenDuelLog) {
+          callbacks.onOpenDuelLog();
+        } else {
+          this.openDuelLog();
+        }
+      },
+    };
+
     // Initialize Subcomponents
-    this.hud = new HUDComponent(callbacks);
-    this.board = new BoardComponent(callbacks);
-    this.duelModal = new DuelModalComponent(callbacks);
-    this.gameOverModal = new GameOverModalComponent(callbacks);
+    this.hud = new HUDComponent(wrappedCallbacks);
+    this.board = new BoardComponent(wrappedCallbacks);
+    this.duelModal = new DuelModalComponent(wrappedCallbacks);
+    this.gameOverModal = new GameOverModalComponent(wrappedCallbacks);
+    this.duelLogModal = new DuelLogModalComponent();
 
     // Assemble Hierarchy
     this.containerEl.appendChild(this.hud.getTopBar());
@@ -68,6 +82,7 @@ export class GameUIManager {
     this.rootEl.appendChild(this.hud.getCountdown());
     this.rootEl.appendChild(this.duelModal.getElement());
     this.rootEl.appendChild(this.gameOverModal.getElement());
+    this.rootEl.appendChild(this.duelLogModal.getElement());
 
     parent.appendChild(this.rootEl);
 
@@ -211,7 +226,11 @@ export class GameUIManager {
     this.rootEl.appendChild(vignette);
     setTimeout(() => {
       vignette.remove();
-    }, 850);
+    }, 280);
+  }
+
+  public openDuelLog(tab: 'watch' | 'summary' = 'watch') {
+    this.duelLogModal?.open(tab);
   }
 
   public unmount() {
@@ -245,5 +264,6 @@ export class GameUIManager {
     this.board = null;
     this.duelModal = null;
     this.gameOverModal = null;
+    this.duelLogModal = null;
   }
 }
