@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from 'vite';
+import react from '@vitejs/plugin-react';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -78,15 +79,15 @@ function cloudflareAssetGuardPlugin(): Plugin {
 
 export default defineConfig({
   base: process.env.VITE_BASE || (process.env.ELECTRON === 'true' ? './' : '/'),
-  plugins: [backgroundUploadPlugin(), cloudflareAssetGuardPlugin()],
+  plugins: [react(), backgroundUploadPlugin(), cloudflareAssetGuardPlugin()],
   build: {
     target: 'es2020',
     chunkSizeWarningLimit: 1400,
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/phaser')) {
-            return 'vendor-phaser';
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
+            return 'vendor-react';
           }
           if (id.includes('node_modules/@supabase')) {
             return 'vendor-supabase';
