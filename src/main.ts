@@ -596,6 +596,7 @@ async function syncGameState(
   countNumber: number,
   gameStatus: string,
   explicitCountingTimestamp?: string | null,
+  broadcastBeforePersist = false,
 ) {
   if (!roomCode || players.length === 0) {
     return;
@@ -648,6 +649,7 @@ async function syncGameState(
     countNumber,
     gameStatus,
     effectiveTimestamp,
+    broadcastBeforePersist,
   );
 }
 
@@ -657,11 +659,12 @@ async function syncGameStateWithRetry(
   countNumber: number,
   gameStatus: string,
   explicitCountingTimestamp?: string | null,
+  broadcastBeforePersist = false,
 ) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      await syncGameState(currentShooter, countNumber, gameStatus, explicitCountingTimestamp);
+      await syncGameState(currentShooter, countNumber, gameStatus, explicitCountingTimestamp, broadcastBeforePersist);
       return;
     } catch (error) {
       lastError = error;
@@ -5548,7 +5551,8 @@ void this.recordShot();
     }
 
     try {
-      await syncGameStateWithRetry(this.currentShooter, COUNT_TO, 'shot');
+      // Host-resolved shots are broadcast immediately, then persisted for recovery.
+      await syncGameStateWithRetry(this.currentShooter, COUNT_TO, 'shot', undefined, amHost());
     } catch (error) {
       console.error('[Peeranki Diagnostics] Could not persist online shot; will retry the same state:', error);
       this.statusText?.setText('Shot applied. Reconnecting to sync it with everyone…');
