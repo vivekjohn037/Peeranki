@@ -389,16 +389,6 @@ try {
       if (type === 'ROOM_UPDATE' && roomCode && data) {
         mockRoomsMemory.set(roomCode, data);
         notifyRoomListeners(roomCode, data, false);
-      } else if (type === 'PEER_ACTION_EVENT' && roomCode) {
-        const { event: actionEvent, payload, sender_id } = event.data;
-        const subs = roomSubscribers.get(roomCode);
-        if (subs) {
-          subs.forEach((sub) => {
-            if (sub.id !== sender_id) {
-              sub.eventCallback?.(actionEvent, payload);
-            }
-          });
-        }
       }
     };
   }
@@ -1431,13 +1421,10 @@ export function leaveRoomBestEffort(roomCode: string, sessionId: string) {
 
 export interface RoomSubscription {
   unsubscribe: () => Promise<void>;
-  sendEvent: (event: string, payload: any) => Promise<void>;
 }
 
 interface RoomSubscriberEntry {
-  id: string;
   stateCallback: (gameState: any) => void;
-  eventCallback?: (event: string, payload: any) => void;
 }
 
 const roomSubscribers = new Map<string, Set<RoomSubscriberEntry>>();
@@ -1445,19 +1432,14 @@ const roomSubscribers = new Map<string, Set<RoomSubscriberEntry>>();
 export function subscribeToGameState(
   roomCode: string,
   stateCallback: (gameState: any) => void,
-  eventCallback?: (event: string, payload: any) => void,
 ): RoomSubscription {
   const cleanCode = roomCode.trim().toUpperCase();
-  const subId = `sub_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-
   if (!roomSubscribers.has(cleanCode)) {
     roomSubscribers.set(cleanCode, new Set());
   }
 
   const currentEntry: RoomSubscriberEntry = {
-    id: subId,
     stateCallback,
-    eventCallback,
   };
   roomSubscribers.get(cleanCode)!.add(currentEntry);
 
@@ -1513,20 +1495,6 @@ export function subscribeToGameState(
               });
             }
           })
-          .on('broadcast', { event: 'peer_action_event' }, (payload) => {
-            const data = payload.payload;
-            if (data && data.event) {
-              roomSubscribers.get(cleanCode)?.forEach((entry) => {
-                if (entry.id !== data.sender_id) {
-                  try {
-                    entry.eventCallback?.(data.event, data.payload);
-                  } catch (err) {
-                    console.error('[Peeranki] Subscriber peer action callback error:', err);
-                  }
-                }
-              });
-            }
-          })
           .subscribe((status, error) => {
             console.log(`[Peeranki Diagnostics] Realtime subscription status for room ${cleanCode}: ${status}`);
             if (error) {
@@ -1541,50 +1509,6 @@ export function subscribeToGameState(
   }
 
   return {
-    sendEvent: async (event: string, payload: any) => {
-      // 1. Dispatch directly to other local subscribers of the room (excluding sender)
-      const subs = roomSubscribers.get(cleanCode);
-      if (subs) {
-        subs.forEach((sub) => {
-          if (sub.id !== subId) {
-            try {
-              sub.eventCallback?.(event, payload);
-            } catch (err) {
-              console.error('[Peeranki] Local event dispatch error:', err);
-            }
-          }
-        });
-      }
-
-      // 2. Broadcast via Supabase Realtime channel
-      const chan = activeRealtimeChannels.get(cleanCode);
-      if (chan) {
-        try {
-          void chan.send({
-            type: 'broadcast',
-            event: 'peer_action_event',
-            payload: { event, payload, sender_id: subId },
-          });
-        } catch {
-          // best-effort
-        }
-      }
-
-      // 3. Broadcast across browser tabs
-      if (broadcastChannel) {
-        try {
-          broadcastChannel.postMessage({
-            type: 'PEER_ACTION_EVENT',
-            roomCode: cleanCode,
-            event,
-            payload,
-            sender_id: subId,
-          });
-        } catch {
-          // ignore
-        }
-      }
-    },
     unsubscribe: async () => {
       const subs = roomSubscribers.get(cleanCode);
       if (subs) {
