@@ -42,6 +42,7 @@ export interface HUDState {
   maxPlayers?: number;
   isVoiceActive?: boolean;
   isVoiceMuted?: boolean;
+  isVoiceOutputMuted?: boolean;
   voicePeerCount?: number;
 }
 
@@ -78,6 +79,11 @@ export interface UICallbacks {
   onOpenDuelLog?: () => void;
   onToggleVoiceChat?: () => void;
   onOpenVoiceSettings?: () => void;
+  onVoiceTalkStart?: () => void;
+  onVoiceTalkEnd?: () => void;
+  onToggleVoiceOutput?: () => boolean;
+  isVoiceActive?: () => boolean;
+  isVoiceTalking?: () => boolean;
 }
 
 export type OrientationMode = 'portrait' | 'landscape';

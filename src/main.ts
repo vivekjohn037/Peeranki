@@ -3484,6 +3484,7 @@ private nextStartIndex = -1;
   private realtimeChannel: any;
   private applyingRemoteState = false;
   private initialized = false;
+  private lastVisualShooterIndex = -1;
   private gameFinished = false;
   private victoryPlayed = false;
   private roundPhase: 'counting' | 'shooting' | 'duel' | 'waiting' | 'finished' = 'waiting';
@@ -3637,6 +3638,15 @@ private nextStartIndex = -1;
       onOpenVoiceSettings: () => {
         this.uiManager.openVoiceSettings();
       },
+      onVoiceTalkStart: () => this.voiceService?.setPushToTalkState(true),
+      onVoiceTalkEnd: () => this.voiceService?.setPushToTalkState(false),
+      onToggleVoiceOutput: () => {
+        const isMuted = this.voiceService?.toggleOutputAudio() ?? false;
+        this.scheduleUiSync();
+        return isMuted;
+      },
+      isVoiceActive: () => Boolean(this.voiceService?.isVoiceActive()),
+      isVoiceTalking: () => Boolean(this.voiceService?.isPttPressed()),
       onToggleVoiceChat: () => {
         if (!this.voiceService) {
           this.initVoiceChat();
@@ -3915,6 +3925,7 @@ if (offlineMode) {
       maxPlayers,
       isVoiceActive: this.voiceService ? this.voiceService.isVoiceActive() : false,
       isVoiceMuted: this.voiceService ? this.voiceService.isMuted() : false,
+      isVoiceOutputMuted: this.voiceService ? this.voiceService.isOutputAudioMuted() : false,
       voicePeerCount: this.voiceService ? this.voiceService.getPeerStates().size : 0,
     };
 
@@ -4321,6 +4332,19 @@ if (offlineMode) {
       this.updatePlayerVisual(index, false);
     }
     this.syncUI();
+    this.lastVisualShooterIndex = this.currentShooter;
+  }
+
+  private markCountingShooter() {
+    const previousIndex = this.lastVisualShooterIndex;
+    if (previousIndex >= 0 && previousIndex < this.playerObjects.length) {
+      this.updatePlayerVisual(previousIndex, false);
+    }
+    if (this.currentShooter >= 0 && this.currentShooter !== previousIndex && this.currentShooter < this.playerObjects.length) {
+      this.updatePlayerVisual(this.currentShooter, false);
+    }
+    this.lastVisualShooterIndex = this.currentShooter;
+    this.uiManager.updateShooterIndicator(this.currentShooter);
   }
 
   private startRealtimeSync() {
@@ -5114,7 +5138,7 @@ if (offlineMode) {
           PeerankiAudio.effect('count_tick');
         }
       }
-      this.markShooter();
+      this.markCountingShooter();
       if (!offlineMode && amHost() && this.countNumber < COUNT_TO) {
         void broadcastRoomStateDelta(roomCode, {
           game_status: 'counting',
@@ -5135,7 +5159,7 @@ if (offlineMode) {
         this.currentShooter = countedIndex;
         this.countText?.setText(`Count ${this.countNumber} / ${COUNT_TO}`);
         this.statusText?.setText(`${this.countNumber}. ${players[countedIndex]?.name ?? 'Player'}`);
-        this.markShooter();
+        this.markCountingShooter();
       }
     }
 

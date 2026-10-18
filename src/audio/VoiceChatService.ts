@@ -60,6 +60,7 @@ export class VoiceChatService {
   private isJoined = false;
   private isStarting = false;
   private isTalking = false;
+  private isOutputMuted = false;
   private lastErrorMessage = '';
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
@@ -224,6 +225,7 @@ export class VoiceChatService {
       audio.autoplay = true;
       audio.setAttribute('playsinline', '');
       audio.volume = this.peerStates.get(sessionId)?.volume ?? 1;
+      audio.muted = this.isOutputMuted || Boolean(this.peerStates.get(sessionId)?.isMutedLocally);
       audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
       this.audioElements.set(sessionId, audio);
       void audio.play().catch(() => {
@@ -362,6 +364,13 @@ export class VoiceChatService {
   public isMuted(): boolean { return !this.isTalking; }
   public getVoiceMode(): VoiceMode { return 'push_to_talk'; }
   public getLastError(): string { return this.lastErrorMessage; }
+  public isOutputAudioMuted(): boolean { return this.isOutputMuted; }
+
+  public toggleOutputAudio(): boolean {
+    this.isOutputMuted = !this.isOutputMuted;
+    this.audioElements.forEach((audio) => { audio.muted = this.isOutputMuted; });
+    return this.isOutputMuted;
+  }
 
   public setPeerMuted(sessionId: string, muted: boolean): void {
     const peer = this.peerStates.get(sessionId);
