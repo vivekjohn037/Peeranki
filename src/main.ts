@@ -66,8 +66,6 @@ import {
   broadcastRoomStateDelta,
 } from './supabase';
 import { showMultiplayerErrorModal } from './ui/multiplayerModal';
-import { VoiceChatService } from './audio/VoiceChatService';
-import { VoiceModalComponent } from './ui/VoiceModalComponent';
 
 interface Player {
   id: number;
@@ -2852,9 +2850,6 @@ class LobbyScene extends Phaser.Scene {
   private lastPlayerCount = 0;
   private lifecycleGeneration = 0;
   private roomCodeAtStart = '';
-  private voiceService: VoiceChatService | null = null;
-  private voiceModal: VoiceModalComponent | null = null;
-  private voiceButton?: Phaser.GameObjects.Text;
 
   constructor() {
     super('LobbyScene');
@@ -2949,21 +2944,6 @@ class LobbyScene extends Phaser.Scene {
           void this.startGame();
         });
       }
-
-      this.voiceButton = makeButton(
-        this,
-        leftColX,
-        height * 0.72,
-        '📻 ROOM WALKIE-TALKIE',
-        '#0284c7',
-        13,
-        Math.min(260, colWidth * 0.85),
-        38,
-      );
-
-      this.voiceButton.on('pointerdown', () => {
-        this.openVoiceSettings();
-      });
 
       this.leaveButton = makeButton(
         this,
@@ -3100,23 +3080,7 @@ class LobbyScene extends Phaser.Scene {
         });
       }
 
-      const vBtnY = amHost() && !isPublicRoom ? height - 60 : height - 42;
       const lBtnY = amHost() && !isPublicRoom ? height - 20 : height - 80;
-
-      this.voiceButton = makeButton(
-        this,
-        width / 2,
-        vBtnY,
-        '📻 ROOM WALKIE-TALKIE',
-        '#0284c7',
-        12,
-        Math.min(220, lobbyBtnW * 0.75),
-        36,
-      );
-
-      this.voiceButton.on('pointerdown', () => {
-        this.openVoiceSettings();
-      });
 
       this.leaveButton = makeButton(
         this,
@@ -3144,14 +3108,7 @@ class LobbyScene extends Phaser.Scene {
         if (!this.isCurrentLobby()) return;
         this.applyRoomState(gameState);
       },
-      (event, payload) => {
-        if (event === 'voice_signal' && this.voiceService) {
-          void this.voiceService.handleSignalingMessage(payload);
-        }
-      },
     );
-
-    this.initVoiceChat();
 
     void this.refreshLobby();
 
@@ -3162,45 +3119,6 @@ class LobbyScene extends Phaser.Scene {
         void this.refreshLobby();
       },
     });
-  }
-
-  private initVoiceChat() {
-    if (this.voiceService || !this.isCurrentLobby()) return;
-    const currentCode = this.roomCodeAtStart;
-    const localPlayer = players.find((p) => p.sessionId === sessionId);
-    const myName = localPlayer?.name || getStoredPlayerName() || 'Player';
-
-    this.voiceModal = new VoiceModalComponent();
-    document.body.appendChild(this.voiceModal.getElement());
-
-    this.voiceService = new VoiceChatService({
-      roomCode: currentCode,
-      localSessionId: sessionId,
-      localPlayerName: myName,
-      signalingSend: async (event, payload) => {
-        if (this.realtimeChannel) {
-          await this.realtimeChannel.sendEvent(event, payload);
-        }
-      },
-      onPeersChange: () => {
-        this.voiceModal?.renderPeers();
-      },
-      onLocalAudioLevel: (level) => {
-        this.voiceModal?.updateLocalAudioLevel(level);
-      },
-      onStatusChange: () => {
-        this.voiceModal?.updateView();
-      },
-    });
-
-    this.voiceModal.setVoiceService(this.voiceService);
-  }
-
-  private openVoiceSettings() {
-    if (!this.voiceService) {
-      this.initVoiceChat();
-    }
-    this.voiceModal?.show();
   }
 
   private applyRoomState(gameState: any) {
@@ -3444,15 +3362,6 @@ class LobbyScene extends Phaser.Scene {
       this.realtimeChannel = undefined;
     }
 
-    if (this.voiceService) {
-      this.voiceService.cleanup();
-      this.voiceService = null;
-    }
-
-    if (this.voiceModal) {
-      this.voiceModal.getElement().remove();
-      this.voiceModal = null;
-    }
   }
 }
 
@@ -3507,7 +3416,6 @@ private nextStartIndex = -1;
   private endingAfterPlayerDeparture = false;
   private lifecycleGeneration = 0;
   private roomCodeAtStart = '';
-  private voiceService: VoiceChatService | null = null;
 
   constructor() {
     super('GameScene');
@@ -3634,24 +3542,6 @@ private nextStartIndex = -1;
       },
       onOpenDuelLog: () => {
         this.uiManager.openDuelLog();
-      },
-      onOpenVoiceSettings: () => {
-        this.uiManager.openVoiceSettings();
-      },
-      onVoiceTalkStart: () => this.voiceService?.setPushToTalkState(true),
-      onVoiceTalkEnd: () => this.voiceService?.setPushToTalkState(false),
-      onToggleVoiceOutput: () => {
-        const isMuted = this.voiceService?.toggleOutputAudio() ?? false;
-        this.scheduleUiSync();
-        return isMuted;
-      },
-      isVoiceActive: () => Boolean(this.voiceService?.isVoiceActive()),
-      isVoiceTalking: () => Boolean(this.voiceService?.isPttPressed()),
-      onToggleVoiceChat: () => {
-        if (!this.voiceService) {
-          this.initVoiceChat();
-        }
-        this.uiManager.openVoiceSettings();
       },
     });
 
@@ -3923,10 +3813,6 @@ if (offlineMode) {
       latencyMs: this.currentLatencyMs,
       connectedCount: connectedPlayers().length,
       maxPlayers,
-      isVoiceActive: this.voiceService ? this.voiceService.isVoiceActive() : false,
-      isVoiceMuted: this.voiceService ? this.voiceService.isMuted() : false,
-      isVoiceOutputMuted: this.voiceService ? this.voiceService.isOutputAudioMuted() : false,
-      voicePeerCount: this.voiceService ? this.voiceService.getPeerStates().size : 0,
     };
 
     const uiPlayers: UIPlayer[] = players.slice(0, maxPlayers).map((p) => ({
@@ -4356,44 +4242,7 @@ if (offlineMode) {
         if (!this.isCurrentOnlineGame()) return;
         this.applyRemoteGameState(gameState);
       },
-      (event, payload) => {
-        if (event === 'voice_signal' && this.voiceService) {
-          void this.voiceService.handleSignalingMessage(payload);
-        }
-      },
     );
-
-    this.initVoiceChat();
-  }
-
-  private initVoiceChat() {
-    if (offlineMode || !this.isCurrentOnlineGame() || this.voiceService) return;
-    const currentCode = this.roomCodeAtStart;
-    const localPlayer = players.find((p) => p.sessionId === sessionId);
-    const myName = localPlayer?.name || getStoredPlayerName() || 'Player';
-
-    this.voiceService = new VoiceChatService({
-      roomCode: currentCode,
-      localSessionId: sessionId,
-      localPlayerName: myName,
-      signalingSend: async (event, payload) => {
-        if (this.realtimeChannel) {
-          await this.realtimeChannel.sendEvent(event, payload);
-        }
-      },
-      onPeersChange: () => {
-        this.uiManager.refreshVoicePeers();
-        this.scheduleUiSync();
-      },
-      onLocalAudioLevel: (level) => {
-        this.uiManager.updateVoiceLocalAudioLevel(level);
-      },
-      onStatusChange: () => {
-        this.scheduleUiSync();
-      },
-    });
-
-    this.uiManager.setVoiceService(this.voiceService);
   }
 
   private isCurrentOnlineGame() {
@@ -6226,10 +6075,6 @@ void this.recordShot();
       this.realtimeChannel = undefined;
     }
 
-    if (this.voiceService) {
-      this.voiceService.cleanup();
-      this.voiceService = null;
-    }
 
     this.scale.removeAllListeners('resize');
 

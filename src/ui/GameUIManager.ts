@@ -11,8 +11,6 @@ import { BoardComponent } from './BoardComponent';
 import { DuelModalComponent } from './DuelModalComponent';
 import { GameOverModalComponent } from './GameOverModalComponent';
 import { DuelLogModalComponent } from './DuelLogModalComponent';
-import { VoiceModalComponent } from './VoiceModalComponent';
-import type { VoiceChatService } from '../audio/VoiceChatService';
 import './styles.css';
 
 export class GameUIManager {
@@ -23,7 +21,6 @@ export class GameUIManager {
   private duelModal: DuelModalComponent | null = null;
   private gameOverModal: GameOverModalComponent | null = null;
   private duelLogModal: DuelLogModalComponent | null = null;
-  private voiceModal: VoiceModalComponent | null = null;
 
   private currentOrientation: OrientationMode = 'landscape';
   private resizeObserver: ResizeObserver | null = null;
@@ -68,20 +65,6 @@ export class GameUIManager {
           this.openDuelLog();
         }
       },
-      onOpenVoiceSettings: () => {
-        if (callbacks.onOpenVoiceSettings) {
-          callbacks.onOpenVoiceSettings();
-        } else {
-          this.openVoiceSettings();
-        }
-      },
-      onToggleVoiceChat: () => {
-        if (callbacks.onToggleVoiceChat) {
-          callbacks.onToggleVoiceChat();
-        } else {
-          this.openVoiceSettings();
-        }
-      },
     };
 
     // Initialize Subcomponents
@@ -90,7 +73,6 @@ export class GameUIManager {
     this.duelModal = new DuelModalComponent(wrappedCallbacks);
     this.gameOverModal = new GameOverModalComponent(wrappedCallbacks);
     this.duelLogModal = new DuelLogModalComponent();
-    this.voiceModal = new VoiceModalComponent();
 
     // Assemble Hierarchy
     this.containerEl.appendChild(this.hud.getTopBar());
@@ -101,7 +83,6 @@ export class GameUIManager {
     this.rootEl.appendChild(this.duelModal.getElement());
     this.rootEl.appendChild(this.gameOverModal.getElement());
     this.rootEl.appendChild(this.duelLogModal.getElement());
-    this.rootEl.appendChild(this.voiceModal.getElement());
 
     parent.appendChild(this.rootEl);
 
@@ -256,26 +237,6 @@ export class GameUIManager {
     this.duelLogModal?.open(tab);
   }
 
-  public setVoiceService(service: VoiceChatService | null) {
-    this.voiceModal?.setVoiceService(service);
-  }
-
-  public openVoiceSettings() {
-    this.voiceModal?.show();
-  }
-
-  public toggleVoiceSettings() {
-    this.voiceModal?.toggle();
-  }
-
-  public updateVoiceLocalAudioLevel(level: number) {
-    this.voiceModal?.updateLocalAudioLevel(level);
-  }
-
-  public refreshVoicePeers() {
-    this.voiceModal?.renderPeers();
-  }
-
   public unmount() {
     if (this.rafId !== null) {
       window.cancelAnimationFrame(this.rafId);
@@ -308,6 +269,5 @@ export class GameUIManager {
     this.duelModal = null;
     this.gameOverModal = null;
     this.duelLogModal = null;
-    this.voiceModal = null;
   }
 }
