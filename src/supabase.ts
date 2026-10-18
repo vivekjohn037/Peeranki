@@ -912,6 +912,8 @@ interface LastAcceptedStateSummary {
   time: number;
   status: string;
   shooter: number | null;
+  matchRound: number;
+  duelRound: number;
   countingTimestamp: string | null;
   countdown: number;
   roomFingerprint: string;
@@ -935,6 +937,12 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   const time = state.updated_at ? Date.parse(state.updated_at) : 0;
   const status = typeof state.game_status === 'string' ? state.game_status : '';
   const shooter = typeof state.current_shooter === 'number' ? state.current_shooter : null;
+  const matchRound = Array.isArray(state.players)
+    ? Math.max(0, ...state.players.map((player: any) => Number.isInteger(player?.match_round) ? player.match_round : 0))
+    : 0;
+  const duelRound = Array.isArray(state.players)
+    ? Math.max(0, ...state.players.map((player: any) => Number.isInteger(player?.duel_round) ? player.duel_round : 0))
+    : 0;
   const countingTimestamp = typeof state.counting_start_timestamp === 'string' ? state.counting_start_timestamp : null;
   const countdown = typeof state.countdown === 'number' ? state.countdown : -1;
   const roomFingerprint = Array.isArray(state.players)
@@ -948,7 +956,7 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   const prev = lastAcceptedSummary.get(cleanCode);
 
   if (!prev) {
-    lastAcceptedSummary.set(cleanCode, { seq, time, status, shooter, countingTimestamp, countdown, roomFingerprint });
+    lastAcceptedSummary.set(cleanCode, { seq, time, status, shooter, matchRound, duelRound, countingTimestamp, countdown, roomFingerprint });
     if (seq > 0) lastRoomStateSeq.set(cleanCode, seq);
     if (time > 0) lastRoomUpdatedAt.set(cleanCode, time);
     return true;
@@ -974,6 +982,14 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     round_won: 7,
     finished: 8,
   };
+  const advancedMatchRound = matchRound > prev.matchRound;
+  const advancedDuelRound = matchRound === prev.matchRound && duelRound > prev.duelRound;
+  const advancedPhase = phaseRank[status] !== undefined && phaseRank[prev.status] !== undefined &&
+    phaseRank[status] > phaseRank[prev.status];
+  const resumedCounting = status === 'counting' && countingTimestamp !== null &&
+    countingTimestamp !== prev.countingTimestamp &&
+    ['shot', 'action_timeout', 'round_won', 'duel'].includes(prev.status);
+  const logicalProgress = advancedMatchRound || advancedDuelRound || advancedPhase || resumedCounting;
   if (
     countingTimestamp && countingTimestamp === prev.countingTimestamp &&
     ((prev.status === 'counting' && status === 'counting' && countdown >= 0 && countdown < prev.countdown) ||
@@ -983,7 +999,7 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
   }
 
   // An update with a timestamp strictly older than the last accepted state is stale.
-  if (time > 0 && prev.time > 0 && time < prev.time) {
+  if (time > 0 && prev.time > 0 && time < prev.time && !logicalProgress) {
     return false;
   }
 
@@ -1004,7 +1020,9 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
       time: Math.max(time, prev.time),
       status: status || prev.status,
       shooter,
-      countingTimestamp: countingTimestamp || prev.countingTimestamp,
+      matchRound: matchRound || prev.matchRound,
+      duelRound: duelRound || prev.duelRound,
+      countingTimestamp,
       countdown: countdown >= 0 ? countdown : prev.countdown,
       roomFingerprint: roomFingerprint || prev.roomFingerprint,
     });
