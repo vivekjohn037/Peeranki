@@ -39,6 +39,9 @@ export class BoardComponent {
   private previousStages = new Map<number, number>();
   private cards = new Map<number, PlayerCardView>();
   private lastShootTimestamp = 0;
+  private lastShooterIndex = -1;
+  private localPlayerId = 0;
+  private playersById = new Map<number, UIPlayer>();
 
   constructor(callbacks: UICallbacks) {
     this.callbacks = callbacks;
@@ -62,6 +65,9 @@ export class BoardComponent {
     pendingDoubleTargetIndex: number,
     _orientation: OrientationMode,
   ) {
+    this.localPlayerId = localPlayerId;
+    this.playersById = new Map(players.map((player) => [player.id, player]));
+    this.lastShooterIndex = currentShooterIndex;
     // Retain and update cards in-place to prevent DOM thrashing, cursor jitter, and lost clicks
     players.forEach((player, index) => {
       const isMe = player.id === localPlayerId;
@@ -319,6 +325,30 @@ export class BoardComponent {
         this.cards.delete(id);
       }
     }
+  }
+
+  /** Update only the two cards whose shooter highlight changes during counting. */
+  public updateShooterIndicator(currentShooterIndex: number): void {
+    const affected = new Set([this.lastShooterIndex, currentShooterIndex]);
+    affected.forEach((index) => {
+      if (index < 0) return;
+      const player = this.playersById.get(index + 1);
+      const view = player ? this.cards.get(player.id) : undefined;
+      if (!player || !view) return;
+
+      const isShooter = index === currentShooterIndex && player.alive;
+      view.card.classList.toggle('pk-is-shooter', isShooter);
+      let roleText = '';
+      let isShooterBadge = false;
+      if (player.id === this.localPlayerId) roleText = 'YOU';
+      else if (isShooter) {
+        roleText = 'SHOOTER';
+        isShooterBadge = true;
+      } else if (!player.connected) roleText = 'OFFLINE';
+      view.roleSpan.textContent = roleText;
+      view.roleSpan.classList.toggle('shooter-badge', isShooterBadge);
+    });
+    this.lastShooterIndex = currentShooterIndex;
   }
 
   public triggerDamageFlash(targetIndex: number) {
