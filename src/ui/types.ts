@@ -40,10 +40,6 @@ export interface HUDState {
   latencyMs?: number;
   connectedCount?: number;
   maxPlayers?: number;
-  isVoiceActive?: boolean;
-  isVoiceMuted?: boolean;
-  isVoiceOutputMuted?: boolean;
-  voicePeerCount?: number;
 }
 
 export interface DuelState {
@@ -77,13 +73,6 @@ export interface UICallbacks {
   onPlayAgain: () => void;
   onToggleAudio: () => boolean;
   onOpenDuelLog?: () => void;
-  onToggleVoiceChat?: () => void;
-  onOpenVoiceSettings?: () => void;
-  onVoiceTalkStart?: () => void;
-  onVoiceTalkEnd?: () => void;
-  onToggleVoiceOutput?: () => boolean;
-  isVoiceActive?: () => boolean;
-  isVoiceTalking?: () => boolean;
 }
 
 export type OrientationMode = 'portrait' | 'landscape';
