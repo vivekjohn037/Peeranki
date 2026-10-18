@@ -3393,7 +3393,6 @@ private nextStartIndex = -1;
   private realtimeChannel: any;
   private applyingRemoteState = false;
   private initialized = false;
-  private lastVisualShooterIndex = -1;
   private gameFinished = false;
   private victoryPlayed = false;
   private roundPhase: 'counting' | 'shooting' | 'duel' | 'waiting' | 'finished' = 'waiting';
@@ -4221,7 +4220,6 @@ if (offlineMode) {
       this.updatePlayerVisual(index, false);
     }
     this.syncUI();
-    this.lastVisualShooterIndex = this.currentShooter;
   }
 
   private markCountingShooter() {
