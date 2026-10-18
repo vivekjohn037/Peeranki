@@ -3484,6 +3484,9 @@ private nextStartIndex = -1;
     const canvas = this.game.canvas;
     canvas.style.opacity = '0';
     canvas.style.pointerEvents = 'none';
+    // Gameplay is rendered by the DOM UI. Keep this scene active for timers and
+    // networking, but skip Phaser's invisible canvas render loop on mobile GPUs.
+    this.scene.setVisible(false);
 
     this.uiManager.mount('#game', {
       onShootPlayer: (targetIndex: number) => {
@@ -4222,14 +4225,8 @@ if (offlineMode) {
   }
 
   private markCountingShooter() {
-    const previousIndex = this.lastVisualShooterIndex;
-    if (previousIndex >= 0 && previousIndex < this.playerObjects.length) {
-      this.updatePlayerVisual(previousIndex, false);
-    }
-    if (this.currentShooter >= 0 && this.currentShooter !== previousIndex && this.currentShooter < this.playerObjects.length) {
-      this.updatePlayerVisual(this.currentShooter, false);
-    }
-    this.lastVisualShooterIndex = this.currentShooter;
+    // The visible player cards are DOM elements. Updating Phaser's hidden
+    // player containers on every count tick wastes CPU without changing pixels.
     this.uiManager.updateShooterIndicator(this.currentShooter);
   }
 
