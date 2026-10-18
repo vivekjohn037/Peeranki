@@ -63,8 +63,11 @@ export class HUDComponent {
         <button type="button" class="pk-btn-icon pk-btn-help" aria-label="How to Play Guide" title="How to Play Guide">
           ❓
         </button>
-        <button type="button" class="pk-btn-icon pk-voice-btn-top" aria-label="Room Walkie-Talkie" title="Room Walkie-Talkie">
-          📻
+        <button type="button" class="pk-btn-icon pk-voice-mic-btn" aria-label="Join room voice or hold to talk" title="Room mic · hold to talk">
+          🎙️
+        </button>
+        <button type="button" class="pk-btn-icon pk-voice-speaker-btn" aria-label="Mute room voice audio" title="Mute room voice audio">
+          🔊
         </button>
         <button type="button" class="pk-btn-icon pk-audio-btn" aria-label="Mute Background Music" title="Mute Background Music">
           🔊
@@ -143,16 +146,42 @@ export class HUDComponent {
       // ignore
     }
 
-    const voiceBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-voice-btn-top');
-    if (voiceBtn) {
-      addFastTapListener(voiceBtn, () => {
-        if (this.callbacks.onOpenVoiceSettings) {
-          this.callbacks.onOpenVoiceSettings();
-        } else if (this.callbacks.onToggleVoiceChat) {
-          this.callbacks.onToggleVoiceChat();
-        }
-      });
-    }
+    const micBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-voice-mic-btn')!;
+    let micPointerId: number | null = null;
+    micBtn.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 && event.pointerType === 'mouse') return;
+      if (this.callbacks.isVoiceActive?.()) {
+        event.preventDefault();
+        micPointerId = event.pointerId;
+        try { micBtn.setPointerCapture(event.pointerId); } catch { /* Capture may be unavailable. */ }
+        this.callbacks.onVoiceTalkStart?.();
+        this.updateVoiceButtons();
+      } else {
+        this.callbacks.onOpenVoiceSettings?.();
+      }
+    });
+    const stopMic = (event: PointerEvent) => {
+      if (micPointerId !== event.pointerId) return;
+      event.preventDefault();
+      micPointerId = null;
+      this.callbacks.onVoiceTalkEnd?.();
+      this.updateVoiceButtons();
+    };
+    micBtn.addEventListener('pointerup', stopMic);
+    micBtn.addEventListener('pointercancel', stopMic);
+    micBtn.addEventListener('lostpointercapture', stopMic);
+    micBtn.addEventListener('contextmenu', (event) => event.preventDefault());
+    micBtn.addEventListener('click', (event) => {
+      if (event.detail === 0 && !this.callbacks.isVoiceActive?.()) {
+        this.callbacks.onOpenVoiceSettings?.();
+      }
+    });
+
+    const speakerBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-voice-speaker-btn')!;
+    addFastTapListener(speakerBtn, () => {
+      const isMuted = this.callbacks.onToggleVoiceOutput?.() ?? false;
+      this.updateVoiceButtons(isMuted);
+    });
 
     addFastTapListener(this.audioBtnEl, () => {
       const isMuted = this.callbacks.onToggleAudio();
@@ -264,31 +293,9 @@ export class HUDComponent {
     this.updateAudioButtonState(state.isMuted);
 
     // Voice status button
-    const voiceBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-voice-btn-top');
-    if (voiceBtn) {
-      if (state.isOffline) {
-        voiceBtn.style.display = 'none';
-      } else {
-        voiceBtn.style.display = 'inline-flex';
-        if (state.isVoiceActive) {
-          if (state.isVoiceMuted) {
-            voiceBtn.textContent = '🔇';
-            voiceBtn.title = 'Walkie-Talkie connected · mic muted';
-            voiceBtn.classList.add('is-voice-muted');
-            voiceBtn.classList.remove('is-voice-active');
-          } else {
-            voiceBtn.textContent = '📻';
-            voiceBtn.title = `Walkie-Talkie connected (${state.voicePeerCount ?? 0} players)`;
-            voiceBtn.classList.add('is-voice-active');
-            voiceBtn.classList.remove('is-voice-muted');
-          }
-        } else {
-          voiceBtn.textContent = '📻';
-          voiceBtn.title = 'Open room walkie-talkie';
-          voiceBtn.classList.remove('is-voice-active', 'is-voice-muted');
-        }
-      }
-    }
+    this.topbarEl.querySelectorAll<HTMLButtonElement>('.pk-voice-mic-btn, .pk-voice-speaker-btn')
+      .forEach((button) => { button.style.display = state.isOffline ? 'none' : 'inline-flex'; });
+    this.updateVoiceButtons(Boolean(state.isVoiceOutputMuted));
 
     // Network Status Badge
     if (state.isOffline) {
@@ -401,5 +408,26 @@ export class HUDComponent {
 
       this.weaponChipsContainer.appendChild(chip);
     });
+  }
+
+  private updateVoiceButtons(outputMuted?: boolean) {
+    const micBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-voice-mic-btn');
+    const speakerBtn = this.topbarEl.querySelector<HTMLButtonElement>('.pk-voice-speaker-btn');
+    if (micBtn) {
+      const joined = Boolean(this.callbacks.isVoiceActive?.());
+      const talking = joined && Boolean(this.callbacks.isVoiceTalking?.());
+      micBtn.textContent = talking ? '🎙️' : joined ? '🎤' : '🎙️';
+      micBtn.title = !joined ? 'Open room walkie-talkie settings' : talking ? 'Talking · release to mute' : 'Connected · hold to talk';
+      micBtn.setAttribute('aria-label', micBtn.title);
+      micBtn.classList.toggle('is-voice-active', talking);
+      micBtn.classList.toggle('is-voice-muted', joined && !talking);
+    }
+    if (speakerBtn) {
+      const muted = outputMuted ?? speakerBtn.classList.contains('is-voice-muted');
+      speakerBtn.textContent = muted ? '🔇' : '🔊';
+      speakerBtn.title = muted ? 'Unmute room voice audio' : 'Mute room voice audio';
+      speakerBtn.setAttribute('aria-label', speakerBtn.title);
+      speakerBtn.classList.toggle('is-voice-muted', muted);
+    }
   }
 }
