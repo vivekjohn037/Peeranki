@@ -6086,7 +6086,7 @@ void this.recordShot();
 
   // Buttons.
   const buttonY = panelHeight / 2 - 36;
-  const btnW = Math.min(130, Math.floor((panelWidth - 44) / 3));
+  const btnW = Math.min(170, Math.floor((panelWidth - 44) / 2));
 
   const replay = makeButton(
     this,
@@ -6094,17 +6094,6 @@ void this.recordShot();
     buttonY,
     'PLAY AGAIN',
     '#20a060',
-    12,
-    btnW,
-    42,
-  );
-
-  const duelLogBtn = makeButton(
-    this,
-    0,
-    buttonY,
-    'DUEL LOG',
-    '#d97706',
     12,
     btnW,
     42,
@@ -6131,13 +6120,8 @@ void this.recordShot();
     details,
     resultsText,
     replay,
-    duelLogBtn,
     menu,
   ]);
-
-  duelLogBtn.on('pointerdown', () => {
-    this.uiManager.openDuelLog();
-  });
 
   /*
    * Winner entrance animation.

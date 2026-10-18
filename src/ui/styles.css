@@ -1902,26 +1902,6 @@
    8. POST-MATCH DUEL LOG & SUMMARY MODAL
    ============================================================== */
 
-.pk-btn-duel-log {
-  background: linear-gradient(135deg, rgba(217, 119, 6, 0.25) 0%, rgba(180, 83, 9, 0.35) 100%) !important;
-  border: 1px solid rgba(251, 191, 36, 0.5) !important;
-  color: #fbbf24 !important;
-  font-weight: 700;
-  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.25);
-  transition: all 0.15s ease;
-}
-
-.pk-btn-duel-log:hover {
-  background: linear-gradient(135deg, rgba(217, 119, 6, 0.4) 0%, rgba(180, 83, 9, 0.5) 100%) !important;
-  border-color: #fbbf24 !important;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(217, 119, 6, 0.35);
-}
-
-.pk-btn-duel-log:active {
-  transform: translateY(1px) scale(0.98);
-}
-
 .pk-duellog-backdrop {
   z-index: 280;
   background: rgba(8, 12, 18, 0.88);
