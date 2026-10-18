@@ -209,6 +209,10 @@ export class GameUIManager {
     }
   }
 
+  public updateShooterIndicator(index: number) {
+    this.board?.updateShooterIndicator(index);
+  }
+
   public updateDuel(state: DuelState, immediate = false) {
     this.pendingDuelState = state;
     if (immediate) {
