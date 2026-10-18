@@ -1712,6 +1712,13 @@
     height: 36px;
     font-size: 14px;
   }
+  .pk-voice-mic-btn,
+  .pk-voice-speaker-btn {
+    flex-basis: 32px;
+    width: 32px;
+    height: 36px;
+    font-size: 13px;
+  }
   .pk-btn-leave {
     min-height: 36px;
     padding: 0 8px;
@@ -2477,15 +2484,32 @@
 /* ============================================================
    WALKIE-TALKIE ROOM VOICE
    ============================================================ */
-.pk-voice-btn-top {
-  position: relative;
-  transition: background 0.15s ease, border-color 0.15s ease;
+.pk-voice-mic-btn,
+.pk-voice-speaker-btn {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  touch-action: none;
+  border-color: rgba(52, 211, 153, 0.4);
+  background: linear-gradient(145deg, rgba(21, 94, 75, 0.62), rgba(24, 32, 41, 0.96));
 }
 
-.pk-voice-btn-top.is-voice-active {
-  background: rgba(34, 197, 94, 0.18);
-  border-color: #22c55e;
-  color: #86efac;
+.pk-voice-mic-btn.is-voice-active {
+  color: #bbf7d0;
+  border-color: #34d399;
+  background: rgba(6, 95, 70, 0.9);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.3);
+}
+
+.pk-voice-mic-btn.is-voice-muted {
+  color: #a7f3d0;
+}
+
+.pk-voice-speaker-btn.is-voice-muted {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.65);
+  background: rgba(127, 29, 29, 0.45);
 }
 
 .pk-voice-modal-backdrop { z-index: 1050; }
