@@ -1076,6 +1076,7 @@ export async function saveGameState(
   countNumber: number,
   gameStatus: string,
   countingStartTimestamp?: string | null,
+  broadcastBeforePersist = false,
 ) {
   const cleanCode = roomCode.trim().toUpperCase();
   if (!cleanCode || !validPlayerCount(maxPlayers)) {
@@ -1098,6 +1099,29 @@ export async function saveGameState(
     updated_at: now,
     state_seq: seq,
   };
+
+  const publishState = (notifyLocalSubscribers: boolean) => {
+    if (notifyLocalSubscribers) notifyRoomListeners(cleanCode, statePayload, false);
+    if (broadcastChannel) {
+      try {
+        broadcastChannel.postMessage({ type: 'ROOM_UPDATE', roomCode: cleanCode, data: statePayload });
+      } catch {
+        // ignore
+      }
+    }
+    const activeChan = activeRealtimeChannels.get(cleanCode);
+    if (activeChan) {
+      try {
+        void activeChan.send({ type: 'broadcast', event: 'state_delta', payload: statePayload });
+      } catch {
+        // The persisted Postgres change remains the source of truth.
+      }
+    }
+  };
+
+  // Shot outcomes come from the authoritative host. Broadcast them immediately,
+  // then persist the same snapshot so Supabase can recover missed messages.
+  if (broadcastBeforePersist && hasAnySupabaseConfiguration) publishState(false);
 
   if (hasAnySupabaseConfiguration) {
     const client = await authenticatedClient();
@@ -1137,25 +1161,9 @@ export async function saveGameState(
     }
   }
 
-  // Publish only after the durable write succeeds. Realtime broadcasts are a fast path, not a
-  // substitute for a persisted room snapshot; emitting first let peers observe updates rejected by
-  // the database and left the room divergent when the broadcast was missed.
-  notifyRoomListeners(cleanCode, statePayload, false);
-  if (broadcastChannel) {
-    try {
-      broadcastChannel.postMessage({ type: 'ROOM_UPDATE', roomCode: cleanCode, data: statePayload });
-    } catch {
-      // ignore
-    }
-  }
-  const activeChan = activeRealtimeChannels.get(cleanCode);
-  if (activeChan) {
-    try {
-      void activeChan.send({ type: 'broadcast', event: 'state_delta', payload: statePayload });
-    } catch {
-      // The persisted Postgres change remains the source of truth.
-    }
-  }
+  // Publish after persistence as well, so peers that missed the fast path still receive it.
+  // Identical fast-path snapshots are rejected as duplicates by shouldAcceptRoomState.
+  publishState(true);
   updateMockRoomPartial(cleanCode, {
     players: players as any[],
     max_players: maxPlayers,
