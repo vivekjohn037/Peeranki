@@ -42,7 +42,6 @@ export interface HUDState {
   maxPlayers?: number;
   isVoiceActive?: boolean;
   isVoiceMuted?: boolean;
-  voiceMode?: 'open_mic' | 'push_to_talk' | 'deafened';
   voicePeerCount?: number;
 }
 
