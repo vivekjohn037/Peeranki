@@ -1,19 +1,17 @@
-import type { VoiceChatService, VoiceMode } from '../audio/VoiceChatService';
+import type { VoiceChatService, VoicePeerState } from '../audio/VoiceChatService';
 import { addFastTapListener } from './touchUtils';
 
+/** A compact, opt-in walkie-talkie panel for the current online room. */
 export class VoiceModalComponent {
-  private rootEl: HTMLElement;
+  private readonly rootEl: HTMLElement;
   private voiceService: VoiceChatService | null = null;
   private isVisible = false;
-
-  private statusBadgeEl!: HTMLElement;
-  private modeSelectEl!: HTMLSelectElement;
-  private micToggleBtn!: HTMLButtonElement;
-  private deafenToggleBtn!: HTMLButtonElement;
-  private pttIndicatorEl!: HTMLElement;
-  private localVisualizerFill!: HTMLElement;
-  private peerListEl!: HTMLElement;
-  private emptyPeersEl!: HTMLElement;
+  private statusEl!: HTMLElement;
+  private joinButton!: HTMLButtonElement;
+  private leaveButton!: HTMLButtonElement;
+  private talkButton!: HTMLButtonElement;
+  private errorEl!: HTMLElement;
+  private peersEl!: HTMLElement;
 
   constructor() {
     this.rootEl = document.createElement('div');
@@ -22,350 +20,171 @@ export class VoiceModalComponent {
     this.initDOM();
   }
 
-  private initDOM() {
+  private initDOM(): void {
     this.rootEl.innerHTML = `
-      <div class="pk-modal-dialog pk-voice-dialog" role="dialog" aria-labelledby="pk-voice-title" aria-modal="true">
-        <div class="pk-modal-header">
+      <section class="pk-modal-dialog pk-voice-dialog pk-walkie-dialog" role="dialog" aria-labelledby="pk-voice-title" aria-modal="true">
+        <header class="pk-modal-header">
           <div class="pk-modal-title-row">
-            <span class="pk-voice-icon-lead">🎙️</span>
+            <span class="pk-voice-icon-lead" aria-hidden="true">📻</span>
             <div>
-              <h2 id="pk-voice-title" class="pk-modal-title">VOICE CHAT SETTINGS</h2>
-              <div class="pk-voice-subtitle">Live in-game voice audio with room players</div>
+              <h2 id="pk-voice-title" class="pk-modal-title">ROOM WALKIE-TALKIE</h2>
+              <p class="pk-voice-subtitle">Join by choice. Hold to talk; release to mute.</p>
             </div>
           </div>
-          <button type="button" class="pk-modal-close-btn" aria-label="Close Voice Chat Settings">✕</button>
-        </div>
-
+          <button type="button" class="pk-modal-close-btn" aria-label="Close voice panel">✕</button>
+        </header>
         <div class="pk-voice-dialog-body">
-          <!-- Voice Connection Card -->
-          <div class="pk-voice-card pk-voice-main-controls">
+          <div class="pk-voice-card pk-walkie-controls">
             <div class="pk-voice-status-row">
-              <span class="pk-voice-field-label">Voice Status</span>
-              <div class="pk-voice-status-pill">
-                <span class="pk-voice-status-dot">🔴</span>
-                <span class="pk-voice-status-text">Disconnected</span>
-              </div>
+              <span class="pk-voice-field-label">Room voice</span>
+              <span class="pk-voice-status-pill is-disconnected" role="status">Not connected</span>
             </div>
-
-            <!-- Mode Selector -->
-            <div class="pk-voice-field-group">
-              <label for="pk-voice-mode-select" class="pk-voice-field-label">Microphone Mode</label>
-              <select id="pk-voice-mode-select" class="pk-voice-select">
-                <option value="open_mic">🎙️ Open Mic (Voice Activated)</option>
-                <option value="push_to_talk">🔘 Push to Talk (Hold 'V' or On-Screen Button)</option>
-                <option value="deafened">🔇 Deafened (Mute All & Self)</option>
-              </select>
+            <div class="pk-walkie-actions">
+              <button type="button" class="pk-voice-btn pk-walkie-join">Join voice</button>
+              <button type="button" class="pk-voice-btn pk-walkie-leave" hidden>Leave voice</button>
             </div>
-
-            <!-- Action buttons: Mute & Deafen -->
-            <div class="pk-voice-btn-row">
-              <button type="button" class="pk-voice-btn pk-voice-mic-btn" aria-label="Toggle Microphone">
-                <span class="pk-voice-btn-icon">🎙️</span>
-                <span class="pk-voice-btn-label">Mic Active</span>
-              </button>
-              <button type="button" class="pk-voice-btn pk-voice-deafen-btn" aria-label="Toggle Deafen">
-                <span class="pk-voice-btn-icon">🎧</span>
-                <span class="pk-voice-btn-label">Deafen</span>
-              </button>
-            </div>
-
-            <!-- Push-To-Talk On-Screen Hold Button -->
-            <div class="pk-ptt-hold-container" style="display: none;">
-              <button type="button" class="pk-ptt-hold-button" aria-label="Push To Talk Hold Button">
-                <span>HOLD TO TALK (OR PRESS 'V')</span>
-              </button>
-            </div>
-
-            <!-- Local Mic Visualizer -->
-            <div class="pk-voice-visualizer-row">
-              <span class="pk-voice-field-label">Mic Input Level</span>
-              <div class="pk-voice-level-meter">
-                <div class="pk-voice-level-fill"></div>
-              </div>
-            </div>
+            <button type="button" class="pk-ptt-hold-button pk-walkie-talk" disabled aria-label="Hold to talk">
+              <span class="pk-walkie-talk-icon" aria-hidden="true">🎙️</span>
+              <span>HOLD TO TALK</span>
+              <small>or hold V on keyboard</small>
+            </button>
+            <p class="pk-walkie-error" role="alert" hidden></p>
           </div>
-
-          <!-- Active Peers In Call -->
-          <div class="pk-voice-card pk-voice-peers-card">
+          <div class="pk-voice-card pk-walkie-roster">
             <div class="pk-voice-peers-header">
-              <span class="pk-voice-field-label">Players in Voice</span>
-              <span class="pk-voice-peers-count">0 connected</span>
+              <span class="pk-voice-field-label">Players connected to voice</span>
+              <span class="pk-voice-peers-count">0</span>
             </div>
-            <div class="pk-voice-peers-list">
-              <div class="pk-voice-empty-peers">
-                <span>No other players have connected their microphone yet.</span>
-                <small>Invite your friends or share room code to talk!</small>
-              </div>
-            </div>
+            <ul class="pk-voice-peers-list" aria-live="polite"></ul>
+            <p class="pk-voice-empty-peers">You’re alone in voice for now. Friends can join from this room.</p>
           </div>
         </div>
-
-        <div class="pk-modal-footer pk-voice-dialog-footer">
+        <footer class="pk-modal-footer pk-voice-dialog-footer">
           <button type="button" class="pk-modal-action-btn pk-voice-done-btn">DONE</button>
-        </div>
-      </div>
+        </footer>
+      </section>
     `;
 
-    this.statusBadgeEl = this.rootEl.querySelector('.pk-voice-status-pill')!;
-    this.modeSelectEl = this.rootEl.querySelector('#pk-voice-mode-select')!;
-    this.micToggleBtn = this.rootEl.querySelector('.pk-voice-mic-btn')!;
-    this.deafenToggleBtn = this.rootEl.querySelector('.pk-voice-deafen-btn')!;
-    this.pttIndicatorEl = this.rootEl.querySelector('.pk-ptt-hold-container')!;
-    this.localVisualizerFill = this.rootEl.querySelector('.pk-voice-level-fill')!;
-    this.peerListEl = this.rootEl.querySelector('.pk-voice-peers-list')!;
-    this.emptyPeersEl = this.rootEl.querySelector('.pk-voice-empty-peers')!;
+    this.statusEl = this.rootEl.querySelector('.pk-voice-status-pill')!;
+    this.joinButton = this.rootEl.querySelector('.pk-walkie-join')!;
+    this.leaveButton = this.rootEl.querySelector('.pk-walkie-leave')!;
+    this.talkButton = this.rootEl.querySelector('.pk-walkie-talk')!;
+    this.errorEl = this.rootEl.querySelector('.pk-walkie-error')!;
+    this.peersEl = this.rootEl.querySelector('.pk-voice-peers-list')!;
 
-    const closeBtn = this.rootEl.querySelector('.pk-modal-close-btn')!;
-    const doneBtn = this.rootEl.querySelector('.pk-voice-done-btn')!;
-    const pttBtn = this.rootEl.querySelector('.pk-ptt-hold-button')!;
-
-    addFastTapListener(closeBtn as HTMLElement, () => this.hide());
-    addFastTapListener(doneBtn as HTMLElement, () => this.hide());
-
-    // Backdrop click
-    this.rootEl.addEventListener('click', (e) => {
-      if (e.target === this.rootEl) this.hide();
+    const hide = () => this.hide();
+    addFastTapListener(this.rootEl.querySelector('.pk-modal-close-btn') as HTMLElement, hide);
+    addFastTapListener(this.rootEl.querySelector('.pk-voice-done-btn') as HTMLElement, hide);
+    this.rootEl.addEventListener('click', (event) => {
+      if (event.target === this.rootEl) hide();
     });
 
-    // Mode change
-    this.modeSelectEl.addEventListener('change', () => {
-      const mode = this.modeSelectEl.value as VoiceMode;
-      this.voiceService?.setVoiceMode(mode);
+    addFastTapListener(this.joinButton, () => {
+      this.errorEl.hidden = true;
+      void this.voiceService?.startVoice().then((joined) => {
+        if (!joined && this.voiceService) {
+          this.errorEl.textContent = this.voiceService.getLastError();
+          this.errorEl.hidden = !this.errorEl.textContent;
+        }
+        this.updateView();
+      });
+    });
+    addFastTapListener(this.leaveButton, () => {
+      this.voiceService?.leaveVoice();
       this.updateView();
     });
 
-    // Toggle Mic
-    addFastTapListener(this.micToggleBtn, () => {
-      if (this.voiceService) {
-        if (!this.voiceService.isVoiceActive()) {
-          void this.voiceService.startVoice().then(() => this.updateView());
-        } else {
-          this.voiceService.toggleMute();
-          this.updateView();
-        }
-      }
-    });
-
-    // Toggle Deafen
-    addFastTapListener(this.deafenToggleBtn, () => {
-      if (this.voiceService) {
-        const currentlyDeafened = this.voiceService.isUserDeafened();
-        this.voiceService.setDeafened(!currentlyDeafened);
-        this.updateView();
-      }
-    });
-
-    // On-screen PTT touch / pointer hold
-    const startPTT = (e: Event) => {
-      e.preventDefault();
-      pttBtn.classList.add('is-pressed');
-      this.voiceService?.setPushToTalkState(true);
+    const startTalk = (event: PointerEvent) => {
+      if (!this.voiceService?.isVoiceActive()) return;
+      event.preventDefault();
+      this.talkButton.classList.add('is-pressed');
+      try { this.talkButton.setPointerCapture(event.pointerId); } catch { /* Capture may be unavailable. */ }
+      this.voiceService.setPushToTalkState(true);
+      this.updateView();
     };
-    const endPTT = (e: Event) => {
-      e.preventDefault();
-      pttBtn.classList.remove('is-pressed');
+    const stopTalk = (event: PointerEvent) => {
+      event.preventDefault();
+      this.talkButton.classList.remove('is-pressed');
       this.voiceService?.setPushToTalkState(false);
+      this.updateView();
     };
-
-    pttBtn.addEventListener('mousedown', startPTT);
-    pttBtn.addEventListener('mouseup', endPTT);
-    pttBtn.addEventListener('mouseleave', endPTT);
-    pttBtn.addEventListener('touchstart', startPTT, { passive: false });
-    pttBtn.addEventListener('touchend', endPTT, { passive: false });
-    pttBtn.addEventListener('touchcancel', endPTT, { passive: false });
+    this.talkButton.addEventListener('pointerdown', startTalk);
+    this.talkButton.addEventListener('pointerup', stopTalk);
+    this.talkButton.addEventListener('pointercancel', stopTalk);
+    this.talkButton.addEventListener('lostpointercapture', stopTalk);
+    this.talkButton.addEventListener('contextmenu', (event) => event.preventDefault());
   }
 
-  public setVoiceService(service: VoiceChatService | null) {
+  public setVoiceService(service: VoiceChatService | null): void {
     this.voiceService = service;
-    if (this.voiceService) {
-      this.modeSelectEl.value = this.voiceService.getVoiceMode();
-    }
     this.updateView();
   }
 
-  public getElement(): HTMLElement {
-    return this.rootEl;
-  }
+  public getElement(): HTMLElement { return this.rootEl; }
 
-  public show() {
+  public show(): void {
     this.isVisible = true;
     this.rootEl.style.display = 'flex';
-    // Auto start microphone when modal is opened if not active
-    if (this.voiceService && !this.voiceService.isVoiceActive()) {
-      void this.voiceService.startVoice().then(() => this.updateView());
-    }
     this.updateView();
   }
 
-  public hide() {
+  public hide(): void {
     this.isVisible = false;
     this.rootEl.style.display = 'none';
+    this.voiceService?.setPushToTalkState(false);
   }
 
-  public toggle() {
+  public toggle(): void {
     if (this.isVisible) this.hide();
     else this.show();
   }
 
-  public updateLocalAudioLevel(level: number) {
-    if (!this.isVisible) return;
-    this.localVisualizerFill.style.width = `${level}%`;
-    if (level > 15) {
-      this.localVisualizerFill.style.backgroundColor = '#22c55e';
-    } else {
-      this.localVisualizerFill.style.backgroundColor = '#38bdf8';
-    }
+  public updateLocalAudioLevel(_level: number): void {
+    // Kept as a compatibility no-op for the existing game UI callback.
   }
 
-  public updateView() {
-    if (!this.voiceService) {
-      this.statusBadgeEl.innerHTML = `<span class="pk-voice-status-dot">🔴</span><span class="pk-voice-status-text">Offline</span>`;
-      return;
+  public updateView(): void {
+    const joined = Boolean(this.voiceService?.isVoiceActive());
+    const starting = Boolean(this.voiceService?.isVoiceStarting());
+    const talking = Boolean(this.voiceService?.isPttPressed());
+    this.statusEl.className = `pk-voice-status-pill ${!joined ? 'is-disconnected' : talking ? 'is-active' : 'is-muted'}`;
+    this.statusEl.textContent = starting ? 'Requesting microphone…' : !joined ? 'Not connected' : talking ? 'You’re talking' : 'Connected · mic muted';
+    this.joinButton.hidden = joined;
+    this.joinButton.disabled = starting;
+    this.joinButton.textContent = starting ? 'Requesting microphone…' : 'Join voice';
+    this.leaveButton.hidden = !joined;
+    this.talkButton.disabled = !joined;
+    this.talkButton.classList.toggle('is-pressed', talking);
+    if (joined) {
+      this.errorEl.hidden = true;
+    } else if (this.voiceService?.getLastError()) {
+      this.errorEl.textContent = this.voiceService.getLastError();
+      this.errorEl.hidden = false;
     }
-
-    const isActive = this.voiceService.isVoiceActive();
-    const isMuted = this.voiceService.isMuted();
-    const isDeaf = this.voiceService.isUserDeafened();
-    const mode = this.voiceService.getVoiceMode();
-
-    // 1. Status Pill
-    if (!isActive) {
-      const err = this.voiceService.getLastError();
-      if (err) {
-        this.statusBadgeEl.className = 'pk-voice-status-pill is-error';
-        this.statusBadgeEl.innerHTML = `<span class="pk-voice-status-dot">⚠️</span><span class="pk-voice-status-text">Mic Denied</span>`;
-        this.statusBadgeEl.title = err;
-      } else {
-        this.statusBadgeEl.className = 'pk-voice-status-pill is-disconnected';
-        this.statusBadgeEl.innerHTML = `<span class="pk-voice-status-dot">🔴</span><span class="pk-voice-status-text">Connecting Mic...</span>`;
-      }
-    } else if (isDeaf) {
-      this.statusBadgeEl.className = 'pk-voice-status-pill is-deafened';
-      this.statusBadgeEl.innerHTML = `<span class="pk-voice-status-dot">🎧</span><span class="pk-voice-status-text">Deafened</span>`;
-    } else if (isMuted) {
-      this.statusBadgeEl.className = 'pk-voice-status-pill is-muted';
-      this.statusBadgeEl.innerHTML = `<span class="pk-voice-status-dot">🔇</span><span class="pk-voice-status-text">Muted</span>`;
-    } else {
-      this.statusBadgeEl.className = 'pk-voice-status-pill is-active';
-      this.statusBadgeEl.innerHTML = `<span class="pk-voice-status-dot">🟢</span><span class="pk-voice-status-text">Voice Connected</span>`;
-    }
-
-    // 2. Mode Select
-    this.modeSelectEl.value = mode;
-
-    // 3. PTT Container
-    if (mode === 'push_to_talk') {
-      this.pttIndicatorEl.style.display = 'block';
-    } else {
-      this.pttIndicatorEl.style.display = 'none';
-    }
-
-    // 4. Mic & Deafen buttons
-    if (isMuted) {
-      this.micToggleBtn.className = 'pk-voice-btn pk-voice-mic-btn is-off';
-      this.micToggleBtn.innerHTML = `<span class="pk-voice-btn-icon">🔇</span><span class="pk-voice-btn-label">Unmute Mic</span>`;
-    } else {
-      this.micToggleBtn.className = 'pk-voice-btn pk-voice-mic-btn is-on';
-      this.micToggleBtn.innerHTML = `<span class="pk-voice-btn-icon">🎙️</span><span class="pk-voice-btn-label">Mute Mic</span>`;
-    }
-
-    if (isDeaf) {
-      this.deafenToggleBtn.className = 'pk-voice-btn pk-voice-deafen-btn is-on';
-      this.deafenToggleBtn.innerHTML = `<span class="pk-voice-btn-icon">🔇</span><span class="pk-voice-btn-label">Undeafen</span>`;
-    } else {
-      this.deafenToggleBtn.className = 'pk-voice-btn pk-voice-deafen-btn is-off';
-      this.deafenToggleBtn.innerHTML = `<span class="pk-voice-btn-icon">🎧</span><span class="pk-voice-btn-label">Deafen All</span>`;
-    }
-
-    // 5. Update Peers List
     this.renderPeers();
   }
 
-  public renderPeers() {
-    if (!this.voiceService) return;
-    const peers = this.voiceService.getPeerStates();
+  public renderPeers(): void {
+    const peers = this.voiceService?.getPeerStates() ?? new Map<string, VoicePeerState>();
     const countEl = this.rootEl.querySelector('.pk-voice-peers-count');
-    if (countEl) {
-      countEl.textContent = `${peers.size} connected`;
-    }
+    const emptyEl = this.rootEl.querySelector('.pk-voice-empty-peers') as HTMLElement | null;
+    if (countEl) countEl.textContent = String(peers.size);
+    if (emptyEl) emptyEl.hidden = peers.size > 0;
+    this.peersEl.replaceChildren();
 
-    if (peers.size === 0) {
-      this.emptyPeersEl.style.display = 'flex';
-      // Remove other elements
-      Array.from(this.peerListEl.children).forEach((child) => {
-        if (child !== this.emptyPeersEl) child.remove();
-      });
-      return;
-    }
-
-    this.emptyPeersEl.style.display = 'none';
-
-    // Synchronize peer items
-    peers.forEach((peer, sessionId) => {
-      let item = this.peerListEl.querySelector(`[data-peer-id="${sessionId}"]`) as HTMLElement;
-      if (!item) {
-        item = document.createElement('div');
-        item.className = 'pk-voice-peer-item';
-        item.dataset.peerId = sessionId;
-        item.innerHTML = `
-          <div class="pk-voice-peer-info">
-            <div class="pk-voice-peer-avatar-wrapper">
-              <span class="pk-voice-peer-avatar">👤</span>
-              <div class="pk-voice-speaking-ring"></div>
-            </div>
-            <span class="pk-voice-peer-name">${peer.playerName}</span>
-          </div>
-          <div class="pk-voice-peer-controls">
-            <input type="range" class="pk-voice-peer-vol" min="0" max="100" value="${Math.round(peer.volume * 100)}" aria-label="Peer Volume" />
-            <button type="button" class="pk-voice-peer-mute-btn" aria-label="Mute Peer">
-              ${peer.isMutedLocally ? '🔇' : '🔊'}
-            </button>
-          </div>
-        `;
-
-        const volSlider = item.querySelector<HTMLInputElement>('.pk-voice-peer-vol')!;
-        const muteBtn = item.querySelector<HTMLButtonElement>('.pk-voice-peer-mute-btn')!;
-
-        volSlider.addEventListener('input', () => {
-          const vol = Number(volSlider.value) / 100;
-          this.voiceService?.setPeerVolume(sessionId, vol);
-        });
-
-        addFastTapListener(muteBtn, () => {
-          const curr = this.voiceService?.getPeerStates().get(sessionId);
-          if (curr) {
-            this.voiceService?.setPeerMuted(sessionId, !curr.isMutedLocally);
-            muteBtn.textContent = !curr.isMutedLocally ? '🔇' : '🔊';
-          }
-        });
-
-        this.peerListEl.appendChild(item);
-      }
-
-      // Update peer item status
-      const nameEl = item.querySelector('.pk-voice-peer-name');
-      if (nameEl) nameEl.textContent = peer.playerName;
-
-      const muteBtn = item.querySelector('.pk-voice-peer-mute-btn');
-      if (muteBtn) muteBtn.textContent = peer.isMutedLocally ? '🔇' : '🔊';
-
-      const ring = item.querySelector('.pk-voice-speaking-ring') as HTMLElement;
-      if (ring) {
-        if (peer.isSpeaking) {
-          ring.classList.add('is-speaking');
-        } else {
-          ring.classList.remove('is-speaking');
-        }
-      }
-    });
-
-    // Remove any disconnected peers
-    Array.from(this.peerListEl.children).forEach((child) => {
-      if (child === this.emptyPeersEl) return;
-      const id = (child as HTMLElement).dataset.peerId;
-      if (id && !peers.has(id)) {
-        child.remove();
-      }
+    peers.forEach((peer) => {
+      const row = document.createElement('li');
+      row.className = 'pk-walkie-peer';
+      const name = document.createElement('span');
+      name.className = 'pk-walkie-peer-name';
+      name.textContent = peer.playerName;
+      const state = document.createElement('span');
+      state.className = 'pk-walkie-peer-state';
+      const connected = peer.connectionState === 'connected';
+      state.textContent = peer.isSpeaking ? 'Speaking' : connected ? 'Listening' : 'Connecting';
+      state.classList.toggle('is-speaking', peer.isSpeaking);
+      row.append(name, state);
+      this.peersEl.appendChild(row);
     });
   }
 }

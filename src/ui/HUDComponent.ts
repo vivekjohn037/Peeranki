@@ -63,8 +63,8 @@ export class HUDComponent {
         <button type="button" class="pk-btn-icon pk-btn-help" aria-label="How to Play Guide" title="How to Play Guide">
           ❓
         </button>
-        <button type="button" class="pk-btn-icon pk-voice-btn-top" aria-label="Voice Chat Options" title="Voice Chat Options">
-          🎙️
+        <button type="button" class="pk-btn-icon pk-voice-btn-top" aria-label="Room Walkie-Talkie" title="Room Walkie-Talkie">
+          📻
         </button>
         <button type="button" class="pk-btn-icon pk-audio-btn" aria-label="Mute Background Music" title="Mute Background Music">
           🔊
@@ -273,18 +273,18 @@ export class HUDComponent {
         if (state.isVoiceActive) {
           if (state.isVoiceMuted) {
             voiceBtn.textContent = '🔇';
-            voiceBtn.title = 'Voice Chat (Muted) - Tap for Settings';
+            voiceBtn.title = 'Walkie-Talkie connected · mic muted';
             voiceBtn.classList.add('is-voice-muted');
             voiceBtn.classList.remove('is-voice-active');
           } else {
-            voiceBtn.textContent = '🎙️';
-            voiceBtn.title = `Voice Chat Active (${state.voicePeerCount ?? 0} in call) - Tap for Settings`;
+            voiceBtn.textContent = '📻';
+            voiceBtn.title = `Walkie-Talkie connected (${state.voicePeerCount ?? 0} players)`;
             voiceBtn.classList.add('is-voice-active');
             voiceBtn.classList.remove('is-voice-muted');
           }
         } else {
-          voiceBtn.textContent = '🎙️';
-          voiceBtn.title = 'Join Voice Chat';
+          voiceBtn.textContent = '📻';
+          voiceBtn.title = 'Open room walkie-talkie';
           voiceBtn.classList.remove('is-voice-active', 'is-voice-muted');
         }
       }

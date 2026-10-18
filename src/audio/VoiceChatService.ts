@@ -1,16 +1,9 @@
 /**
- * Peeranki WebRTC Voice Chat Engine
+ * Small-room walkie-talkie voice chat.
  *
- * Implements low-latency, peer-to-peer audio mesh over WebRTC using Supabase Realtime
- * broadcast signaling (offers, answers, ICE candidates) or local broadcast channels for multi-tab testing.
- *
- * Features:
- * - Push-to-Talk (PTT) & Open Mic mode with sensitivity gating
- * - Per-peer volume sliders and mute toggles
- * - Live audio level / visualizer detection (Web Audio API AnalyserNode)
- * - Automatic reconnection on network hiccup
- * - Graceful fallback when microphone is unavailable or denied
- * - Works in both Lobby and Game scenes
+ * Audio stays muted until a player holds the talk control. Supabase Realtime is
+ * used only for WebRTC signaling; audio itself travels directly between the
+ * players. The mesh is intentionally limited to Peeranki's small rooms.
  */
 
 export interface VoicePeerState {
@@ -18,637 +11,406 @@ export interface VoicePeerState {
   playerName: string;
   isSpeaking: boolean;
   isMutedLocally: boolean;
-  volume: number; // 0.0 to 1.0
+  volume: number;
   connectionState: RTCPeerConnectionState | 'new';
-  audioLevel: number; // 0 to 100 for visualizer
+  audioLevel: number;
 }
 
-export type VoiceMode = 'open_mic' | 'push_to_talk' | 'deafened';
+export type VoiceMode = 'push_to_talk';
 
 export interface VoiceChatOptions {
   roomCode: string;
   localSessionId: string;
   localPlayerName: string;
-  signalingSend: (event: string, payload: any) => Promise<void>;
+  signalingSend: (event: string, payload: unknown) => Promise<void>;
   onPeersChange?: (peers: Map<string, VoicePeerState>) => void;
   onLocalAudioLevel?: (level: number) => void;
   onStatusChange?: (status: { active: boolean; error?: string; isMicOn: boolean; mode: VoiceMode }) => void;
 }
 
-interface WebRTCSignalPayload {
+interface VoiceSignal {
   targetSessionId: string;
   senderSessionId: string;
   senderName: string;
-  type: 'offer' | 'answer' | 'ice-candidate' | 'voice-presence' | 'voice-bye';
+  type: 'offer' | 'answer' | 'ice-candidate' | 'voice-presence' | 'voice-speaking' | 'voice-bye';
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
-  isMuted?: boolean;
+  isSpeaking?: boolean;
 }
 
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
 ];
 
 export class VoiceChatService {
-  private roomCode: string;
-  private localSessionId: string;
-  private localPlayerName: string;
-  private signalingSend: (event: string, payload: any) => Promise<void>;
+  private readonly localSessionId: string;
+  private readonly localPlayerName: string;
+  private readonly signalingSend: VoiceChatOptions['signalingSend'];
+  private readonly onPeersChange?: VoiceChatOptions['onPeersChange'];
+  private readonly onStatusChange?: VoiceChatOptions['onStatusChange'];
 
   private localStream: MediaStream | null = null;
-  private audioContext: AudioContext | null = null;
-  private localAnalyser: AnalyserNode | null = null;
-  private localLevelInterval: number | null = null;
-
-  private peerConnections = new Map<string, RTCPeerConnection>();
-  private peerStreams = new Map<string, MediaStream>();
-  private peerAudioElements = new Map<string, HTMLAudioElement>();
-  private peerAnalysers = new Map<string, { analyser: AnalyserNode; interval: number }>();
-  private peerStates = new Map<string, VoicePeerState>();
-
-  private isMicEnabled = true;
-  private voiceMode: VoiceMode = 'open_mic';
-  private isPushToTalkPressed = false;
-  private isDeafened = false;
+  private readonly connections = new Map<string, RTCPeerConnection>();
+  private readonly audioElements = new Map<string, HTMLAudioElement>();
+  private readonly peerStates = new Map<string, VoicePeerState>();
+  private readonly pendingCandidates = new Map<string, RTCIceCandidateInit[]>();
+  private readonly offersInProgress = new Set<string>();
+  private presenceTimer: number | null = null;
   private isJoined = false;
-  private micPermissionGranted = false;
+  private isStarting = false;
+  private isTalking = false;
   private lastErrorMessage = '';
 
-  private onPeersChange?: (peers: Map<string, VoicePeerState>) => void;
-  private onLocalAudioLevel?: (level: number) => void;
-  private onStatusChange?: (status: { active: boolean; error?: string; isMicOn: boolean; mode: VoiceMode }) => void;
+  private readonly onKeyDown = (event: KeyboardEvent) => {
+    if (event.code !== 'KeyV' || event.repeat || this.isTypingTarget(event.target)) return;
+    this.setPushToTalkState(true);
+  };
 
-  private presenceHeartbeatTimer: number | null = null;
+  private readonly onKeyUp = (event: KeyboardEvent) => {
+    if (event.code === 'KeyV') this.setPushToTalkState(false);
+  };
+
+  private readonly onWindowBlur = () => this.setPushToTalkState(false);
 
   constructor(options: VoiceChatOptions) {
-    this.roomCode = options.roomCode;
     this.localSessionId = options.localSessionId;
     this.localPlayerName = options.localPlayerName;
     this.signalingSend = options.signalingSend;
     this.onPeersChange = options.onPeersChange;
-    this.onLocalAudioLevel = options.onLocalAudioLevel;
     this.onStatusChange = options.onStatusChange;
-
-    // Load saved settings if any
-    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-      try {
-        const savedMode = localStorage.getItem('peeranki_voice_mode') as VoiceMode;
-        if (savedMode === 'open_mic' || savedMode === 'push_to_talk' || savedMode === 'deafened') {
-          this.voiceMode = savedMode;
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    this.setupKeyboardListeners();
+    window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('blur', this.onWindowBlur);
   }
 
-  private setupKeyboardListeners() {
-    if (typeof window === 'undefined') return;
-
-    window.addEventListener('keydown', (e) => {
-      if (this.voiceMode === 'push_to_talk' && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) {
-        // Prevent typing into chat / textboxes triggering PTT
-        if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
-        if (!this.isPushToTalkPressed) {
-          this.isPushToTalkPressed = true;
-          this.applyMicrophoneTrackState();
-        }
-      }
-    });
-
-    window.addEventListener('keyup', (e) => {
-      if (this.voiceMode === 'push_to_talk' && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) {
-        if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
-        if (this.isPushToTalkPressed) {
-          this.isPushToTalkPressed = false;
-          this.applyMicrophoneTrackState();
-        }
-      }
-    });
+  private isTypingTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    return Boolean(el?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el?.tagName ?? ''));
   }
 
+  /** Called only from an explicit Join Voice button press. */
   public async startVoice(): Promise<boolean> {
     if (this.isJoined) return true;
+    if (this.isStarting) return false;
+    this.isStarting = true;
+    this.lastErrorMessage = '';
+    this.notifyStatus();
 
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('WebRTC / Microphone is not supported by this browser.');
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Microphone access is unavailable. Open Peeranki in a secure browser page.');
       }
-
       this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: false,
       });
+      this.localStream.getAudioTracks().forEach((track) => {
+        track.enabled = false;
+        track.onended = () => {
+          this.isTalking = false;
+          this.lastErrorMessage = 'Microphone stopped. Rejoin voice to try again.';
+          this.notifyStatus();
+        };
+      });
 
-      this.micPermissionGranted = true;
       this.isJoined = true;
+      this.isTalking = false;
       this.lastErrorMessage = '';
-
-      // Set up local Web Audio analyzer for visual voice levels
-      this.setupLocalAudioAnalysis();
-
-      // Apply initial mic muting / PTT state
-      this.applyMicrophoneTrackState();
-
-      // Announce voice presence to the room
       await this.broadcastPresence();
-
-      // Start presence heartbeat
-      this.presenceHeartbeatTimer = window.setInterval(() => {
+      this.presenceTimer = window.setInterval(() => {
         if (this.isJoined) void this.broadcastPresence();
-      }, 5000);
-
+      }, 8000);
       this.notifyStatus();
-      console.log(`[Peeranki Voice] Voice Chat initialized for room ${this.roomCode}`);
       return true;
-    } catch (err: any) {
-      console.warn('[Peeranki Voice] Microphone access error:', err);
-      this.lastErrorMessage = err?.message || 'Could not access microphone';
-      this.micPermissionGranted = false;
+    } catch (error) {
+      const err = error as DOMException;
+      this.lastErrorMessage = err?.name === 'NotAllowedError'
+        ? 'Microphone permission was blocked. Allow it for this site, then try again.'
+        : err?.message || 'Could not start voice chat.';
+      this.localStream?.getTracks().forEach((track) => track.stop());
+      this.localStream = null;
       this.isJoined = false;
+      this.isTalking = false;
       this.notifyStatus();
       return false;
+    } finally {
+      this.isStarting = false;
+      this.notifyStatus();
     }
   }
 
-  private setupLocalAudioAnalysis() {
-    if (!this.localStream) return;
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-
-      this.audioContext = new AudioCtx();
-      const source = this.audioContext.createMediaStreamSource(this.localStream);
-      this.localAnalyser = this.audioContext.createAnalyser();
-      this.localAnalyser.fftSize = 64;
-      this.localAnalyser.smoothingTimeConstant = 0.4;
-      source.connect(this.localAnalyser);
-
-      const buffer = new Uint8Array(this.localAnalyser.frequencyBinCount);
-      this.localLevelInterval = window.setInterval(() => {
-        if (!this.localAnalyser || !this.isMicActiveNow()) {
-          this.onLocalAudioLevel?.(0);
-          return;
-        }
-        this.localAnalyser.getByteFrequencyData(buffer);
-        let sum = 0;
-        for (let i = 0; i < buffer.length; i++) sum += buffer[i];
-        const avg = sum / buffer.length;
-        const normalized = Math.min(100, Math.round((avg / 128) * 100));
-        this.onLocalAudioLevel?.(normalized);
-      }, 80);
-    } catch (err) {
-      console.warn('[Peeranki Voice] AudioContext setup skipped:', err);
-    }
-  }
-
-  private isMicActiveNow(): boolean {
-    if (!this.isJoined || !this.localStream || this.isDeafened) return false;
-    if (this.voiceMode === 'deafened') return false;
-    if (this.voiceMode === 'push_to_talk') return this.isPushToTalkPressed;
-    return this.isMicEnabled;
-  }
-
-  public applyMicrophoneTrackState() {
-    if (!this.localStream) return;
-    const active = this.isMicActiveNow();
-    this.localStream.getAudioTracks().forEach((track) => {
-      track.enabled = active;
-    });
-    this.notifyStatus();
-  }
-
-  public setVoiceMode(mode: VoiceMode) {
-    this.voiceMode = mode;
-    try {
-      localStorage.setItem('peeranki_voice_mode', mode);
-    } catch {}
-    this.applyMicrophoneTrackState();
-  }
-
-  public getVoiceMode(): VoiceMode {
-    return this.voiceMode;
-  }
-
-  public toggleMute(): boolean {
-    this.isMicEnabled = !this.isMicEnabled;
-    this.applyMicrophoneTrackState();
-    return !this.isMicEnabled;
-  }
-
-  public isMuted(): boolean {
-    return !this.isMicEnabled;
-  }
-
-  public isPermissionGranted(): boolean {
-    return this.micPermissionGranted;
-  }
-
-  public setDeafened(deafen: boolean) {
-    this.isDeafened = deafen;
-    if (deafen) {
-      this.peerAudioElements.forEach((el) => { el.muted = true; });
-    } else {
-      this.peerAudioElements.forEach((el, sessionId) => {
-        const state = this.peerStates.get(sessionId);
-        el.muted = state ? state.isMutedLocally : false;
-      });
-    }
-    this.applyMicrophoneTrackState();
-    this.notifyStatus();
-  }
-
-  public isUserDeafened(): boolean {
-    return this.isDeafened;
-  }
-
-  public setPeerMuted(targetSessionId: string, muted: boolean) {
-    const state = this.peerStates.get(targetSessionId);
-    if (state) {
-      state.isMutedLocally = muted;
-      const audioEl = this.peerAudioElements.get(targetSessionId);
-      if (audioEl) audioEl.muted = muted || this.isDeafened;
-      this.notifyPeers();
-    }
-  }
-
-  public setPeerVolume(targetSessionId: string, volume: number) {
-    const clamped = Math.max(0, Math.min(1, volume));
-    const state = this.peerStates.get(targetSessionId);
-    if (state) {
-      state.volume = clamped;
-      const audioEl = this.peerAudioElements.get(targetSessionId);
-      if (audioEl) audioEl.volume = clamped;
-      this.notifyPeers();
-    }
-  }
-
-  public setPushToTalkState(pressed: boolean) {
-    if (this.voiceMode !== 'push_to_talk') return;
-    this.isPushToTalkPressed = pressed;
-    this.applyMicrophoneTrackState();
-  }
-
-  public isPttPressed(): boolean {
-    return this.isPushToTalkPressed;
-  }
-
-  public getPeerStates(): Map<string, VoicePeerState> {
-    return new Map(this.peerStates);
-  }
-
-  public isVoiceActive(): boolean {
-    return this.isJoined;
-  }
-
-  public getLastError(): string {
-    return this.lastErrorMessage;
-  }
-
-  // -------------------------------------------------------------
-  // WebRTC Signaling Handling
-  // -------------------------------------------------------------
-  public async handleSignalingMessage(payload: any) {
+  public async handleSignalingMessage(payload: unknown): Promise<void> {
     if (!payload || typeof payload !== 'object') return;
-    const msg = payload as WebRTCSignalPayload;
+    const msg = payload as VoiceSignal;
+    if (!msg.senderSessionId || msg.senderSessionId === this.localSessionId) return;
+    if (msg.targetSessionId && msg.targetSessionId !== 'all' && msg.targetSessionId !== this.localSessionId) return;
 
-    // Ignore messages from self
-    if (msg.senderSessionId === this.localSessionId) return;
-
-    // Check target: either broadcast to all (empty/all) or addressed specifically to this session
-    if (msg.targetSessionId && msg.targetSessionId !== 'all' && msg.targetSessionId !== this.localSessionId) {
-      return;
-    }
-
-    const remoteSessionId = msg.senderSessionId;
-    const remoteName = msg.senderName || 'Player';
-
+    const peerId = msg.senderSessionId;
+    const peerName = msg.senderName || 'Player';
     switch (msg.type) {
       case 'voice-presence': {
-        // A peer announced voice chat. If we are active and lexicographically greater, initiate offer.
-        this.ensurePeerState(remoteSessionId, remoteName);
-        if (this.isJoined && this.localSessionId > remoteSessionId) {
-          void this.initiatePeerConnection(remoteSessionId, remoteName);
-        }
+        this.ensurePeer(peerId, peerName);
+        if (this.isJoined && this.localSessionId > peerId) void this.createOffer(peerId, peerName);
+        this.notifyPeers();
         break;
       }
-
-      case 'offer': {
-        if (!this.isJoined) return;
-        this.ensurePeerState(remoteSessionId, remoteName);
-        if (msg.sdp) {
-          await this.handleRemoteOffer(remoteSessionId, remoteName, msg.sdp);
-        }
+      case 'voice-speaking': {
+        const peer = this.ensurePeer(peerId, peerName);
+        peer.isSpeaking = Boolean(msg.isSpeaking);
+        this.notifyPeers();
         break;
       }
-
-      case 'answer': {
-        if (msg.sdp) {
-          await this.handleRemoteAnswer(remoteSessionId, msg.sdp);
-        }
+      case 'offer':
+        if (this.isJoined && msg.sdp) await this.handleOffer(peerId, peerName, msg.sdp);
         break;
-      }
-
-      case 'ice-candidate': {
-        if (msg.candidate) {
-          await this.handleRemoteCandidate(remoteSessionId, msg.candidate);
-        }
+      case 'answer':
+        if (msg.sdp) await this.handleAnswer(peerId, msg.sdp);
         break;
-      }
-
-      case 'voice-bye': {
-        this.removePeer(remoteSessionId);
+      case 'ice-candidate':
+        if (msg.candidate) await this.handleCandidate(peerId, msg.candidate);
         break;
-      }
+      case 'voice-bye':
+        this.removePeer(peerId);
+        break;
     }
   }
 
-  private ensurePeerState(sessionId: string, name: string): VoicePeerState {
-    let state = this.peerStates.get(sessionId);
-    if (!state) {
-      state = {
+  private ensurePeer(sessionId: string, name: string): VoicePeerState {
+    let peer = this.peerStates.get(sessionId);
+    if (!peer) {
+      peer = {
         sessionId,
         playerName: name,
         isSpeaking: false,
         isMutedLocally: false,
-        volume: 1.0,
+        volume: 1,
         connectionState: 'new',
         audioLevel: 0,
       };
-      this.peerStates.set(sessionId, state);
-      this.notifyPeers();
-    } else if (name && state.playerName !== name) {
-      state.playerName = name;
-      this.notifyPeers();
+      this.peerStates.set(sessionId, peer);
+    } else if (name && peer.playerName !== name) {
+      peer.playerName = name;
     }
-    return state;
+    return peer;
   }
 
-  private createPeerConnection(remoteSessionId: string, remoteName: string): RTCPeerConnection {
-    let pc = this.peerConnections.get(remoteSessionId);
-    if (pc) return pc;
+  private createPeerConnection(sessionId: string, playerName: string): RTCPeerConnection {
+    const existing = this.connections.get(sessionId);
+    if (existing) return existing;
 
-    pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
-    this.peerConnections.set(remoteSessionId, pc);
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    this.connections.set(sessionId, pc);
+    this.ensurePeer(sessionId, playerName);
+    this.localStream?.getAudioTracks().forEach((track) => pc.addTrack(track, this.localStream!));
 
-    // Add local tracks if microphone active
-    if (this.localStream) {
-      this.localStream.getAudioTracks().forEach((track) => {
-        pc!.addTrack(track, this.localStream!);
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) void this.sendSignal({
+        type: 'ice-candidate',
+        targetSessionId: sessionId,
+        candidate: candidate.toJSON(),
       });
-    }
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        void this.sendSignal({
-          type: 'ice-candidate',
-          targetSessionId: remoteSessionId,
-          candidate: event.candidate.toJSON(),
-        });
-      }
     };
-
     pc.onconnectionstatechange = () => {
-      const state = this.peerStates.get(remoteSessionId);
-      if (state && pc) {
-        state.connectionState = pc.connectionState;
+      const peer = this.peerStates.get(sessionId);
+      if (peer) {
+        peer.connectionState = pc.connectionState;
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') peer.isSpeaking = false;
         this.notifyPeers();
-        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-          console.warn(`[Peeranki Voice] Connection to ${remoteName} (${remoteSessionId}) ${pc.connectionState}`);
-        }
       }
     };
-
     pc.ontrack = (event) => {
-      console.log(`[Peeranki Voice] Received audio track from ${remoteName}`);
-      const remoteStream = event.streams[0] || new MediaStream([event.track]);
-      this.peerStreams.set(remoteSessionId, remoteStream);
-
-      // Play audio via HTMLAudioElement
-      let audio = this.peerAudioElements.get(remoteSessionId);
-      if (!audio) {
-        audio = new Audio();
-        audio.autoplay = true;
-        (audio as any).playsInline = true;
-        audio.muted = this.isDeafened;
-        this.peerAudioElements.set(remoteSessionId, audio);
-      }
-      audio.srcObject = remoteStream;
-      audio.play().catch((e) => console.warn('[Peeranki Voice] Audio play error:', e));
-
-      // Setup audio analyzer for remote peer speaking detection
-      this.setupRemoteAudioAnalysis(remoteSessionId, remoteStream);
+      const audio = this.audioElements.get(sessionId) ?? new Audio();
+      audio.autoplay = true;
+      audio.setAttribute('playsinline', '');
+      audio.volume = this.peerStates.get(sessionId)?.volume ?? 1;
+      audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+      this.audioElements.set(sessionId, audio);
+      void audio.play().catch(() => {
+        this.lastErrorMessage = 'Tap the page once to enable voice audio.';
+        this.notifyStatus();
+      });
     };
-
     return pc;
   }
 
-  private setupRemoteAudioAnalysis(sessionId: string, stream: MediaStream) {
-    // Clear existing if any
-    const existing = this.peerAnalysers.get(sessionId);
-    if (existing) {
-      window.clearInterval(existing.interval);
-      this.peerAnalysers.delete(sessionId);
-    }
-
+  private async createOffer(sessionId: string, playerName: string): Promise<void> {
+    if (!this.isJoined || this.offersInProgress.has(sessionId)) return;
+    this.offersInProgress.add(sessionId);
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = this.audioContext || new AudioCtx();
-      this.audioContext = ctx;
-
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 64;
-      analyser.smoothingTimeConstant = 0.3;
-      source.connect(analyser);
-
-      const buffer = new Uint8Array(analyser.frequencyBinCount);
-      const interval = window.setInterval(() => {
-        const state = this.peerStates.get(sessionId);
-        if (!state) return;
-        analyser.getByteFrequencyData(buffer);
-        let sum = 0;
-        for (let i = 0; i < buffer.length; i++) sum += buffer[i];
-        const avg = sum / buffer.length;
-        const level = Math.min(100, Math.round((avg / 128) * 100));
-        const wasSpeaking = state.isSpeaking;
-        state.audioLevel = level;
-        state.isSpeaking = level > 12; // threshold for green speaking ring
-        if (wasSpeaking !== state.isSpeaking || level > 0) {
-          this.notifyPeers();
-        }
-      }, 100);
-
-      this.peerAnalysers.set(sessionId, { analyser, interval });
-    } catch {
-      // AudioContext unavailable
-    }
-  }
-
-  private async initiatePeerConnection(remoteSessionId: string, remoteName: string) {
-    try {
-      const pc = this.createPeerConnection(remoteSessionId, remoteName);
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: true,
-      });
+      const pc = this.createPeerConnection(sessionId, playerName);
+      if (pc.signalingState !== 'stable') return;
+      const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-
-      await this.sendSignal({
-        type: 'offer',
-        targetSessionId: remoteSessionId,
-        sdp: offer,
-      });
-    } catch (err) {
-      console.warn(`[Peeranki Voice] Failed to create offer for ${remoteSessionId}:`, err);
+      await this.sendSignal({ type: 'offer', targetSessionId: sessionId, sdp: offer });
+    } catch (error) {
+      console.warn('[Peeranki Voice] Could not start peer connection:', error);
+    } finally {
+      this.offersInProgress.delete(sessionId);
     }
   }
 
-  private async handleRemoteOffer(remoteSessionId: string, remoteName: string, sdp: RTCSessionDescriptionInit) {
+  private async handleOffer(sessionId: string, playerName: string, sdp: RTCSessionDescriptionInit): Promise<void> {
     try {
-      const pc = this.createPeerConnection(remoteSessionId, remoteName);
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const pc = this.createPeerConnection(sessionId, playerName);
+      if (pc.signalingState !== 'stable') return;
+      await pc.setRemoteDescription(sdp);
+      await this.flushCandidates(sessionId, pc);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-
-      await this.sendSignal({
-        type: 'answer',
-        targetSessionId: remoteSessionId,
-        sdp: answer,
-      });
-    } catch (err) {
-      console.warn(`[Peeranki Voice] Failed to handle offer from ${remoteSessionId}:`, err);
+      await this.sendSignal({ type: 'answer', targetSessionId: sessionId, sdp: answer });
+    } catch (error) {
+      console.warn('[Peeranki Voice] Could not answer peer connection:', error);
     }
   }
 
-  private async handleRemoteAnswer(remoteSessionId: string, sdp: RTCSessionDescriptionInit) {
-    const pc = this.peerConnections.get(remoteSessionId);
-    if (!pc) return;
+  private async handleAnswer(sessionId: string, sdp: RTCSessionDescriptionInit): Promise<void> {
+    const pc = this.connections.get(sessionId);
+    if (!pc || pc.signalingState !== 'have-local-offer') return;
     try {
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    } catch (err) {
-      console.warn(`[Peeranki Voice] Failed to set remote answer from ${remoteSessionId}:`, err);
+      await pc.setRemoteDescription(sdp);
+      await this.flushCandidates(sessionId, pc);
+    } catch (error) {
+      console.warn('[Peeranki Voice] Could not finish peer connection:', error);
     }
   }
 
-  private async handleRemoteCandidate(remoteSessionId: string, candidate: RTCIceCandidateInit) {
-    const pc = this.peerConnections.get(remoteSessionId);
-    if (!pc) return;
+  private async handleCandidate(sessionId: string, candidate: RTCIceCandidateInit): Promise<void> {
+    const pc = this.connections.get(sessionId);
+    if (!pc?.remoteDescription) {
+      const queue = this.pendingCandidates.get(sessionId) ?? [];
+      queue.push(candidate);
+      this.pendingCandidates.set(sessionId, queue);
+      return;
+    }
     try {
-      await pc.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (err) {
-      console.warn(`[Peeranki Voice] Failed to add ICE candidate for ${remoteSessionId}:`, err);
+      await pc.addIceCandidate(candidate);
+    } catch (error) {
+      console.warn('[Peeranki Voice] Could not add network candidate:', error);
     }
   }
 
-  private async sendSignal(data: Partial<WebRTCSignalPayload>) {
-    const payload: WebRTCSignalPayload = {
-      targetSessionId: data.targetSessionId || 'all',
+  private async flushCandidates(sessionId: string, pc: RTCPeerConnection): Promise<void> {
+    const queued = this.pendingCandidates.get(sessionId) ?? [];
+    this.pendingCandidates.delete(sessionId);
+    for (const candidate of queued) {
+      try { await pc.addIceCandidate(candidate); } catch { /* Ignore stale candidates. */ }
+    }
+  }
+
+  private async sendSignal(data: Partial<VoiceSignal>): Promise<void> {
+    const payload: VoiceSignal = {
+      targetSessionId: data.targetSessionId ?? 'all',
       senderSessionId: this.localSessionId,
       senderName: this.localPlayerName,
-      type: data.type || 'voice-presence',
+      type: data.type ?? 'voice-presence',
       sdp: data.sdp,
       candidate: data.candidate,
-      isMuted: !this.isMicActiveNow(),
+      isSpeaking: data.isSpeaking,
     };
-
     try {
       await this.signalingSend('voice_signal', payload);
-    } catch (err) {
-      console.warn('[Peeranki Voice] Signaling send failure:', err);
+    } catch (error) {
+      console.warn('[Peeranki Voice] Could not send voice signal:', error);
     }
   }
 
-  private async broadcastPresence() {
-    await this.sendSignal({
-      type: 'voice-presence',
-      targetSessionId: 'all',
-    });
+  private async broadcastPresence(): Promise<void> {
+    await this.sendSignal({ type: 'voice-presence', targetSessionId: 'all' });
   }
 
-  private removePeer(sessionId: string) {
-    const pc = this.peerConnections.get(sessionId);
-    if (pc) {
-      pc.close();
-      this.peerConnections.delete(sessionId);
-    }
-    const audio = this.peerAudioElements.get(sessionId);
+  private removePeer(sessionId: string): void {
+    this.connections.get(sessionId)?.close();
+    this.connections.delete(sessionId);
+    const audio = this.audioElements.get(sessionId);
     if (audio) {
       audio.pause();
       audio.srcObject = null;
-      this.peerAudioElements.delete(sessionId);
+      this.audioElements.delete(sessionId);
     }
-    const analyserObj = this.peerAnalysers.get(sessionId);
-    if (analyserObj) {
-      window.clearInterval(analyserObj.interval);
-      this.peerAnalysers.delete(sessionId);
-    }
-    this.peerStreams.delete(sessionId);
+    this.pendingCandidates.delete(sessionId);
     this.peerStates.delete(sessionId);
     this.notifyPeers();
   }
 
-  private notifyPeers() {
+  private notifyPeers(): void {
     this.onPeersChange?.(new Map(this.peerStates));
   }
 
-  private notifyStatus() {
+  private notifyStatus(): void {
     this.onStatusChange?.({
       active: this.isJoined,
       error: this.lastErrorMessage,
-      isMicOn: this.isMicActiveNow(),
-      mode: this.voiceMode,
+      isMicOn: this.isTalking,
+      mode: 'push_to_talk',
     });
   }
 
-  public cleanup() {
-    if (this.presenceHeartbeatTimer) {
-      window.clearInterval(this.presenceHeartbeatTimer);
-      this.presenceHeartbeatTimer = null;
-    }
-    if (this.localLevelInterval) {
-      window.clearInterval(this.localLevelInterval);
-      this.localLevelInterval = null;
-    }
-    if (this.isJoined) {
-      void this.sendSignal({ type: 'voice-bye', targetSessionId: 'all' });
-    }
+  public setPushToTalkState(pressed: boolean): void {
+    const next = this.isJoined && pressed;
+    if (next === this.isTalking) return;
+    this.isTalking = next;
+    this.localStream?.getAudioTracks().forEach((track) => { track.enabled = next; });
+    this.notifyStatus();
+    void this.sendSignal({ type: 'voice-speaking', targetSessionId: 'all', isSpeaking: next });
+  }
 
-    this.peerConnections.forEach((pc) => pc.close());
-    this.peerConnections.clear();
+  public isPttPressed(): boolean { return this.isTalking; }
+  public getPeerStates(): Map<string, VoicePeerState> { return new Map(this.peerStates); }
+  public isVoiceActive(): boolean { return this.isJoined; }
+  public isVoiceStarting(): boolean { return this.isStarting; }
+  public isMuted(): boolean { return !this.isTalking; }
+  public getVoiceMode(): VoiceMode { return 'push_to_talk'; }
+  public getLastError(): string { return this.lastErrorMessage; }
 
-    this.peerAudioElements.forEach((audio) => {
+  public setPeerMuted(sessionId: string, muted: boolean): void {
+    const peer = this.peerStates.get(sessionId);
+    const audio = this.audioElements.get(sessionId);
+    if (peer && audio) {
+      peer.isMutedLocally = muted;
+      audio.muted = muted;
+      this.notifyPeers();
+    }
+  }
+
+  public setPeerVolume(sessionId: string, volume: number): void {
+    const peer = this.peerStates.get(sessionId);
+    const audio = this.audioElements.get(sessionId);
+    if (peer && audio) {
+      peer.volume = Math.max(0, Math.min(1, volume));
+      audio.volume = peer.volume;
+    }
+  }
+
+  public leaveVoice(): void {
+    this.setPushToTalkState(false);
+    if (this.presenceTimer !== null) {
+      window.clearInterval(this.presenceTimer);
+      this.presenceTimer = null;
+    }
+    if (this.isJoined) void this.sendSignal({ type: 'voice-bye', targetSessionId: 'all' });
+    this.connections.forEach((pc) => pc.close());
+    this.connections.clear();
+    this.audioElements.forEach((audio) => {
       audio.pause();
       audio.srcObject = null;
     });
-    this.peerAudioElements.clear();
-
-    this.peerAnalysers.forEach((obj) => window.clearInterval(obj.interval));
-    this.peerAnalysers.clear();
-
-    if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => track.stop());
-      this.localStream = null;
-    }
-
-    if (this.audioContext && this.audioContext.state !== 'closed') {
-      try {
-        void this.audioContext.close();
-      } catch {}
-      this.audioContext = null;
-    }
-
+    this.audioElements.clear();
+    this.pendingCandidates.clear();
+    this.offersInProgress.clear();
+    this.localStream?.getTracks().forEach((track) => track.stop());
+    this.localStream = null;
     this.peerStates.clear();
+    this.isTalking = false;
     this.isJoined = false;
     this.notifyStatus();
     this.notifyPeers();
+  }
+
+  public cleanup(): void {
+    window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('blur', this.onWindowBlur);
+    this.leaveVoice();
   }
 }
