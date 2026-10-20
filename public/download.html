@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101418" />
+    <meta name="description" content="Download Peeranki for Android." />
+    <title>Download Peeranki for Android</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101418; color: #f4f1e8; }
+      * { box-sizing: border-box; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; }
+      main { width: min(100%, 560px); padding: clamp(24px, 6vw, 44px); border: 1px solid #34424b; border-radius: 24px; background: linear-gradient(160deg, #1b252c, #13191e 70%); box-shadow: 0 24px 80px #0008; }
+      .brand { color: #f4c95d; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+      h1 { margin: 14px 0 8px; font-size: clamp(2rem, 8vw, 3rem); line-height: 1.05; }
+      p { color: #c4ccd1; line-height: 1.6; }
+      .download { display: block; margin: 28px 0 12px; padding: 16px 20px; border-radius: 14px; background: #e7b844; color: #171a1d; font-size: 1.1rem; font-weight: 800; text-align: center; text-decoration: none; }
+      .download:hover, .download:focus-visible { background: #f5cf68; outline: 3px solid #ffffff55; outline-offset: 3px; }
+      .download[aria-disabled="true"] { opacity: .65; pointer-events: none; }
+      .meta { text-align: center; font-size: .9rem; color: #a6b0b8; }
+      #download-status { min-height: 1.5em; text-align: center; color: #c4ccd1; font-size: .9rem; }
+      h2 { margin: 30px 0 8px; font-size: 1.1rem; }
+      ol { padding-left: 22px; color: #c4ccd1; line-height: 1.7; }
+      .note { margin-top: 24px; padding: 14px 16px; border-left: 3px solid #e7b844; border-radius: 8px; background: #ffffff0a; font-size: .9rem; }
+      .back { display: inline-block; margin-top: 22px; color: #f4c95d; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">Peeranki · Kerala Strategy Game</div>
+      <h1>Play Peeranki on Android</h1>
+      <p>Download the Android installer and enjoy Peeranki on your phone.</p>
+      <a class="download" id="download" href="#download" role="button">Download Android APK</a>
+      <div class="meta">Android · APK installer · 38.3 MB</div>
+      <p id="download-status" role="status" aria-live="polite"></p>
+
+      <h2>Install the game</h2>
+      <ol>
+        <li>Download the APK on your Android device.</li>
+        <li>Open the downloaded file and allow your browser to install apps if Android asks.</li>
+        <li>Continue the installation, then open Peeranki.</li>
+      </ol>
+
+      <p class="note">Android may show a warning because this app is installed outside Google Play. Only install APKs from a source you trust. This download will not receive automatic Play Store updates.</p>
+      <a class="back" href="/">← Visit the Peeranki web game</a>
+    </main>
+    <script>
+      const downloadButton = document.querySelector('#download');
+      const downloadStatus = document.querySelector('#download-status');
+      const apkParts = ['/downloads/peeranki.apk.part1', '/downloads/peeranki.apk.part2'];
+
+      downloadButton.addEventListener('click', async (event) => {
+        event.preventDefault();
+        if (downloadButton.getAttribute('aria-disabled') === 'true') return;
+
+        downloadButton.setAttribute('aria-disabled', 'true');
+        downloadStatus.textContent = 'Downloading Peeranki…';
+        try {
+          const responses = await Promise.all(apkParts.map((url) => fetch(url)));
+          if (responses.some((response) => !response.ok)) throw new Error('A download part could not be loaded.');
+
+          const parts = await Promise.all(responses.map((response) => response.arrayBuffer()));
+          const apk = new Blob(parts, { type: 'application/vnd.android.package-archive' });
+          const objectUrl = URL.createObjectURL(apk);
+          const link = document.createElement('a');
+          link.href = objectUrl;
+          link.download = 'Peeranki.apk';
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+          downloadStatus.textContent = 'Download ready. Open Peeranki.apk to install it.';
+        } catch (error) {
+          downloadStatus.textContent = 'Download failed. Please check your connection and try again.';
+        } finally {
+          downloadButton.removeAttribute('aria-disabled');
+        }
+      });
+    </script>
+  </body>
+</html>

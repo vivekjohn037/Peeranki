@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Local Android SDK and build caches
+.android-sdk/
+.android-user/
+.gradle-user/
+
 # Environment and secret credentials
 .env
 .env.*
