@@ -1280,7 +1280,7 @@ class MenuScene extends Phaser.Scene {
       30,
     ).setDepth(1000);
 
-    // Exit and Guide buttons on top-right corner
+    // Download, Guide, and Exit buttons on top-right corner
     const rightTopBtn = makeButton(
       this,
       width - 26,
@@ -1303,6 +1303,17 @@ class MenuScene extends Phaser.Scene {
       30,
     ).setDepth(1000);
 
+    const androidDownloadBtn = makeButton(
+      this,
+      width - 146,
+      topBtnY,
+      '⬇ APK',
+      '#8b6a1d',
+      11,
+      56,
+      30,
+    ).setDepth(1000);
+
     guideTopBtn.on('pointerdown', () => {
       PeerankiAudio.effect('select');
       showHowToPlayModal();
@@ -1319,6 +1330,7 @@ class MenuScene extends Phaser.Scene {
       if (muteButton && muteButton.active) muteButton.setPosition(24, 24);
       if (rightTopBtn && rightTopBtn.active) rightTopBtn.setPosition(gameSize.width - 26, 24);
       if (guideTopBtn && guideTopBtn.active) guideTopBtn.setPosition(gameSize.width - 82, 24);
+      if (androidDownloadBtn && androidDownloadBtn.active) androidDownloadBtn.setPosition(gameSize.width - 146, 24);
       if (this.nameInput) {
         positionHtmlInput(this, this.nameInput, this.nameInputX, this.nameInputY, this.nameInputW);
       }
@@ -1328,6 +1340,10 @@ class MenuScene extends Phaser.Scene {
     rightTopBtn.on('pointerdown', () => {
       PeerankiAudio.effect('select');
       showExitGameModal();
+    });
+
+    androidDownloadBtn.on('pointerdown', () => {
+      window.location.assign('https://peeranki.vivekjohn037.workers.dev/download.html');
     });
   }
 
