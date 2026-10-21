@@ -86,3 +86,116 @@ input {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }
 }
+
+/* Main menu: a village after dark, with a clear choice of battles. */
+.pk-home { position:absolute; inset:0; z-index:20; overflow:auto; overscroll-behavior:contain; color:#f4f2e9; background:linear-gradient(90deg,#0c191bee 0%,#102422bd 55%,#0c191bd9 100%),url('/assets/background/menu_background.webp') center/cover; font-family:system-ui,sans-serif; }
+.pk-home * { box-sizing:border-box; }
+.pk-home button,.pk-home a,.pk-home input { -webkit-tap-highlight-color:transparent; }
+.pk-home button { font-family:inherit; cursor:pointer; }
+.pk-home button:focus-visible,.pk-home a:focus-visible { outline:2px solid #f1d58e; outline-offset:5px; }
+.pk-home-shell { width:min(1180px,100%); min-height:100%; margin:auto; padding:30px 48px 22px; display:flex; flex-direction:column; }
+.pk-home-top { display:flex; align-items:center; justify-content:space-between; gap:18px; }
+.pk-home-brand { display:flex; align-items:center; gap:12px; text-decoration:none; color:#f6f2df; font-size:18px; font-weight:850; letter-spacing:2px; }
+.pk-home-brand img { width:55px; height:55px; object-fit:contain; }
+.pk-home-brand small { display:block; font-size:7px; color:#b1c1b4; letter-spacing:1.5px; margin-top:5px; font-weight:600; }
+.pk-home-top nav { display:flex; align-items:center; gap:16px; }
+.pk-home-download { color:#c6d0c4; font-size:12px; text-decoration:none; padding:10px 0; }
+.pk-home-download:hover { color:#f1d58e; }
+.pk-home-sound { height:40px; width:40px; font-size:15px; border:1px solid #c3d0bd26; border-radius:50%; background:#14282c; color:white; }
+.pk-home-content { display:grid; grid-template-columns:1.12fr 1fr; gap:clamp(32px,7vw,100px); align-items:center; flex:1; padding:54px 0; }
+.pk-home-eyebrow { color:#b0c3af; font-weight:650; font-size:8px; letter-spacing:1.7px; display:flex; align-items:center; gap:9px; }
+.pk-home-eyebrow>span { width:20px; height:1px; background:#b9c7a3; flex-shrink:0; }
+.pk-home h1 { font-size:clamp(40px,5.5vw,72px); line-height:1.05; letter-spacing:-3px; margin:24px 0; font-weight:800; }
+.pk-home h1 em { font-family:Georgia,serif; font-weight:400; color:#e7cd86; }
+.pk-home-intro { color:#bac9c2; font-size:15px; line-height:1.8; margin:0 0 36px; }
+.pk-home-player { display:flex; align-items:center; gap:14px; max-width:360px; padding:15px 18px; background:#172b2ddd; border:1px solid #c3d0bd33; border-radius:14px; }
+.pk-home-player:focus-within { border-color:#d9bf77; box-shadow:0 0 0 3px #d9bf7715; }
+.pk-home-player-icon { font-size:27px; color:#bacaad; background:#abc29a15; border:1px solid #abc29a25; border-radius:10px; width:44px; height:44px; display:grid; place-items:center; }
+.pk-home-player>div:nth-child(2) { flex:1; min-width:0; }
+.pk-home-player label { display:block; font-size:8px; letter-spacing:1.2px; font-weight:650; color:#a3b9ac; }
+.pk-home-player input { width:100%; margin-top:6px; background:transparent; border:0; border-radius:0; outline:0; color:#f4f2e9; font-family:inherit; font-size:18px; font-weight:600; padding:0; user-select:text; }
+.pk-home-pencil { color:#8baba2; font-size:22px; }
+.pk-home-player-note { margin:10px 0 0 4px; font-size:10px; color:#9aafa2; }
+.pk-home-section-label { display:flex; justify-content:space-between; font-size:9px; font-weight:600; color:#bac9b8; letter-spacing:1.8px; margin-bottom:14px; }
+.pk-home-section-label>span { color:#78938b; font-weight:400; letter-spacing:1px; }
+.pk-home-mode { width:100%; text-align:left; padding:22px 24px 0; border-radius:18px; transition:transform .18s ease,border-color .18s ease; overflow:hidden; }
+.pk-home-mode:hover { transform:translateY(-3px); }
+.pk-home-mode:active { transform:translateY(0); }
+.pk-home-online { border:1px solid #d5c282; background:linear-gradient(125deg,#e5d4a2,#cbb578); color:#192c2b; box-shadow:0 12px 36px #0003; }
+.pk-home-offline { border:1px solid #adcaac40; background:linear-gradient(130deg,#223d39e8,#182e2ee8); color:#edf0de; margin-top:14px; }
+.pk-home-offline:hover { border-color:#b4cda6; }
+.pk-home-mode-top { display:flex; gap:10px; align-items:center; }
+.pk-home-mode-icon { font-size:28px; line-height:1; }
+.pk-home-tag { font-size:8px; font-weight:750; letter-spacing:1.2px; display:flex; align-items:center; gap:5px; }
+.pk-home-tag i { width:4px; height:4px; background:#345f42; border-radius:50%; }
+.pk-home-arrow { margin-left:auto; font-size:25px; font-weight:400; opacity:.75; }
+.pk-home-mode h2 { font-size:23px; margin:14px 0 8px; letter-spacing:-.6px; font-weight:750; }
+.pk-home-mode p { font-size:12px; line-height:1.7; margin:0 0 18px; opacity:.8; }
+.pk-home-mode-bottom { display:flex; align-items:center; justify-content:space-between; border-top:1px solid #20362e26; padding:14px 0; gap:8px; }
+.pk-home-mode-bottom>span { font-size:8px; letter-spacing:1px; font-weight:650; }
+.pk-home-mode-bottom strong { font-size:12px; }
+.pk-home-mode-bottom strong span { margin-left:10px; }
+.pk-home-offline .pk-home-mode-bottom { border-color:#b2d1b726; }
+.pk-home-ranks { display:flex; align-items:center; gap:13px; text-align:left; width:100%; margin-top:16px; background:transparent; border:0; color:#e0cd91; padding:12px 4px; }
+.pk-home-ranks-icon { font-size:29px; }
+.pk-home-ranks>span:nth-child(2) { flex:1; }
+.pk-home-ranks strong { display:block; font-size:13px; }
+.pk-home-ranks small { display:block; margin-top:5px; color:#9cb1a7; font-size:10px; }
+.pk-home-ranks>span:last-child { font-size:24px; }
+.pk-home-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-top:18px; border-top:1px solid #c3d0bd26; }
+.pk-home-origin { font:italic 13px Georgia,serif; color:#a1b5a3; }
+.pk-home-footer nav { display:flex; align-items:center; gap:16px; color:#63847c; }
+.pk-home-footer button { padding:9px 0; min-height:40px; color:#bac8bf; font-size:11px; background:transparent; border:0; }
+.pk-home-footer button:hover { color:#e6ca80; }
+@media(max-width:760px) {
+ .pk-home-shell { padding:18px 24px; }
+ .pk-home-content { gap:30px; padding:36px 0 24px; grid-template-columns:1fr; }
+ .pk-home-brand img { width:44px; height:44px; }
+ .pk-home-brand { font-size:15px; gap:8px; }
+ .pk-home-brand small { font-size:6px; }
+ .pk-home-top nav { gap:12px; }
+ .pk-home-download { font-size:10px; }
+ .pk-home h1 { font-size:48px; letter-spacing:-2px; margin:17px 0; }
+ .pk-home-intro { font-size:13px; line-height:1.65; margin-bottom:22px; }
+ .pk-home-player { max-width:none; padding:12px 15px; }
+ .pk-home-player-icon { width:36px; height:36px; font-size:23px; }
+ .pk-home-modes { width:100%; }
+ .pk-home-mode { padding:18px 20px 0; border-radius:15px; }
+ .pk-home-mode h2 { margin-top:10px; font-size:22px; }
+ .pk-home-mode p { margin-bottom:14px; }
+ .pk-home-mode-top { gap:8px; }
+ .pk-home-mode-icon { font-size:24px; }
+ .pk-home-mode-bottom { padding:12px 0; }
+ .pk-home-footer { flex-direction:column; padding-top:12px; gap:3px; }
+ .pk-home-footer nav { gap:24px; }
+ .pk-home-origin { font-size:12px; }
+}
+@media(max-width:400px) {
+ .pk-home-shell { padding:16px 18px; }
+ .pk-home-brand small { display:none; }
+ .pk-home h1 { font-size:43px; }
+ .pk-home-eyebrow { letter-spacing:1px; font-size:7px; }
+ .pk-home-download span { display:none; }
+ .pk-home-download { font-size:20px; padding:10px; }
+}
+@media(min-width:761px) and (max-height:650px) {
+ .pk-home-shell { padding:16px 32px; }
+ .pk-home-content { padding:24px 0; gap:40px; }
+ .pk-home h1 { font-size:48px; }
+ .pk-home-intro { margin-bottom:20px; }
+ .pk-home-mode { padding:14px 20px 0; }
+ .pk-home-mode h2 { font-size:21px; margin-top:8px; }
+ .pk-home-mode p { margin-bottom:12px; }
+ .pk-home-mode-bottom { padding:10px 0; }
+ .pk-home-ranks { margin-top:8px; padding:6px 4px; }
+}
+@media(prefers-reduced-motion:reduce) { .pk-home-mode { transition:none; } }
+@media(max-width:760px) {
+ .pk-home-content { padding:26px 0 20px; gap:24px; }
+ .pk-home h1 { font-size:42px; margin:14px 0; }
+ .pk-home-intro { font-size:12px; margin-bottom:18px; }
+ .pk-home-offline .pk-home-mode-top { display:none; }
+ .pk-home-offline h2 { margin-top:0; }
+ .pk-home-offline p { margin-bottom:10px; }
+ .pk-home-ranks { margin-top:10px; padding:8px 4px; }
+}
