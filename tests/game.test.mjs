@@ -1,3 +1,4 @@
+import { canApplyGameSnapshot, roomRounds } from '../src/game/onlineState.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -900,3 +901,41 @@ test('lobby readiness persists per member, preserves other members, and rejects 
  await assert.rejects(setLobbyReady(code,'ready-host',true));
 });
 async function fetchReadyRoom(code) { return getGameState(code); }
+
+
+function roundSnapshot(round, status, updatedAt, duel = 1) {
+ return { game_status:status, updated_at:updatedAt, counting_start_timestamp:'2026-10-21T10:00:00.000Z', countdown:status==='shooting'?10:0,
+ players:[{id:1,match_round:round,duel_round:duel,alive:true},{id:2,match_round:round,duel_round:duel,alive:true},{id:3,match_round:round,duel_round:duel,alive:status!=='duel'}] };
+}
+
+test('missed duel result recovers directly into next round counting or shooting', () => {
+ for(const phase of ['counting','shooting']) {
+   const key='DUEL-RECOVERY-'+phase;
+   const duel=roundSnapshot(1,'duel','2026-10-21T10:00:10.000Z');
+   const next=roundSnapshot(2,phase,'2026-10-21T10:00:11.000Z');
+   assert.equal(shouldAcceptRoomState(key,duel),true);
+   assert.equal(shouldAcceptRoomState(key,next),true,'next round must bypass the old phase guard, even with the same counting timestamp');
+   assert.equal(canApplyGameSnapshot({matchRound:1,duelRound:1,duelActive:true},next),true,'a client stuck in the duel must accept polling/realtime recovery');
+   assert.deepEqual(roomRounds(next),{matchRound:2,duelRound:1});
+ }
+});
+
+test('a delayed old-round duel cannot reopen over the current round, even with a newer clock', () => {
+ const next=roundSnapshot(2,'shooting','2026-10-21T10:00:11.000Z');
+ const delayed=roundSnapshot(1,'duel','2026-10-21T10:00:30.000Z');
+ assert.equal(shouldAcceptRoomState('DUEL-ROLLBACK',next),true);
+ assert.equal(shouldAcceptRoomState('DUEL-ROLLBACK',delayed),false);
+ assert.equal(canApplyGameSnapshot({matchRound:2,duelRound:1,duelActive:false},delayed),false,'polling must obey the same round ordering');
+ assert.equal(canApplyGameSnapshot({matchRound:2,duelRound:1,duelActive:false},{...delayed,game_status:'finished'}),false);
+});
+
+test('same-round stale shots stay blocked during a duel and tie rounds cannot roll back', () => {
+ const current={matchRound:1,duelRound:2,duelActive:true};
+ assert.equal(canApplyGameSnapshot(current,roundSnapshot(1,'shooting','2026-10-21T10:00:10.000Z')),false);
+ assert.equal(canApplyGameSnapshot(current,roundSnapshot(1,'duel','2026-10-21T10:00:11.000Z',1)),false);
+ assert.equal(canApplyGameSnapshot(current,roundSnapshot(1,'duel','2026-10-21T10:00:11.000Z',2)),true);
+ assert.equal(canApplyGameSnapshot(current,roundSnapshot(1,'finished','2026-10-21T10:00:12.000Z',2)),true);
+ assert.equal(canApplyGameSnapshot(current,roundSnapshot(1,'shot','2026-10-21T10:00:12.000Z',2),true),true,'departure handling must still be allowed');
+ assert.equal(shouldAcceptRoomState('TIE-ROLLBACK',roundSnapshot(1,'duel','2026-10-21T10:00:11.000Z',2)),true);
+ assert.equal(shouldAcceptRoomState('TIE-ROLLBACK',roundSnapshot(1,'duel','2026-10-21T10:00:12.000Z',1)),false);
+});

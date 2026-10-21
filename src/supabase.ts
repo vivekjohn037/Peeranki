@@ -990,8 +990,12 @@ export function shouldAcceptRoomState(roomCode: string, state: any): boolean {
     countingTimestamp !== prev.countingTimestamp &&
     ['shot', 'action_timeout', 'round_won', 'duel'].includes(prev.status);
   const logicalProgress = advancedMatchRound || advancedDuelRound || advancedPhase || resumedCounting;
+  // Round numbers outrank phase ranks and client clocks. An old duel must not
+  // reopen after counting/shooting in the following round has been accepted.
+  if (status !== 'waiting' && matchRound > 0 && prev.matchRound > 0 && matchRound < prev.matchRound) return false;
+  if (matchRound === prev.matchRound && status === 'duel' && prev.status === 'duel' && duelRound > 0 && duelRound < prev.duelRound) return false;
   if (
-    countingTimestamp && countingTimestamp === prev.countingTimestamp &&
+    !advancedMatchRound && countingTimestamp && countingTimestamp === prev.countingTimestamp &&
     ((prev.status === 'counting' && status === 'counting' && countdown >= 0 && countdown < prev.countdown) ||
       (phaseRank[status] !== undefined && phaseRank[prev.status] !== undefined && phaseRank[status] < phaseRank[prev.status]))
   ) {

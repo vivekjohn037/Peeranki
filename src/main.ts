@@ -1,3 +1,4 @@
+import { canApplyGameSnapshot } from './game/onlineState';
 import { hasReadyQuorum } from './game/lobby';
 import { LobbyComponent } from './ui/LobbyComponent';
 import { MainMenuComponent } from './ui/MainMenuComponent';
@@ -3643,11 +3644,19 @@ if (offlineMode) {
       gameState.players.filter((player: any) => player?.connected !== false).length < incomingMaxPlayers;
     const endsThreePlayerMatch = incomingMaxPlayers === 3 &&
       incomingStatus !== 'waiting' && incomingStatus !== 'finished' && incomingRosterHasDeparture;
-    if (this.duelActive && incomingStatus !== 'duel' && incomingStatus !== 'round_won' && incomingStatus !== 'finished' && !endsThreePlayerMatch) {
-      // A delayed shot/count snapshot must not dismiss an active RPS duel. Only the
-      // authoritative duel result or match end is allowed to close the duel UI.
-      console.warn(`[Peeranki Diagnostics] Ignoring stale ${incomingStatus || 'unknown'} state while duel is active.`);
+    if (!canApplyGameSnapshot({ matchRound, duelRound, duelActive: this.duelActive }, gameState, endsThreePlayerMatch)) {
+      console.warn(`[Peeranki Diagnostics] Ignoring stale ${incomingStatus || 'unknown'} snapshot for the current round.`);
       return;
+    }
+    if (this.duelActive && incomingStatus !== 'duel') {
+      this.duelActive = false;
+      this.resolvingDuel = false;
+      this.duelBotTimer?.remove(false);
+      this.duelBotTimer = undefined;
+      this.clearDuelControls();
+      // Close the DOM modal (and cancel its delayed reveal) before applying a new phase.
+      this.uiManager.updateDuel({ active: false, round: duelRound, contestantIds: [], canChoose: false,
+        hasSubmitted: false, myChoice: null, opponentName: '', opponentSubmitted: false }, true);
     }
 
     if (
@@ -3872,6 +3881,7 @@ if (offlineMode) {
         this.updateLocalCountingProgress();
       }
 
+      this.syncUI();
       return;
     }
 
