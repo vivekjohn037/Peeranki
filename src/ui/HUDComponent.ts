@@ -1,3 +1,4 @@
+import { CountSequence } from './CountSequence';
 import type { HUDState, UICallbacks, WeaponType } from './types';
 import { showHowToPlayModal } from './HowToPlayModalComponent';
 import { addFastTapListener } from './touchUtils';
@@ -30,6 +31,11 @@ export class HUDComponent {
   private countdownNumEl!: HTMLElement;
   private countdownSubEl!: HTMLElement;
   private weaponChipRenderKey = '';
+  private countSequence = new CountSequence();
+  private countFrame: number | null = null;
+  private countingVisible = false;
+  private countFinishing = false;
+  private countShownAt = 0;
 
   constructor(callbacks: UICallbacks) {
     this.callbacks = callbacks;
@@ -288,13 +294,20 @@ export class HUDComponent {
       this.announcerEl.classList.add('pk-alert-notice');
     }
 
-    // 3. Countdown Overlay
-    if (state.roundPhase === 'counting' && state.countNumber > 0) {
-      this.countdownEl.style.display = 'flex';
-      this.countdownNumEl.textContent = String(state.countNumber);
-      this.countdownSubEl.textContent = state.countNumber === 10 ? 'SHOOTER SELECTED!' : 'COUNTING...';
+    // Render a local sequence so network batches cannot skip visible numbers.
+    if (state.roundPhase === 'counting') {
+      if (!this.countingVisible || this.countFinishing) {
+        this.stopCountdown();
+        this.countingVisible = true;
+      }
+      this.countSequence.receive(state.countNumber);
+      this.startCountdownFrames();
+    } else if (state.roundPhase === 'shooting' && this.countingVisible) {
+      this.countFinishing = true;
+      this.countSequence.receive(10);
+      this.startCountdownFrames();
     } else {
-      this.countdownEl.style.display = 'none';
+      this.stopCountdown();
     }
 
     // 4. Action Prompts
@@ -330,6 +343,38 @@ export class HUDComponent {
     // 5. Weapon Selector Chips
     this.renderWeaponChips(state);
   }
+
+  private startCountdownFrames() {
+    if (this.countFrame !== null) return;
+    const paint = (now: number) => {
+      this.countFrame = null;
+      if (!this.countingVisible) return;
+      if (this.countSequence.advance(now)) {
+        this.countShownAt = now;
+        this.countdownEl.style.display = 'flex';
+        this.countdownNumEl.textContent = String(this.countSequence.value);
+        this.countdownSubEl.textContent = this.countSequence.value === 10 ? 'SHOOTER SELECTED!' : 'COUNTING…';
+        this.countdownNumEl.animate?.([{ transform: 'scale(1.12)', opacity: .65 }, { transform: 'scale(1)', opacity: 1 }], { duration: 110 });
+      }
+      if (this.countFinishing && this.countSequence.caughtUp && now - this.countShownAt >= 180) {
+        this.stopCountdown();
+        return;
+      }
+      this.countFrame = window.requestAnimationFrame(paint);
+    };
+    this.countFrame = window.requestAnimationFrame(paint);
+  }
+
+  private stopCountdown() {
+    if (this.countFrame !== null) window.cancelAnimationFrame(this.countFrame);
+    this.countFrame = null;
+    this.countingVisible = false;
+    this.countFinishing = false;
+    this.countSequence.reset();
+    this.countdownEl.style.display = 'none';
+  }
+
+  public destroy() { this.stopCountdown(); }
 
   private renderWeaponChips(state: HUDState) {
     const activeWeapons = state.availableWeapons.filter(

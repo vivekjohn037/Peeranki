@@ -238,6 +238,8 @@ export class GameUIManager {
   }
 
   public unmount() {
+    this.hud?.destroy();
+    this.duelModal?.destroy();
     if (this.rafId !== null) {
       window.cancelAnimationFrame(this.rafId);
       this.rafId = null;

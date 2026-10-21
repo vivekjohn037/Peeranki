@@ -2468,3 +2468,65 @@
   max-width: 320px;
 }
 
+
+/* World rankings */
+.pk-rank-dialog { width:min(680px,94vw); max-height:90dvh; overflow:auto; box-sizing:border-box; background:radial-gradient(ellipse at 10% 0%,#263d35 0,transparent 48%),#101c23; color:#f4f4ec; border:1px solid #a8be9d33; border-radius:24px; box-shadow:0 32px 100px #0009; font-family:system-ui,sans-serif; }
+.pk-rank-header { padding:30px 30px 22px; display:flex; justify-content:space-between; gap:14px; align-items:flex-start; }
+.pk-rank-eyebrow { color:#c6cfae; font-size:10px; font-weight:750; letter-spacing:2px; margin-bottom:10px; }
+.pk-rank-header h2 { font-size:clamp(24px,4.8vw,34px); letter-spacing:-1.2px; margin:0; line-height:1.15; }
+.pk-rank-header h2>span { display:inline-block; margin-left:12px; font-size:26px; }
+.pk-rank-header p { margin:10px 0 0; color:#a4b3b8; font-size:13px; }
+.pk-rank-live { flex-shrink:0; display:flex; align-items:center; gap:6px; font-size:9px; letter-spacing:1.3px; color:#b5dbc4; padding:7px 10px; border:1px solid #668b7355; border-radius:30px; }
+.pk-rank-live i { width:5px; height:5px; border-radius:50%; background:#91d9ac; }
+.pk-rank-results { padding:0 30px 24px; }
+.pk-rank-champion { display:flex; align-items:center; gap:16px; padding:22px; border:1px solid #e0c67e66; border-radius:16px; background:linear-gradient(115deg,#e1bf6120,#e1bf6105); }
+.pk-rank-crown { font-size:42px; color:#f0ce78; line-height:1; }
+.pk-rank-champion-name { min-width:0; flex:1; }
+.pk-rank-champion-name>span { font-size:9px; color:#dfc888; letter-spacing:1.6px; font-weight:700; }
+.pk-rank-champion h3 { overflow-wrap:anywhere; font-size:24px; margin:5px 0; }
+.pk-rank-champion p { color:#aab8ba; font-size:12px; margin:0; }
+.pk-rank-champion-score { font-size:30px; font-weight:800; color:#efd18a; font-variant-numeric:tabular-nums; text-align:right; }
+.pk-rank-champion-score>span { display:block; font-size:9px; letter-spacing:2px; font-weight:500; margin-top:4px; }
+.pk-rank-list-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:26px 0 12px; }
+.pk-rank-list-heading h3 { margin:0; font-size:14px; }
+.pk-rank-list-heading>span { color:#90a3ab; font-size:9px; letter-spacing:1px; }
+.pk-rank-table-wrap { max-height:38dvh; overflow:auto; border:1px solid #9bb1b51c; border-radius:12px; }
+.pk-rank-table { width:100%; border-collapse:collapse; font-size:14px; }
+.pk-rank-table thead { position:sticky; top:0; background:#18262e; z-index:1; }
+.pk-rank-table thead th { color:#91a6ae; font-size:10px; font-weight:600; padding:12px; text-transform:uppercase; letter-spacing:1px; }
+.pk-rank-table td,.pk-rank-table tbody th { padding:14px 12px; border-top:1px solid #9bb1b516; text-align:left; }
+.pk-rank-table th { text-align:left; }
+.pk-rank-table td:nth-last-child(-n+2),.pk-rank-table thead th:nth-last-child(-n+2) { text-align:right; font-variant-numeric:tabular-nums; }
+.pk-rank-table tbody tr { background:#ffffff02; }
+.pk-rank-table tbody tr:hover { background:#ffffff06; }
+.pk-rank-table tbody th { font-weight:600; min-width:0; }
+.pk-rank-player { overflow-wrap:anywhere; }
+.pk-rank-table small { display:block; font-size:8px; letter-spacing:1.3px; color:#bda875; margin-top:4px; }
+.pk-rank-place { color:#91a6ae; font-size:12px; font-weight:750; display:inline-grid; place-items:center; min-width:28px; height:28px; border-radius:8px; }
+.pk-rank-place-1 { color:#efcf7e; background:#e1bd6220; }
+.pk-rank-place-2 { color:#d0e0e7; background:#b5cbd518; }
+.pk-rank-place-3 { color:#d9ae86; background:#c9996918; }
+.pk-rank-points { font-weight:750; color:#e4ce91; }
+.pk-rank-footer { padding:20px 30px; background:#060e143b; border-top:1px solid #9bb1b51c; display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.pk-rank-footer strong { display:block; font-size:12px; color:#cddbbc; }
+.pk-rank-footer div>span { display:block; margin-top:5px; color:#8d9fa6; font-size:10px; line-height:1.5; }
+.pk-rank-close { flex-shrink:0; background:#e6c777; color:#172127; font-weight:750; border:0; padding:13px 16px; border-radius:10px; cursor:pointer; font-size:12px; min-height:44px; }
+.pk-rank-close:hover { background:#f5d991; }
+.pk-rank-close:focus-visible { outline:2px solid #fff; outline-offset:4px; }
+.pk-rank-close>span { margin-left:12px; }
+.pk-rank-empty { padding:36px 18px; text-align:center; color:#9dafb6; font-size:14px; }
+.pk-rank-empty>span { font-size:42px; color:#e6c777; }
+.pk-rank-empty h3 { color:#e8e9df; font-size:20px; }
+.pk-countdown-num { min-width:1.4em; text-align:center; }
+@media(max-width:480px) {
+ .pk-rank-header { padding:24px 18px 20px; }
+ .pk-rank-results { padding:0 18px 20px; }
+ .pk-rank-live { display:none; }
+ .pk-rank-champion { padding:16px 12px; gap:12px; }
+ .pk-rank-champion h3 { font-size:21px; }
+ .pk-rank-champion-score { font-size:25px; }
+ .pk-rank-crown { font-size:34px; }
+ .pk-rank-table td,.pk-rank-table tbody th,.pk-rank-table thead th { padding:12px 8px; }
+ .pk-rank-footer { padding:18px; flex-wrap:wrap; }
+ .pk-rank-close { width:100%; }
+}

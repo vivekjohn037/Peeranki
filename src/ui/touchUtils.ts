@@ -31,3 +31,19 @@ export function addFastTapListener<T extends HTMLElement>(
     handler(e);
   });
 }
+
+/** Require a new press on newly shown controls; reject clicks left over from the board. */
+export function addFreshTapListener(element: HTMLButtonElement, handler: () => void): void {
+  let pressedHere = false;
+  element.addEventListener('pointerdown', (event) => {
+    pressedHere = !element.disabled && event.isPrimary !== false && event.button === 0;
+  });
+  element.addEventListener('pointercancel', () => { pressedHere = false; });
+  element.addEventListener('click', (event) => {
+    const intentional = pressedHere || event.detail === 0; // Keyboard / assistive activation.
+    pressedHere = false;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!element.disabled && intentional) handler();
+  });
+}
