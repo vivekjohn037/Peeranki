@@ -22,6 +22,10 @@
       h2 { margin: 30px 0 8px; font-size: 1.1rem; }
       ol { padding-left: 22px; color: #c4ccd1; line-height: 1.7; }
       .note { margin-top: 24px; padding: 14px 16px; border-left: 3px solid #e7b844; border-radius: 8px; background: #ffffff0a; font-size: .9rem; }
+      .verification { margin-top: 24px; padding: 14px 16px; border: 1px solid #34424b; border-radius: 10px; color: #c4ccd1; font-size: .9rem; }
+      .verification summary { color: #f4c95d; font-weight: 700; cursor: pointer; }
+      .hash-label { margin-bottom: 6px; font-size: .85rem; }
+      .verification code { display: block; overflow-wrap: anywhere; color: #dce4e8; font-size: .78rem; }
       .back { display: inline-block; margin-top: 22px; color: #f4c95d; }
     </style>
   </head>
@@ -41,41 +45,15 @@
         <li>Continue the installation, then open Peeranki.</li>
       </ol>
 
-      <p class="note">Android may show a warning because this app is installed outside Google Play. Only install APKs from a source you trust. This download will not receive automatic Play Store updates.</p>
+      <details class="verification">
+        <summary>APK safety and verification</summary>
+        <p>This official download is digitally signed. The page checks each download part before saving the APK. Keep Google Play Protect enabled and do not install the file if Android reports a security problem.</p>
+        <p class="hash-label">Full APK SHA-256</p>
+        <code id="apk-sha256">294c5a6f712aea2b7677b45b7ba3adc9ce00ce766f8849ede3b99b9a001bd69</code>
+      </details>
+      <p class="note">Android may show a warning because this app is installed outside Google Play. Only download from the official Peeranki site. This APK will not receive automatic Play Store updates.</p>
       <a class="back" href="/">← Visit the Peeranki web game</a>
     </main>
-    <script>
-      const downloadButton = document.querySelector('#download');
-      const downloadStatus = document.querySelector('#download-status');
-      const apkParts = ['/downloads/peeranki-20261021.apk.part1', '/downloads/peeranki-20261021.apk.part2', '/downloads/peeranki-20261021.apk.part3'];
-
-      downloadButton.addEventListener('click', async (event) => {
-        event.preventDefault();
-        if (downloadButton.getAttribute('aria-disabled') === 'true') return;
-
-        downloadButton.setAttribute('aria-disabled', 'true');
-        downloadStatus.textContent = 'Downloading Peeranki…';
-        try {
-          const responses = await Promise.all(apkParts.map((url) => fetch(url)));
-          if (responses.some((response) => !response.ok)) throw new Error('A download part could not be loaded.');
-
-          const parts = await Promise.all(responses.map((response) => response.arrayBuffer()));
-          const apk = new Blob(parts, { type: 'application/vnd.android.package-archive' });
-          const objectUrl = URL.createObjectURL(apk);
-          const link = document.createElement('a');
-          link.href = objectUrl;
-          link.download = 'Peeranki.apk';
-          document.body.append(link);
-          link.click();
-          link.remove();
-          setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
-          downloadStatus.textContent = 'Download ready. Open Peeranki.apk to install it.';
-        } catch (error) {
-          downloadStatus.textContent = 'Download failed. Please check your connection and try again.';
-        } finally {
-          downloadButton.removeAttribute('aria-disabled');
-        }
-      });
-    </script>
+    <script src="/download.js" defer></script>
   </body>
 </html>
