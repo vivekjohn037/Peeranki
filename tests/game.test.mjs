@@ -23,6 +23,7 @@ import {
   findOrCreateRandomRoom,
   getGameState,
   saveGameState,
+  setLobbyReady,
   requestPlayerAction,
   touchPlayer,
   leaveRoom,
@@ -882,3 +883,20 @@ test('11. CLEANUP REALTIME CONNECTIONS', async () => {
   }
   setTimeout(() => process.exit(0), 50).unref();
 });
+
+
+test('lobby readiness persists per member, preserves other members, and rejects late changes', async () => {
+ const room=await createPrivateRoom(3,'ready-host','Host'); const code=room.room_code;
+ await joinRoom(code,'Guest','ready-guest');
+ await Promise.all([setLobbyReady(code,'ready-host',true),setLobbyReady(code,'ready-guest',true)]);
+ let state=await fetchReadyRoom(code);
+ assert.equal(state.players.find(p=>p.session_id==='ready-host').ready,true);
+ assert.equal(state.players.find(p=>p.session_id==='ready-guest').ready,true);
+ await setLobbyReady(code,'ready-host',false);state=await fetchReadyRoom(code);
+ assert.equal(state.players.find(p=>p.session_id==='ready-host').ready,false);
+ assert.equal(state.players.find(p=>p.session_id==='ready-guest').ready,true);
+ await assert.rejects(setLobbyReady(code,'outsider',true));
+ await saveGameState(code,state.players,3,null,0,'playing');
+ await assert.rejects(setLobbyReady(code,'ready-host',true));
+});
+async function fetchReadyRoom(code) { return getGameState(code); }

@@ -4,5 +4,5 @@ import { LobbyComponent } from '/src/ui/LobbyComponent.ts';
 const params = new URLSearchParams(location.search);
 const capacity = Number(params.get('slots') || 3);
 const state = {code:'KRL826',capacity,publicRoom:params.has('public'),host:true,hostSession:'host',localSession:'host',minutes:5,players:[{name:'VJ',sessionId:'host'}]};
-const lobby = new LobbyComponent(document.getElementById('game'),state,()=>lobby.setStarting(true),async()=>lobby.setStatus('Left the preview room.', 'waiting'));
+const lobby = new LobbyComponent(document.getElementById('game'),state,()=>lobby.setStarting(true),async()=>lobby.setStatus('Left the preview room.', 'waiting'), async ready=>{state.players=state.players.map(player=>({...player,ready}));lobby.update(state);});
 </script></body></html>

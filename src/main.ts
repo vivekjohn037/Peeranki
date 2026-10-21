@@ -1,3 +1,4 @@
+import { hasReadyQuorum } from './game/lobby';
 import { LobbyComponent } from './ui/LobbyComponent';
 import { MainMenuComponent } from './ui/MainMenuComponent';
 import Phaser from 'phaser';
@@ -52,6 +53,7 @@ if (Capacitor.isNativePlatform()) {
 
 import {
   saveGameState,
+  setLobbyReady,
   requestPlayerAction,
   submitDuelChoice as submitDuelChoiceAtomic,
   subscribeToGameState,
@@ -77,6 +79,7 @@ interface Player {
   alive: boolean;
   sessionId: string;
   authUid?: string;
+  ready?: boolean;
   connected: boolean;
   lastSeen: string;
   weapons: WeaponType[];
@@ -517,6 +520,7 @@ function loadPlayersFromRoom(roomPlayers: unknown[]) {
             ? rawPlayer.sessionId
             : '',
       authUid: typeof rawPlayer?.auth_uid === 'string' ? rawPlayer.auth_uid : undefined,
+      ready: rawPlayer?.ready === true,
       connected:
         typeof rawPlayer?.connected === 'boolean'
           ? rawPlayer.connected
@@ -2479,6 +2483,9 @@ class LobbyScene extends Phaser.Scene {
       await leaveCurrentRoom();
       resetMatchLifecycleState('none');
       this.scene.start('OnlineModeScene');
+    }, async (ready) => {
+      const room = await setLobbyReady(this.roomCodeAtStart, sessionId, ready);
+      if (this.isCurrentLobby()) this.applyRoomState(room);
     });
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.shutdown());
 
@@ -2563,7 +2570,7 @@ class LobbyScene extends Phaser.Scene {
     if (isPublicRoom) {
       const count = connectedPlayers().length;
 
-      if (count === maxPlayers && result.game_status === 'waiting') {
+      if (count === maxPlayers && result.game_status === 'waiting' && hasReadyQuorum(connectedPlayers(), maxPlayers)) {
         void this.startGame();
       }
     }
@@ -2590,12 +2597,23 @@ class LobbyScene extends Phaser.Scene {
       this.starting ||
       !this.isCurrentLobby() ||
       (!isPublicRoom && !amHost()) ||
-      connected.length !== maxPlayers
+      !hasReadyQuorum(connected, maxPlayers)
     ) {
       return;
     }
 
     this.starting = true;
+    let readyRoom: any;
+    try { readyRoom = await fetchGameRoom(this.roomCodeAtStart); }
+    catch { this.starting = false; this.lobby?.setStatus('Could not confirm readiness. Please try again.', 'error'); return; }
+    if (!this.isCurrentLobby()) return;
+    if (!readyRoom || readyRoom.game_status !== 'waiting' || !hasReadyQuorum(readyRoom.players ?? [], Number(readyRoom.max_players))) {
+      this.starting = false;
+      if (readyRoom) this.applyRoomState(readyRoom);
+      return;
+    }
+    // The conditional write below rejects a concurrent Not Ready or roster change.
+    loadPlayersFromRoom(readyRoom.players);
     processedOnlineActionNonces.clear();
     this.lobby?.setStarting(true);
 
@@ -2606,7 +2624,7 @@ class LobbyScene extends Phaser.Scene {
     roundWinnerId = 0;
     matchOver = false;
     lastRoundMessage = '';
-    const cleanPlayers = connected.map(
+    const cleanPlayers = connectedPlayers().map(
       (player) => ({
         id: player.id,
         name: player.name,
@@ -2616,6 +2634,7 @@ class LobbyScene extends Phaser.Scene {
         session_id: player.sessionId,
         auth_uid: player.authUid,
         connected: true,
+        ready: false,
         last_seen: player.lastSeen,
         weapons: ['gun'],
         all_weapons_collected: false,
@@ -2646,6 +2665,7 @@ class LobbyScene extends Phaser.Scene {
       })
       .eq('room_code', this.roomCodeAtStart)
       .eq('game_status', 'waiting')
+      .eq('players', JSON.stringify(readyRoom.players))
       .select('room_code');
 
     if (!this.isCurrentLobby()) return;
@@ -2667,6 +2687,7 @@ class LobbyScene extends Phaser.Scene {
       const room = await fetchGameRoom(this.roomCodeAtStart);
       if (!this.isCurrentLobby()) return;
       this.starting = false;
+      this.lobby?.setStarting(false);
       if (room) this.applyRoomState(room);
       return;
     }

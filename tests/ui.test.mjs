@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
+import { hasReadyQuorum } from '../src/game/lobby.ts';
 import { CountSequence } from '../src/ui/CountSequence.ts';
 import { addFreshTapListener } from '../src/ui/touchUtils.ts';
 
@@ -49,6 +50,7 @@ class Element extends Button {
   appendChild(child) { this.children.push(child); }
   append(child) { this.children.push(child); }
   remove() { this.removed = true; }
+  setAttribute(key, value) { (this.attributes ??= {})[key] = value; }
   querySelector(selector) { if (!this.parts.has(selector)) this.parts.set(selector, new Element()); return this.parts.get(selector); }
   querySelectorAll() { return this.children; }
 }
@@ -78,6 +80,7 @@ test('duel delays reveal, arms later, keeps stable buttons and cancels on exit',
 
 let lobbySource = fs.readFileSync(new URL('../src/ui/LobbyComponent.ts', import.meta.url), 'utf8');
 lobbySource = ts.transpileModule(lobbySource, { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext } }).outputText.replace("'./html'", JSON.stringify(new URL('../src/ui/html.ts', import.meta.url).href));
+lobbySource = lobbySource.replace("'../game/lobby'", JSON.stringify(new URL('../src/game/lobby.ts', import.meta.url).href));
 const { LobbyComponent } = await import('data:text/javascript;base64,' + Buffer.from(lobbySource).toString('base64'));
 
 test('waiting room renders safe player slots and follows room capacity and host changes', () => {
@@ -90,7 +93,7 @@ test('waiting room renders safe player slots and follows room capacity and host 
   const slots=root.querySelector('.pk-lobby-slots');
   assert.ok(slots.innerHTML.includes('&lt;img onerror=bad&gt;')); assert.ok(!slots.innerHTML.includes('<img onerror=bad>'));
   assert.equal((slots.innerHTML.match(/pk-lobby-slot /g)||[]).length,3);
-  const full={...state,players:[...state.players,{name:'Second',sessionId:'second'},{name:'Third',sessionId:'third'}]};
+  const full={...state,players:[...state.players,{name:'Second',sessionId:'second'},{name:'Third',sessionId:'third'}].map(player=>({...player,ready:true}))};
   lobby.update(full); assert.equal(start.disabled,false); start.onclick(); assert.equal(starts,1);
   lobby.setStarting(true); assert.equal(start.disabled,true);
   lobby.setStarting(false); lobby.update({...full,host:false,hostSession:'second'}); assert.equal(start.hidden,true);
@@ -105,4 +108,26 @@ test('waiting-room leave action only sends one request', async () => {
   const leave=parent.children[0].querySelector('.pk-lobby-leave');
   await leave.onclick(); await leave.onclick(); assert.equal(leaves,1); assert.equal(leave.disabled,true);
   lobby.destroy(); delete globalThis.document;
+});
+
+
+test('readiness requires every seat and explicit approval from every connected player', () => {
+ assert.equal(hasReadyQuorum([{ready:true},{ready:true}],3),false);
+ assert.equal(hasReadyQuorum([{ready:true},{ready:true},{}],3),false);
+ assert.equal(hasReadyQuorum([{ready:true},{ready:true},{ready:false}],3),false);
+ assert.equal(hasReadyQuorum([{ready:true},{ready:true},{ready:true}],3),true);
+ assert.equal(hasReadyQuorum([{ready:true},{ready:true},{ready:true,connected:false}],3),false);
+});
+
+test('Ready toggle saves shared state and disables itself while saving', async () => {
+ globalThis.document = {createElement:()=>new Element()};
+ const parent=new Element(); const state={code:'ABC123',capacity:3,publicRoom:false,host:true,hostSession:'host',localSession:'host',minutes:5,players:[{name:'Host',sessionId:'host',ready:false},{name:'Second',sessionId:'second',ready:true},{name:'Third',sessionId:'third',ready:true}]};
+ let finish; let requests=0;
+ const lobby=new LobbyComponent(parent,state,()=>{},async()=>{},ready=>{ requests++; return new Promise(resolve=>{finish=()=>{state.players[0].ready=ready;lobby.update(state);resolve();};});});
+ const root=parent.children[0],button=root.querySelector('.pk-lobby-toggle-ready'),start=root.querySelector('.pk-lobby-start');
+ assert.equal(button.textContent,'Not Ready');assert.equal(start.disabled,true);
+ const pending=button.onclick();assert.equal(button.disabled,true);await button.onclick();assert.equal(requests,1);
+ finish();await pending;assert.equal(button.textContent,'✓ Ready');assert.equal(button.disabled,false);assert.equal(start.disabled,false);
+ const unready=button.onclick();finish();await unready;assert.equal(start.disabled,true);assert.equal(button.textContent,'Not Ready');
+ lobby.destroy();delete globalThis.document;
 });

@@ -1,6 +1,7 @@
+import { hasReadyQuorum } from '../game/lobby';
 import { escapeHtml } from './html';
 
-interface LobbyPlayer { name: string; sessionId: string; }
+interface LobbyPlayer { name: string; sessionId: string; ready?: boolean; }
 interface LobbyViewState {
   code: string; capacity: number; publicRoom: boolean; host: boolean;
   hostSession: string; localSession: string; minutes: number; players: LobbyPlayer[];
@@ -10,11 +11,12 @@ export class LobbyComponent {
   private root: HTMLElement;
   private state: LobbyViewState;
   private starting = false;
+  private savingReady = false;
   private leaving = false;
   private copyTimer: ReturnType<typeof setTimeout> | null = null;
   private rosterKey = '';
 
-  constructor(parent: HTMLElement, state: LobbyViewState, onStart: () => void, onLeave: () => Promise<void>) {
+  constructor(parent: HTMLElement, state: LobbyViewState, onStart: () => void, onLeave: () => Promise<void>, onReady: (ready: boolean) => Promise<void> = async () => {}) {
     this.state = state;
     this.root = document.createElement('main');
     this.root.className = 'pk-lobby';
@@ -26,7 +28,7 @@ export class LobbyComponent {
         <div class="pk-lobby-search"><span class="pk-lobby-search-icon" aria-hidden="true">⌕</span><div><strong class="pk-lobby-status" role="status"></strong><p class="pk-lobby-hint"></p></div></div>
       </section>
       <section class="pk-lobby-roster" aria-label="Room players"><header><div><span>YOUR MATCH</span><h2>Players assembled</h2></div><div class="pk-lobby-count"><strong>0</strong><span></span></div></header><div class="pk-lobby-progress" aria-hidden="true"><span></span></div><div class="pk-lobby-slots"></div><div class="pk-lobby-roster-note">Everyone starts with a gun. Strategy does the rest.</div></section></div>
-      <footer class="pk-lobby-footer"><button type="button" class="pk-lobby-leave">← <span>Leave room</span></button><span class="pk-lobby-footnote"></span><button type="button" class="pk-lobby-start">Start game <span aria-hidden="true">→</span></button></footer>
+      <footer class="pk-lobby-footer"><button type="button" class="pk-lobby-leave">← <span>Leave room</span></button><button type="button" class="pk-lobby-toggle-ready" aria-pressed="false">Not Ready</button><button type="button" class="pk-lobby-start">Start game <span aria-hidden="true">→</span></button></footer>
     </div>`;
     this.root.querySelector<HTMLButtonElement>('.pk-lobby-code')!.onclick = async () => {
       const caption = this.root.querySelector('.pk-lobby-code small')!;
@@ -38,11 +40,22 @@ export class LobbyComponent {
         this.copyTimer = setTimeout(() => { caption.textContent = 'Tap to copy ⧉'; this.root.querySelector('.pk-lobby-code')!.classList.remove('is-copied'); this.copyTimer = null; }, 2200);
       } catch { caption.textContent = 'Select and copy the code above.'; }
     };
-    this.root.querySelector<HTMLButtonElement>('.pk-lobby-start')!.onclick = () => { if (!this.starting && !this.leaving) onStart(); };
+    this.root.querySelector<HTMLButtonElement>('.pk-lobby-start')!.onclick = () => { if (!this.starting && !this.leaving && hasReadyQuorum(this.state.players, this.state.capacity)) onStart(); };
+    this.root.querySelector<HTMLButtonElement>('.pk-lobby-toggle-ready')!.onclick = async () => {
+      if (this.savingReady || this.starting || this.leaving) return;
+      const mine = this.state.players.find(player => player.sessionId === this.state.localSession);
+      if (!mine) return;
+      this.savingReady = true;
+      this.update(this.state);
+      try { await onReady(mine.ready !== true); }
+      catch (error) { this.setStatus(error instanceof Error ? error.message : 'Could not save readiness. Try again.', 'error'); }
+      finally { this.savingReady = false; this.updateReadyButton(); }
+    };
     this.root.querySelector<HTMLButtonElement>('.pk-lobby-leave')!.onclick = async () => {
       if (this.leaving) return;
       this.leaving = true;
       this.root.querySelector<HTMLButtonElement>('.pk-lobby-leave')!.disabled = true;
+      this.updateReadyButton();
       this.setStatus('Leaving room…', 'waiting');
       await onLeave();
     };
@@ -61,13 +74,15 @@ export class LobbyComponent {
     this.root.querySelector('.pk-lobby-count strong')!.textContent = String(count).padStart(2, '0');
     this.root.querySelector('.pk-lobby-count>span')!.textContent = `/ ${String(state.capacity).padStart(2, '0')}`;
     this.root.querySelector<HTMLElement>('.pk-lobby-progress span')!.style.width = `${Math.min(100, count / state.capacity * 100)}%`;
-    this.root.querySelector('.pk-lobby-hint')!.textContent = state.publicRoom ? 'Your match starts automatically when the room is full.' : state.host ? 'Share the room code. Start when everyone has joined.' : 'The host will start once everyone has joined.';
-    this.root.querySelector('.pk-lobby-footnote')!.textContent = state.publicRoom ? 'Finding your next rivals' : 'A good rivalry starts with friends';
+    this.root.querySelector('.pk-lobby-hint')!.textContent = state.publicRoom ? 'The match starts when the room is full and everyone is ready.' : state.host ? 'Share the code. Start once everyone is ready.' : 'Mark yourself ready. The host will start the match.';
+    this.updateReadyButton();
+    const allReady = hasReadyQuorum(state.players, state.capacity);
+    const notReady = state.players.filter(player => player.ready !== true).length;
     const start = this.root.querySelector<HTMLButtonElement>('.pk-lobby-start')!;
     start.hidden = state.publicRoom || !state.host;
-    start.disabled = missing > 0 || this.starting || this.leaving;
+    start.disabled = !allReady || this.starting || this.leaving || this.savingReady;
     start.textContent = this.starting ? 'Starting…' : 'Start game →';
-    if (!this.starting && !this.leaving) this.setStatus(missing ? `Waiting for ${missing} more ${missing === 1 ? 'player' : 'players'}` : state.publicRoom ? 'Room full. Starting the match…' : state.host ? 'Everyone’s here. Ready when you are.' : 'Everyone’s here. Waiting for the host…', missing ? 'waiting' : 'ready');
+    if (!this.starting && !this.leaving) this.setStatus(missing ? `Waiting for ${missing} more ${missing === 1 ? 'player' : 'players'}` : !allReady ? `Waiting for ${notReady} ${notReady === 1 ? 'player' : 'players'} to get ready` : state.publicRoom ? 'Everyone ready. Starting the match…' : state.host ? 'Everyone’s here. Ready when you are.' : 'Everyone’s here. Waiting for the host…', allReady ? 'ready' : 'waiting');
     const key = JSON.stringify([state.players, state.capacity, state.hostSession, state.localSession]);
     if (key === this.rosterKey) return;
     this.rosterKey = key;
@@ -76,8 +91,19 @@ export class LobbyComponent {
     slots.style.setProperty('--slot-rows', String(state.capacity > 5 ? Math.ceil(state.capacity / 2) : state.capacity));
     slots.innerHTML = Array.from({length: state.capacity}, (_, index) => {
       const player = state.players[index];
-      return player ? `<div class="pk-lobby-slot is-joined"><span class="pk-lobby-seat">${String(index + 1).padStart(2, '0')}</span><div class="pk-lobby-initial" aria-hidden="true">${escapeHtml(Array.from(player.name)[0]?.toUpperCase() || 'P')}</div><div class="pk-lobby-player"><strong>${player.sessionId === state.hostSession ? '<span class="pk-lobby-host-crown" title="Host">♛</span> ' : ''}${escapeHtml(player.name)}${player.sessionId === state.localSession ? ' <small>YOU</small>' : ''}</strong><span>${player.sessionId === state.hostSession ? '♛ HOST' : 'PLAYER'}</span></div><span class="pk-lobby-ready"><i></i> READY</span></div>` : `<div class="pk-lobby-slot is-empty"><span class="pk-lobby-seat">${String(index + 1).padStart(2, '0')}</span><div class="pk-lobby-initial" aria-hidden="true">+</div><div class="pk-lobby-player"><strong>Open slot</strong><span>Waiting for a rival</span></div><span class="pk-lobby-wait" aria-hidden="true">···</span></div>`;
+      return player ? `<div class="pk-lobby-slot is-joined"><span class="pk-lobby-seat">${String(index + 1).padStart(2, '0')}</span><div class="pk-lobby-initial" aria-hidden="true">${escapeHtml(Array.from(player.name)[0]?.toUpperCase() || 'P')}</div><div class="pk-lobby-player"><strong>${player.sessionId === state.hostSession ? '<span class="pk-lobby-host-crown" title="Host">♛</span> ' : ''}${escapeHtml(player.name)}${player.sessionId === state.localSession ? ' <small>YOU</small>' : ''}</strong><span>${player.sessionId === state.hostSession ? '♛ HOST' : 'PLAYER'}</span></div><span class="pk-lobby-ready ${player.ready === true ? 'is-ready' : 'is-not-ready'}"><i></i> ${player.ready === true ? 'READY' : 'NOT READY'}</span></div>` : `<div class="pk-lobby-slot is-empty"><span class="pk-lobby-seat">${String(index + 1).padStart(2, '0')}</span><div class="pk-lobby-initial" aria-hidden="true">+</div><div class="pk-lobby-player"><strong>Open slot</strong><span>Waiting for a rival</span></div><span class="pk-lobby-wait" aria-hidden="true">···</span></div>`;
     }).join('');
+  }
+
+  private updateReadyButton() {
+    const button = this.root.querySelector<HTMLButtonElement>('.pk-lobby-toggle-ready')!;
+    const mine = this.state.players.find(player => player.sessionId === this.state.localSession);
+    const ready = mine?.ready === true;
+    button.disabled = !mine || this.savingReady || this.starting || this.leaving;
+    button.textContent = this.savingReady ? 'Saving…' : ready ? '✓ Ready' : 'Not Ready';
+    button.setAttribute('aria-pressed', String(ready));
+    button.classList.toggle('is-ready', ready);
+    this.root.querySelector<HTMLButtonElement>('.pk-lobby-start')!.disabled = !hasReadyQuorum(this.state.players, this.state.capacity) || this.savingReady || this.starting || this.leaving;
   }
 
   setStarting(value: boolean) { this.starting = value; this.update(this.state); if (value) this.setStatus('Starting the match…', 'ready'); }

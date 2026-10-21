@@ -412,3 +412,17 @@ input {
 .pk-lobby-host-crown { color:#f2cf66; }
 .pk-lobby-code.is-copied { border-color:#38e08d; }
 .pk-lobby-code.is-copied strong { color:#38e08d; }
+
+.pk-lobby-footer { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+.pk-lobby-leave { justify-self:start; }
+.pk-lobby-start { justify-self:end; margin-left:0; }
+.pk-lobby-toggle-ready { grid-column:2; justify-self:center; min-height:44px; min-width:120px; padding:10px 20px; border:1px solid #f2cf6666; border-radius:9px; background:#1e293b; color:#f2cf66; font:700 12px system-ui,sans-serif; cursor:pointer; }
+.pk-lobby-toggle-ready.is-ready { background:#20a060; border-color:#38e08d; color:#fff; }
+.pk-lobby-ready.is-not-ready { color:#8a99a8; }
+.pk-lobby-ready.is-not-ready i { background:#8a99a8; }
+.pk-lobby-many .pk-lobby-ready { display:flex; font-size:0; gap:0; }
+@media(max-width:480px) {
+ .pk-lobby-footer { gap:8px; }
+ .pk-lobby-leave,.pk-lobby-start,.pk-lobby-toggle-ready { width:100%; min-width:0; padding:10px 6px; font-size:10px; gap:4px; white-space:nowrap; }
+ .pk-lobby-ready { font-size:7px; letter-spacing:0; gap:4px; }
+}

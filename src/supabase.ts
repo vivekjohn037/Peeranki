@@ -1615,3 +1615,30 @@ export async function fetchGlobalLeaderboard(): Promise<Array<{player_id: string
   if (error) throw error;
   return data ?? [];
 }
+
+/** Change only this player's lobby flag, retrying if another member changed the roster. */
+export async function setLobbyReady(roomCode: string, sessionId: string, ready: boolean) {
+  const code = roomCode.trim().toUpperCase();
+  if (!/^[A-Z0-9]{6}$/.test(code) || !sessionId || typeof ready !== 'boolean') throw new Error('Invalid ready request.');
+  if (!isProduction && !hasAnySupabaseConfiguration) {
+    const room = getStoredRoom(code);
+    if (!room || room.game_status !== 'waiting') throw new Error('This room is no longer waiting.');
+    if (!room.players.some((player: any) => player.session_id === sessionId && player.connected !== false)) throw new Error('Player is not in the room.');
+    return updateMockRoomPartial(code, { players: room.players.map((player: any) => player.session_id === sessionId ? {...player, ready} : player) });
+  }
+  const client = await authenticatedClient();
+  const { data: auth, error: authError } = await client.auth.getUser();
+  if (authError || !auth.user) throw new Error('Sign in again before changing readiness.');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const room = await fetchGameRoom(code);
+    if (!room || room.game_status !== 'waiting') throw new Error('This room is no longer waiting.');
+    const mine = room.players.find((player: any) => player.session_id === sessionId && player.auth_uid === auth.user.id && player.connected !== false);
+    if (!mine) throw new Error('Player is not in the room.');
+    const next = room.players.map((player: any) => player === mine ? {...player, ready} : player);
+    const { data, error } = await client.from('game_states').update({ players: next, updated_at: new Date().toISOString() })
+      .eq('room_code', code).eq('game_status', 'waiting').eq('players', JSON.stringify(room.players)).select('*');
+    if (error) throw parseSupabaseError(error, 'Could not change readiness.');
+    if (data?.[0]) return data[0];
+  }
+  throw new Error('The room is updating. Please try again.');
+}
