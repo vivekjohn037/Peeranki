@@ -1,3 +1,4 @@
+import { LobbyComponent } from './ui/LobbyComponent';
 import { MainMenuComponent } from './ui/MainMenuComponent';
 import Phaser from 'phaser';
 import './style.css';
@@ -2457,10 +2458,7 @@ class JoinScene extends Phaser.Scene {
 }
 
 class LobbyScene extends Phaser.Scene {
-  private playerText?: Phaser.GameObjects.Text;
-  private statusText?: Phaser.GameObjects.Text;
-  private startButton?: Phaser.GameObjects.Text;
-  private leaveButton?: Phaser.GameObjects.Text;
+  private lobby?: LobbyComponent;
   private realtimeChannel: any;
   private refreshTimer?: Phaser.Time.TimerEvent;
   private starting = false;
@@ -2475,249 +2473,14 @@ class LobbyScene extends Phaser.Scene {
   create() {
     this.lifecycleGeneration = matchLifecycleGeneration;
     this.roomCodeAtStart = roomCode;
-    const { width, height } = this.scale;
-    const isLandscape = width >= 640 && width > height * 1.12;
-
-    const copyBtnW = isLandscape ? Math.min(320, Math.floor(width * 0.38)) : Math.min(340, width - 36);
-
-    if (isLandscape) {
-      const leftColX = width * 0.28;
-      const rightColX = width * 0.72;
-      const colWidth = Math.min(420, width * 0.40);
-
-      this.add
-        .text(leftColX, height * 0.14, 'WAITING ROOM', {
-          fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-          fontSize: '26px',
-          color: '#ffffff',
-          fontStyle: 'bold',
-        })
-        .setOrigin(0.5);
-
-      const copyBtn = makeButton(
-        this,
-        leftColX,
-        height * 0.28,
-        `📋 ROOM: ${roomCode} (TAP TO COPY)`,
-        '#1e293b',
-        13,
-        copyBtnW,
-        42,
-      );
-
-      copyBtn.on('pointerdown', async () => {
-        try {
-          await navigator.clipboard.writeText(roomCode);
-          copyBtn.setText(`✅ COPIED: ${roomCode}!`);
-          copyBtn.setStyle({ backgroundColor: '#15803d' });
-          PeerankiAudio.effect('select');
-          this.time.delayedCall(2200, () => {
-            copyBtn.setText(`📋 ROOM: ${roomCode} (TAP TO COPY)`);
-            copyBtn.setStyle({ backgroundColor: '#1e293b' });
-          });
-        } catch {
-          copyBtn.setText(`ROOM: ${roomCode}`);
-        }
-      });
-
-      this.add
-        .text(
-          leftColX,
-          height * 0.40,
-          `${maxPlayers} PLAYER MATCH${isPublicRoom ? ' • PUBLIC' : ' • PRIVATE'}`,
-          {
-            fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-            fontSize: '12px',
-            color: '#8a99a8',
-            fontStyle: 'bold',
-          },
-        )
-        .setOrigin(0.5);
-
-      this.statusText = this.add
-        .text(leftColX, height * 0.54, '🟢 Connected • Waiting for players...', {
-          fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-          fontSize: '13px',
-          color: '#38e08d',
-          fontStyle: 'bold',
-          align: 'center',
-          wordWrap: { width: colWidth, useAdvancedWrap: true },
-        })
-        .setOrigin(0.5);
-
-      if (amHost() && !isPublicRoom) {
-        this.startButton = makeButton(
-          this,
-          leftColX,
-          height * 0.70,
-          '▶ START GAME',
-          '#20a060',
-          17,
-          colWidth,
-          48,
-        );
-
-        this.startButton.on('pointerdown', () => {
-          void this.startGame();
-        });
-      }
-
-      this.leaveButton = makeButton(
-        this,
-        leftColX,
-        height * 0.86,
-        'LEAVE ROOM',
-        '#9b3030',
-        14,
-        Math.min(220, colWidth * 0.70),
-        40,
-      );
-
-      this.leaveButton.on('pointerdown', async () => {
-        this.leaveButton?.disableInteractive();
-        this.statusText?.setText('Leaving room...');
-        await leaveCurrentRoom();
-        resetMatchLifecycleState('none');
-        this.scene.start('OnlineModeScene');
-      });
-
-      // Right Column: Player Roster Panel
-      const rosterW = Math.min(440, Math.floor(width * 0.42));
-      const rosterH = Math.min(360, Math.floor(height * 0.80));
-      const rosterBg = this.add.graphics();
-      rosterBg.fillStyle(0x182029, 0.85);
-      rosterBg.lineStyle(1.5, 0x2d3846, 0.8);
-      rosterBg.fillRoundedRect(rightColX - rosterW / 2, height * 0.10, rosterW, rosterH, 12);
-      rosterBg.strokeRoundedRect(rightColX - rosterW / 2, height * 0.10, rosterW, rosterH, 12);
-
-      this.playerText = this.add
-        .text(rightColX, height * 0.14, 'Connecting to room...', {
-          fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-          fontSize: '13px',
-          color: '#ffffff',
-          align: 'left',
-          lineSpacing: 5,
-          wordWrap: { width: rosterW - 24, useAdvancedWrap: true },
-        })
-        .setOrigin(0.5, 0);
-
-    } else {
-      // PORTRAIT: Guaranteed sequential top and bottom anchoring to prevent overlap
-      this.add
-        .text(width / 2, 34, 'WAITING ROOM', {
-          fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-          fontSize: '22px',
-          color: '#ffffff',
-          fontStyle: 'bold',
-        })
-        .setOrigin(0.5);
-
-      const copyBtn = makeButton(
-        this,
-        width / 2,
-        74,
-        `📋 ROOM: ${roomCode} (TAP TO COPY)`,
-        '#1e293b',
-        13,
-        copyBtnW,
-        40,
-      );
-
-      copyBtn.on('pointerdown', async () => {
-        try {
-          await navigator.clipboard.writeText(roomCode);
-          copyBtn.setText(`✅ COPIED: ${roomCode}!`);
-          copyBtn.setStyle({ backgroundColor: '#15803d' });
-          PeerankiAudio.effect('select');
-          this.time.delayedCall(2200, () => {
-            copyBtn.setText(`📋 ROOM: ${roomCode} (TAP TO COPY)`);
-            copyBtn.setStyle({ backgroundColor: '#1e293b' });
-          });
-        } catch {
-          copyBtn.setText(`ROOM: ${roomCode}`);
-        }
-      });
-
-      this.add
-        .text(
-          width / 2,
-          112,
-          `${maxPlayers} PLAYER MATCH${isPublicRoom ? ' • PUBLIC' : ' • PRIVATE'}`,
-          {
-            fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-            fontSize: '12px',
-            color: '#8a99a8',
-            fontStyle: 'bold',
-          },
-        )
-        .setOrigin(0.5);
-
-      // Player list anchored from top: grows downwards from y=134
-      const pFontSize = maxPlayers > 6 || height < 650 ? '11.5px' : '13px';
-      const pSpacing = maxPlayers > 6 || height < 650 ? 2 : 4;
-      this.playerText = this.add
-        .text(width / 2, 134, 'Connecting to room...', {
-          fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-          fontSize: pFontSize,
-          color: '#ffffff',
-          align: 'center',
-          lineSpacing: pSpacing,
-          wordWrap: { width: Math.min(360, width - 36), useAdvancedWrap: true },
-        })
-        .setOrigin(0.5, 0);
-
-      // Controls anchored from the bottom
-      const lobbyBtnW = Math.min(300, Math.floor(width * 0.84));
-
-      this.statusText = this.add
-        .text(width / 2, height - 110, '🟢 Connected • Waiting for players...', {
-          fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif',
-          fontSize: '13px',
-          color: '#38e08d',
-          fontStyle: 'bold',
-          align: 'center',
-          wordWrap: { width: lobbyBtnW, useAdvancedWrap: true },
-        })
-        .setOrigin(0.5);
-
-      if (amHost() && !isPublicRoom) {
-        this.startButton = makeButton(
-          this,
-          width / 2,
-          height - 70,
-          '▶ START GAME',
-          '#20a060',
-          17,
-          lobbyBtnW,
-          46,
-        );
-
-        this.startButton.on('pointerdown', () => {
-          void this.startGame();
-        });
-      }
-
-      const lBtnY = amHost() && !isPublicRoom ? height - 20 : height - 80;
-
-      this.leaveButton = makeButton(
-        this,
-        width / 2,
-        lBtnY,
-        'LEAVE ROOM',
-        '#9b3030',
-        13,
-        Math.min(180, lobbyBtnW * 0.65),
-        36,
-      );
-
-      this.leaveButton.on('pointerdown', async () => {
-        this.leaveButton?.disableInteractive();
-        this.statusText?.setText('Leaving room...');
-        await leaveCurrentRoom();
-        resetMatchLifecycleState('none');
-        this.scene.start('OnlineModeScene');
-      });
-    }
+    this.starting = false;
+    this.lastPlayerCount = 0;
+    this.lobby = new LobbyComponent(document.getElementById('game')!, this.lobbyState(), () => { void this.startGame(); }, async () => {
+      await leaveCurrentRoom();
+      resetMatchLifecycleState('none');
+      this.scene.start('OnlineModeScene');
+    });
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.shutdown());
 
     this.realtimeChannel = subscribeToGameState(
       this.roomCodeAtStart,
@@ -2787,19 +2550,13 @@ class LobbyScene extends Phaser.Scene {
       if (!this.isCurrentLobby()) return;
 
       if (!result) {
-        this.statusText?.setText(
-          'Room closed or connection failed.',
-        );
-        this.statusText?.setStyle({ color: '#ef4444' });
+        this.lobby?.setStatus('Room closed or connection failed.', 'error');
         return;
       }
 
       this.applyRoomState(result);
     } catch {
-      this.statusText?.setText(
-        'Connection to room lost. Reconnecting...',
-      );
-      this.statusText?.setStyle({ color: '#f59e0b' });
+      this.lobby?.setStatus('Connection lost. Reconnecting…', 'waiting');
       return;
     }
 
@@ -2819,50 +2576,12 @@ class LobbyScene extends Phaser.Scene {
       !offlineMode;
   }
 
-  private updateLobbyText() {
-    const connected = connectedPlayers();
-
-    let text = `PLAYERS CONNECTED: ${connected.length} / ${maxPlayers}\n\n`;
-
-    connected.forEach((player, index) => {
-      const isHost = player.sessionId === hostSessionId;
-      const isYou = player.sessionId === sessionId;
-      const hostMark = isHost ? ' 👑 HOST' : '';
-      const youMark = isYou ? ' (YOU)' : '';
-
-      text += `${index + 1}. ${player.name}${hostMark}${youMark}   🟢 READY\n`;
-    });
-
-    for (let i = connected.length; i < maxPlayers; i++) {
-      text += `${i + 1}. [Waiting for player to join...]   ⏳\n`;
-    }
-
-    this.playerText?.setText(text);
-
-    if (connected.length < maxPlayers) {
-      this.statusText?.setText(
-        isPublicRoom
-          ? `🔍 Matchmaking active... Waiting for ${maxPlayers - connected.length} more player(s)`
-          : amHost()
-            ? `Share code "${roomCode}" with friends! (${maxPlayers - connected.length} slots left)`
-            : 'Waiting for players to join...',
-      );
-      this.statusText?.setStyle({ color: '#f2cf66' });
-
-      this.startButton?.setVisible(false);
-    } else {
-      this.statusText?.setText(
-        isPublicRoom
-          ? '🚀 Room is full! Starting match...'
-          : amHost()
-            ? '✨ All players joined! Tap START GAME to begin!'
-            : '✨ All players joined! Host is starting the match...',
-      );
-      this.statusText?.setStyle({ color: '#38e08d' });
-
-      this.startButton?.setVisible(true);
-    }
+  private lobbyState() {
+    return { code: roomCode, capacity: maxPlayers, publicRoom: isPublicRoom, host: amHost(),
+      hostSession: hostSessionId, localSession: sessionId, minutes: matchDurationMinutes, players: connectedPlayers() };
   }
+
+  private updateLobbyText() { this.lobby?.update(this.lobbyState()); }
 
   private async startGame() {
     const connected = connectedPlayers();
@@ -2878,8 +2597,7 @@ class LobbyScene extends Phaser.Scene {
 
     this.starting = true;
     processedOnlineActionNonces.clear();
-    this.startButton?.disableInteractive();
-    this.startButton?.setText('STARTING...');
+    this.lobby?.setStarting(true);
 
     matchStartedAt = new Date().toISOString();
     matchRound = 1;
@@ -2939,10 +2657,8 @@ class LobbyScene extends Phaser.Scene {
       );
 
       this.starting = false;
-      this.startButton?.setText('START FAILED');
-      this.startButton?.setInteractive({
-        useHandCursor: true,
-      });
+      this.lobby?.setStarting(false);
+      this.lobby?.setStatus('Could not start. Please try again.', 'error');
       return;
     }
 
@@ -2972,6 +2688,8 @@ class LobbyScene extends Phaser.Scene {
   }
 
   shutdown() {
+    this.lobby?.destroy();
+    this.lobby = undefined;
     this.refreshTimer?.remove(false);
 
     if (this.realtimeChannel) {

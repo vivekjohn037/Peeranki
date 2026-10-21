@@ -43,10 +43,12 @@ source = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget
 for (const name of ['touchUtils', 'html']) source = source.replace(`'./${name}'`, JSON.stringify(new URL(`../src/ui/${name}.ts`, import.meta.url).href));
 const { DuelModalComponent } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 class Element extends Button {
-  style = {}; children = []; textContent = ''; className = ''; classList = { add() {} };
+  style = { setProperty() {} }; dataset = {}; children = []; textContent = ''; className = ''; classList = { add() {}, toggle() {} };
   set innerHTML(value) { this.html = value; this.children = []; this.parts = new Map(); }
   get innerHTML() { return this.html; }
   appendChild(child) { this.children.push(child); }
+  append(child) { this.children.push(child); }
+  remove() { this.removed = true; }
   querySelector(selector) { if (!this.parts.has(selector)) this.parts.set(selector, new Element()); return this.parts.get(selector); }
   querySelectorAll() { return this.children; }
 }
@@ -72,4 +74,35 @@ test('duel delays reveal, arms later, keeps stable buttons and cancels on exit',
   duel.update({...state, round: 2}); duel.update({...state, active: false});
   t.mock.timers.tick(2000); assert.equal(backdrop.style.display, 'none');
   duel.destroy(); delete globalThis.document;
+});
+
+let lobbySource = fs.readFileSync(new URL('../src/ui/LobbyComponent.ts', import.meta.url), 'utf8');
+lobbySource = ts.transpileModule(lobbySource, { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext } }).outputText.replace("'./html'", JSON.stringify(new URL('../src/ui/html.ts', import.meta.url).href));
+const { LobbyComponent } = await import('data:text/javascript;base64,' + Buffer.from(lobbySource).toString('base64'));
+
+test('waiting room renders safe player slots and follows room capacity and host changes', () => {
+  globalThis.document = { createElement: () => new Element() };
+  const parent = new Element(); let starts = 0;
+  const state = {code:'ABC123',capacity:3,publicRoom:false,host:true,hostSession:'host',localSession:'host',minutes:5,players:[{name:'<img onerror=bad>',sessionId:'host'}]};
+  const lobby = new LobbyComponent(parent,state,()=>starts++,async()=>{});
+  const root=parent.children[0], start=root.querySelector('.pk-lobby-start');
+  assert.equal(start.disabled,true); assert.equal(start.hidden,false);
+  const slots=root.querySelector('.pk-lobby-slots');
+  assert.ok(slots.innerHTML.includes('&lt;img onerror=bad&gt;')); assert.ok(!slots.innerHTML.includes('<img onerror=bad>'));
+  assert.equal((slots.innerHTML.match(/pk-lobby-slot /g)||[]).length,3);
+  const full={...state,players:[...state.players,{name:'Second',sessionId:'second'},{name:'Third',sessionId:'third'}]};
+  lobby.update(full); assert.equal(start.disabled,false); start.onclick(); assert.equal(starts,1);
+  lobby.setStarting(true); assert.equal(start.disabled,true);
+  lobby.setStarting(false); lobby.update({...full,host:false,hostSession:'second'}); assert.equal(start.hidden,true);
+  lobby.update({...state,publicRoom:true}); assert.equal(start.hidden,true);
+  lobby.destroy(); assert.equal(root.removed,true); delete globalThis.document;
+});
+
+test('waiting-room leave action only sends one request', async () => {
+  globalThis.document = { createElement: () => new Element() };
+  const parent = new Element(); let leaves = 0;
+  const lobby = new LobbyComponent(parent,{code:'ABC123',capacity:3,publicRoom:true,host:true,hostSession:'host',localSession:'host',minutes:5,players:[]},()=>{},async()=>{leaves++;});
+  const leave=parent.children[0].querySelector('.pk-lobby-leave');
+  await leave.onclick(); await leave.onclick(); assert.equal(leaves,1); assert.equal(leave.disabled,true);
+  lobby.destroy(); delete globalThis.document;
 });
