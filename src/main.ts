@@ -1347,7 +1347,7 @@ class MenuScene extends Phaser.Scene {
     leaderboardBtn.on('pointerdown', () => { void showLeaderboard(); });
 
     androidDownloadBtn?.on('pointerdown', () => {
-      window.location.assign('https://peeranki.vivekjohn037.workers.dev/download.html');
+      window.location.assign('/download.html');
     });
   }
 
