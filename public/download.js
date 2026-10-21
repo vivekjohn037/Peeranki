@@ -3,20 +3,25 @@ const downloadStatus = document.querySelector('#download-status');
 
 const apkParts = [
   {
-    url: '/downloads/peeranki-20261021.apk.part1',
-    bytes: 20_971_520,
-    sha256: '8a9dc9a4f9cf6f61bb3a8aa7f389ceb92e9eff5e5df73a98eb0883014fdce09a',
+    "url": "/downloads/peeranki-20261021-release-cc19f40b.apk.part1",
+    "bytes": 20971520,
+    "sha256": "f2baf64e8622beacf4bc2d8c23d1603588a1cc0c5ab088a21d07f679641d4544"
   },
   {
-    url: '/downloads/peeranki-20261021.apk.part2',
-    bytes: 20_971_520,
-    sha256: '0b7bfaca0cd2efbc4b3e387efacb3cd7d92fdbe480a59134f25fb3e098cf8b1c',
+    "url": "/downloads/peeranki-20261021-release-cc19f40b.apk.part2",
+    "bytes": 20971520,
+    "sha256": "181d08ce1f3eeca823fc78d64b79d0149819cf068c99be9c8f6a68523694d9d8"
   },
   {
-    url: '/downloads/peeranki-20261021.apk.part3',
-    bytes: 18_096_501,
-    sha256: 'c69c25ff56d3e2977bb61f815a232929e374f899c48233e4f81d0a59074e9d2a',
+    "url": "/downloads/peeranki-20261021-release-cc19f40b.apk.part3",
+    "bytes": 20971520,
+    "sha256": "44e8231e020a43b2c4fa9a372e0dc3c26c7a893fc507aa03fb4174302aab99ab"
   },
+  {
+    "url": "/downloads/peeranki-20261021-release-cc19f40b.apk.part4",
+    "bytes": 16974803,
+    "sha256": "2e79fb7bd7d633365c965f6ea12771a9947f8559a8700d2fd422a0ef46b7e8b2"
+  }
 ];
 
 function toHex(bytes) {

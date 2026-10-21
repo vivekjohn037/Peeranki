@@ -58,6 +58,7 @@ export interface DuelState {
 }
 
 export interface GameOverState {
+  isOffline?: boolean;
   active: boolean;
   winners: UIPlayer[];
   allPlayers: UIPlayer[];

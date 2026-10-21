@@ -1605,3 +1605,13 @@ export async function updatePlayerAvatar(
   }
 }
 
+
+export async function fetchGlobalLeaderboard(): Promise<Array<{player_id: string; player_name: string; points: number; wins: number}>> {
+  const client = await authenticatedClient();
+  const { data, error } = await client.from('leaderboard')
+    .select('player_id, player_name, points, wins')
+    .order('points', { ascending: false }).order('wins', { ascending: false })
+    .order('player_id').limit(100);
+  if (error) throw error;
+  return data ?? [];
+}

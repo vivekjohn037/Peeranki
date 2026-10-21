@@ -79,6 +79,7 @@ This migration provisions:
      VITE_SUPABASE_URL=https://your-project.supabase.co
      VITE_SUPABASE_PUBLISHABLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
      ```
+   - Android Studio does not receive Cloudflare's build variables. Before creating an APK, place the same project URL and public/anon key in a local `.env.local` file at the repository root. This file is ignored by Git. Then run `npm.cmd run android:build` so Vite builds the configured web app and Capacitor copies it into Android.
 3. **No In-Browser Secret Storage**:
    - API keys and service tokens are never stored in browser `localStorage` or `sessionStorage`.
 
@@ -117,7 +118,7 @@ Peeranki includes a diagnostic modal that surfaces actionable error reports in t
 
 | Error Code | Cause | Recommended Action |
 |---|---|---|
-| `CONFIG_MISSING` | `VITE_SUPABASE_URL` or `VITE_SUPABASE_PUBLISHABLE_KEY` missing at build time. | Configure variables in Cloudflare build settings and redeploy. |
+| `CONFIG_MISSING` | `VITE_SUPABASE_URL` or `VITE_SUPABASE_PUBLISHABLE_KEY` missing at build time. | For web, configure Cloudflare build variables and redeploy. For Android, set the variables in local `.env.local`, run `npm.cmd run android:build`, and create a new signed APK. |
 | `TABLE_MISSING` | `public.game_states` table not found in Supabase. | Run `supabase/migrations/001_multiplayer.sql` in Supabase SQL Editor. |
 | `RPC_MISSING` | A required RPC is missing in Supabase schema cache. | Apply all files in `supabase/migrations/` in numeric order. |
 | `ROOM_NOT_FOUND` | Room code does not exist or lobby has closed. | Verify 6-character code with host. |
@@ -133,3 +134,8 @@ Peeranki includes a diagnostic modal that surfaces actionable error reports in t
 In development mode (`!isProduction`), if both environment variables are absent, Peeranki falls back to local in-memory rooms and `BroadcastChannel` for same-browser testing across multiple tabs.
 
 In production builds (`isProduction = true`), the game strictly requires the configured Supabase backend and will **never** silently fall back to browser-only storage.
+
+## Global win points and leaderboard
+Apply `supabase/migrations/009_global_leaderboard.sql` after migration 008, then rebuild/sync Android. Each completed online match awards 100 points per winner (including ties); eliminations award no global points. Offline matches do not enter global rankings. The menu and match results open the top 100 leaderboard. Rankings follow the current anonymous Supabase user on this installation; clearing app storage creates a new identity.
+
+Results are awarded by a database trigger using the saved room roster, with duplicate protection by room ID and match start time. Leaderboard tables prohibit client writes. The existing game still trusts room members to update room state, so these rankings are casual, not cheat-resistant competitive rankings. Applying the migration and testing an online match against the live database are required before release.

@@ -17,11 +17,15 @@ place, Gradle signs the release bundle using that upload key.
 
 ## Build the bundle
 
-From the repository root on Windows:
+Before building, create a local `.env.local` file in the repository root with
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Cloudflare's build
+variables are not available to Android Studio. Use only the public/anon key;
+never use a service-role key in the Android app. From the repository root on
+Windows, build the web app and sync it into Android before generating the
+bundle:
 
 ```powershell
-npm.cmd run build
-npx.cmd cap sync android
+npm.cmd run android:build
 android\gradlew.bat -p android bundleRelease
 ```
 

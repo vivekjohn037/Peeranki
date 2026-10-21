@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import {
   parseSupabaseError,
   getSupabaseConfigStatus,
@@ -93,6 +94,13 @@ function getBadgeConfig(code: MultiplayerErrorCode): BadgeConfig {
 function getResolutionGuidance(code: MultiplayerErrorCode, roomCode?: string): string[] {
   switch (code) {
     case 'CONFIG_MISSING':
+      if (Capacitor.isNativePlatform()) {
+        return [
+          'The Android app was built without its public Supabase settings. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY to the project-root .env.local file.',
+          'Run npm.cmd run android:build to rebuild and sync the app, then create a new signed APK in Android Studio.',
+          'Use only the public/anon key; never put a service-role key in the app.',
+        ];
+      }
       return [
         'Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in your Cloudflare deployment settings (Workers & Pages > Settings > Variables and Secrets).',
         'Trigger a new build and deployment so Vite injects the keys.',

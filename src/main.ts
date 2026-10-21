@@ -1,3 +1,4 @@
+import { showLeaderboard } from './ui/LeaderboardModal';
 import Phaser from 'phaser';
 import './style.css';
 import { GameUIManager } from './ui/GameUIManager';
@@ -1303,7 +1304,7 @@ class MenuScene extends Phaser.Scene {
       30,
     ).setDepth(1000);
 
-    const androidDownloadBtn = makeButton(
+    const androidDownloadBtn = Capacitor.getPlatform() === 'android' ? null : makeButton(
       this,
       width - 146,
       topBtnY,
@@ -1342,7 +1343,10 @@ class MenuScene extends Phaser.Scene {
       showExitGameModal();
     });
 
-    androidDownloadBtn.on('pointerdown', () => {
+    const leaderboardBtn = makeButton(this, 100, topBtnY, '🏆 RANKS', '#1f2937', 11, 90, 30).setDepth(1000);
+    leaderboardBtn.on('pointerdown', () => { void showLeaderboard(); });
+
+    androidDownloadBtn?.on('pointerdown', () => {
       window.location.assign('https://peeranki.vivekjohn037.workers.dev/download.html');
     });
   }
@@ -3872,6 +3876,7 @@ if (offlineMode) {
     const winners = findMatchWinners(connected);
 
     const gameOverState: GameOverState = {
+      isOffline: offlineMode,
       active: this.gameFinished,
       winners: winners.map((p) => ({
         id: p.id,

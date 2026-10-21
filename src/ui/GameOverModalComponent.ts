@@ -1,6 +1,7 @@
 import type { GameOverState, UICallbacks } from './types';
 import { addFastTapListener } from './touchUtils';
 import { escapeHtml } from './html';
+import { showLeaderboard } from './LeaderboardModal';
 
 const CONFETTI_COUNT = 44;
 const CONFETTI_COLORS = [
@@ -95,7 +96,7 @@ export class GameOverModalComponent {
       statsRowsHtml += `
         <div class="pk-gameover-stat-row">
           <span>${rank === 0 ? '🥇' : rank === 1 ? '🥈' : rank === 2 ? '🥉' : `${rank + 1}.`} ${escapeHtml(player.name)}${isWinner ? ' (Winner)' : ''}</span>
-          <span style="font-weight: 700; color: #f2cf66;">⭐ ${escapeHtml(player.eliminationPoints)} pts · ${escapeHtml(player.weapons.length)} weapons</span>
+          <span style="font-weight: 700; color: #f2cf66;">⭐ ${isWinner ? 100 : 0} win pts · ${escapeHtml(player.eliminationPoints)} combat pts · ${escapeHtml(player.weapons.length)} weapons</span>
         </div>
       `;
     });
@@ -108,7 +109,7 @@ export class GameOverModalComponent {
         <div class="pk-gameover-trophy">🏆</div>
         <div class="pk-gameover-title">MATCH COMPLETED</div>
         <div class="pk-gameover-winner-name">${winnerNames}</div>
-        <div class="pk-gameover-stats-list">
+        <p>${state.isOffline ? "Practice match: global points require online play." : "Winners earn 100 global points when the match result is saved."}</p><button type="button" class="pk-btn-secondary pk-open-leaderboard">GLOBAL LEADERBOARD</button><div class="pk-gameover-stats-list">
           ${statsRowsHtml}
         </div>
         <div class="pk-gameover-actions-row">
@@ -118,6 +119,7 @@ export class GameOverModalComponent {
       </div>
     `;
 
+    this.dialogEl.querySelector<HTMLButtonElement>('.pk-open-leaderboard')!.onclick = () => { void showLeaderboard(); };
     const playAgainBtn = this.dialogEl.querySelector('.pk-btn-play-again')!;
     const mainMenuBtn = this.dialogEl.querySelector('.pk-btn-main-menu')!;
 
