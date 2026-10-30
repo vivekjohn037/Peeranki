@@ -1,3 +1,4 @@
+import type { VoiceState } from '../game/VoiceChat';
 import { ChatComponent } from './ChatComponent';
 import type {
   UIPlayer,
@@ -245,6 +246,8 @@ export class GameUIManager {
     const leave = this.rootEl.querySelector('.pk-btn-leave');
     leave?.before(this.chat.getButton()); this.rootEl.append(this.chat.getElement());
   }
+  public mountVoice(actions: {join:()=>void; mute:()=>void; deafen:()=>void; leave:()=>void}) { this.chat?.mountVoice(actions); }
+  public updateVoice(state: VoiceState) { this.chat?.updateVoice(state); }
   public setChatReady(ready: boolean) { this.chat?.setReady(ready); }
   public addChatMessage(name: string, text: string, own: boolean) { this.chat?.add(name, text, own); }
 

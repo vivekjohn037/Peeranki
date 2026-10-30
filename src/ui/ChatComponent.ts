@@ -1,6 +1,8 @@
+import type { VoiceState } from '../game/VoiceChat';
 import { QUICK_MESSAGES } from '../game/chat';
 
 export class ChatComponent {
+  private voiceEl: HTMLElement | null = null;
   private panel = document.createElement('section');
   private toggle = document.createElement('button');
   private input: HTMLInputElement;
@@ -34,6 +36,26 @@ export class ChatComponent {
     this.panel.addEventListener('keydown', event => { event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); this.setOpen(false); } });
     for (const type of ['pointerdown', 'pointerup', 'click']) this.panel.addEventListener(type, event => event.stopPropagation());
     this.setReady(false);
+  }
+  mountVoice(actions: {join:()=>void; mute:()=>void; deafen:()=>void; leave:()=>void}) {
+    this.voiceEl=document.createElement('div'); this.voiceEl.className='pk-voice';
+    this.voiceEl.innerHTML='<div class="pk-voice-heading"><strong>🎙 Voice chat</strong><span class="pk-voice-count"></span></div><div class="pk-voice-actions"><button type="button" data-voice="join">Join voice</button><button type="button" data-voice="mute" hidden>Mute mic</button><button type="button" data-voice="deafen" hidden>Mute speakers</button><button type="button" data-voice="leave" hidden>Leave voice</button></div><small class="pk-voice-status" role="status">Voice is off · join to talk</small>';
+    for(const [key,action] of Object.entries(actions)) this.voiceEl.querySelector('[data-voice="'+key+'"]')!.addEventListener('click',action);
+    this.panel.querySelector('header')!.after(this.voiceEl);
+  }
+  updateVoice(state: VoiceState) {
+    if(!this.voiceEl)return;
+    const button=(key:string)=>this.voiceEl!.querySelector<HTMLButtonElement>('[data-voice="'+key+'"]')!;
+    button('join').hidden=state.joined; button('join').disabled=state.busy; button('join').textContent=state.busy?'Joining…':'Join voice';
+    for(const key of ['mute','deafen'])button(key).hidden=!state.joined;
+    button('leave').hidden=!state.joined&&!state.busy;
+    button('mute').textContent=state.muted?'Unmute mic':'Mute mic'; button('mute').setAttribute('aria-pressed',String(state.muted));
+    button('deafen').textContent=state.deafened?'Unmute speakers':'Mute speakers'; button('deafen').setAttribute('aria-pressed',String(state.deafened));
+    this.voiceEl.querySelector('.pk-voice-status')!.textContent=state.message;
+    this.voiceEl.querySelector('.pk-voice-count')!.textContent=state.joined ? state.connected+' connected' : 'Off';
+    this.toggle.classList.toggle('pk-voice-active',state.joined);
+    this.toggle.setAttribute('aria-label',state.joined ? 'Open match chat · '+(state.muted?'microphone muted':'microphone on') : 'Open match chat');
+    this.toggle.title=state.joined ? (state.muted?'Voice joined · microphone muted':'Voice joined · microphone on') : 'Open match chat';
   }
   getButton() { return this.toggle; }
   getElement() { return this.panel; }

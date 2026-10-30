@@ -147,3 +147,56 @@ test('chat deduplicates broadcasts and limits each sender independently', () => 
   assert.ok(inbox.accept({...m,id:'c',sender:'q'}, 999));
   assert.ok(inbox.accept({...m,id:'b'}, 1000));
 });
+
+const { VoiceChat, parseVoiceSignal } = await import('../src/game/VoiceChat.ts');
+test('voice signalling rejects malformed and oversized payloads', () => {
+  const hello={voice:true,from:'a',call:'call-a',type:'hello'};
+  assert.ok(parseVoiceSignal(hello));
+  for(const value of [null,{}, {...hello,from:''}, {...hello,type:'unknown'}, {...hello,type:'signal',to:'b',targetCall:'call-b',description:{type:'offer',sdp:'x'.repeat(20001)}}]) assert.equal(parseVoiceSignal(value),null);
+});
+function voiceFixture(t, media) {
+  const originals=Object.fromEntries(['document','window','navigator','RTCPeerConnection'].map(k=>[k,Object.getOwnPropertyDescriptor(globalThis,k)]));
+  const tracks=[]; const pcs=[];
+  const makeStream=()=>{const track={enabled:true,stopped:false,onended:null,stop(){this.stopped=true;}};tracks.push(track);return {getTracks:()=>[track],getAudioTracks:()=>[track]};};
+  class PC {
+    connectionState='new'; remoteDescription=null; localDescription=null; candidates=[]; closed=false; offers=0; answers=0;
+    constructor(){pcs.push(this);}
+    addTrack(){}
+    async createOffer(){this.offers++;return {type:'offer',sdp:'test-offer'};}
+    async createAnswer(){this.answers++;return {type:'answer',sdp:'test-answer'};}
+    async setLocalDescription(d){this.localDescription=d;}
+    async setRemoteDescription(d){this.remoteDescription=d;}
+    async addIceCandidate(c){assert.ok(this.remoteDescription);this.candidates.push(c);}
+    close(){this.closed=true;}
+  }
+  const doc=new EventTarget();doc.createElement=()=>({setAttribute(){},play:()=>Promise.resolve(),pause(){},remove(){},srcObject:null});doc.hidden=false;
+  for(const [k,value] of Object.entries({document:doc,window:new EventTarget(),navigator:{mediaDevices:{getUserMedia:media ?? (async()=>makeStream())}},RTCPeerConnection:PC}))Object.defineProperty(globalThis,k,{value,configurable:true,writable:true});
+  const restore=()=>{for(const [k,d] of Object.entries(originals))if(d)Object.defineProperty(globalThis,k,d);else delete globalThis[k];};
+  return {tracks,pcs,makeStream,doc,restore};
+}
+test('voice negotiates once, isolates targets, mutes tracks and releases resources', async t => {
+  const f=voiceFixture(t),messages=[],states={};let a,b;
+  const drain=async()=>{for(let i=0;i<8;i++){while(messages.length){const [target,m]=messages.shift();await target().receive(m);}await new Promise(r=>setImmediate(r));}};
+  a=new VoiceChat('a',async m=>{messages.push([()=>b,m]);},()=>['a','b'],s=>states.a=s,[]);
+  b=new VoiceChat('b',async m=>{messages.push([()=>a,m]);},()=>['a','b'],s=>states.b=s,[]);
+  t.after(()=>{try{a.destroy();b.destroy();}finally{f.restore();}});a.setReady(true);b.setReady(true);
+  assert.equal(f.tracks.length,0); // microphone is never requested before Join
+  await Promise.all([a.join(),b.join()]);await drain();
+  assert.equal(f.pcs.length,2);assert.equal(f.pcs.reduce((n,p)=>n+p.offers,0),1);assert.equal(f.pcs.reduce((n,p)=>n+p.answers,0),1);
+  assert.ok(f.pcs.every(p=>p.remoteDescription));
+  await a.receive({voice:true,from:'stranger',call:'bad',type:'hello'});assert.equal(f.pcs.length,2);
+  a.toggleMic();assert.equal(f.tracks[0].enabled,false);assert.equal(states.a.muted,true);a.toggleMic();assert.equal(f.tracks[0].enabled,true);
+  a.toggleSpeakers();assert.equal(states.a.deafened,true);
+  a.leave();await drain();assert.ok(f.pcs.every(p=>p.closed));assert.equal(f.tracks[0].stopped,true);assert.equal(states.a.joined,false);
+});
+test('leaving during microphone permission stops a late stream', async t=>{
+  let resolve;const pending=new Promise(r=>resolve=r);const f=voiceFixture(t,()=>pending);let state;
+  const voice=new VoiceChat('a',async()=>{},()=>['a'],s=>state=s,[]);t.after(()=>{try{voice.destroy();}finally{f.restore();}});voice.setReady(true);
+  const join=voice.join();assert.equal(state.busy,true);voice.leave();const stream=f.makeStream();resolve(stream);await join;
+  assert.equal(f.tracks[0].stopped,true);assert.equal(state.joined,false);assert.equal(f.pcs.length,0);
+});
+test('voice disconnect and backgrounding immediately release the microphone', async t=>{
+  const f=voiceFixture(t);let state;const voice=new VoiceChat('a',async()=>{},()=>['a'],s=>state=s,[]);t.after(()=>{try{voice.destroy();}finally{f.restore();}});
+  voice.setReady(true);await voice.join();voice.setReady(false);assert.equal(f.tracks[0].stopped,true);assert.equal(state.joined,false);
+  voice.setReady(true);await voice.join();f.doc.hidden=true;f.doc.dispatchEvent(new Event('visibilitychange'));assert.equal(f.tracks[1].stopped,true);assert.equal(state.joined,false);
+});

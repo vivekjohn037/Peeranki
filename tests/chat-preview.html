@@ -2,13 +2,17 @@
 import '/src/style.css';
 import { GameUIManager } from '/src/ui/GameUIManager.ts';
 import { connectRoomChat } from '/src/supabase.ts';
+import { VoiceChat } from '/src/game/VoiceChat.ts';
 import { ChatInbox } from '/src/game/chat.ts';
 const ui=new GameUIManager(), noop=()=>{};
 ui.mount('#game',{onShootPlayer:noop,onSelectWeapon:noop,onCycleWeapon:noop,onSubmitDuelChoice:noop,onLeaveGame:noop,onPlayAgain:noop,onToggleAudio:()=>false});
-const id=crypto.randomUUID(), inbox=new ChatInbox();
+const id=(crypto.randomUUID?.() || String(Math.random())), inbox=new ChatInbox();
 ui.mountChat(async text=>{const m={id:crypto.randomUUID(),sender:id,text};await connection.send(m);inbox.accept(m);ui.addChatMessage('You',text,true);});
-const connection=connectRoomChat('CHATTEST30',value=>{const m=inbox.accept(value);if(m)ui.addChatMessage('Test player',m.text,false);},ready=>ui.setChatReady(ready));
+ui.mountVoice({join:()=>void voice.join(),mute:()=>voice.toggleMic(),deafen:()=>voice.toggleSpeakers(),leave:()=>voice.leave()});
+const voice=new VoiceChat(id,value=>connection.send(value),()=>[id],state=>ui.updateVoice(state));
+const connection=connectRoomChat('CHATTEST30',value=>{if(value?.voice){void voice.receive(value);return;}const m=inbox.accept(value);if(m)ui.addChatMessage('Test player',m.text,false);},ready=>{ui.setChatReady(ready);voice.setReady(ready);});
 ui.updateHUD({matchDurationMinutes:5,elapsedSeconds:0,remainingSeconds:300,matchRound:1,gameStatus:'playing',roundPhase:'shooting',currentShooterIndex:0,isMyTurn:true,countNumber:0,statusMessage:'Choose a target',announcementMessage:'',previousRoundMessage:'',selectedWeapon:'gun',availableWeapons:['gun'],pendingDoubleTargetIndex:-1,isOffline:false,isHost:true,isMuted:true,roomCode:'CHATTEST',latencyMs:45},true);
 ui.updateBoard([1,2,3].map(id=>({id,name:'Player '+id,stage:0,alive:true,connected:true,weapons:['gun'],hasCollectedAllWeapons:false,eliminationPoints:0,shieldDisabledRound:-1})),0,1,true,-1,true);
-window.addEventListener('pagehide',()=>connection.close());
+if(new URLSearchParams(location.search).has('voicejoined'))ui.updateVoice({joined:true,busy:false,muted:false,deafened:false,connected:2,message:'Voice connected'});
+window.addEventListener('pagehide',()=>{voice.destroy();connection.close();});
 </script></body></html>

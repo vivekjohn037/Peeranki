@@ -2563,3 +2563,13 @@
   .pk-topbar-actions .pk-btn-icon { width:30px; height:32px; min-width:30px; }
 }
 @media(max-width:350px) { .pk-net-label { max-width:42px; } .pk-topbar-actions .pk-btn-icon { width:27px; min-width:27px; } }
+
+.pk-voice { flex-shrink:0; border:1px solid #365046; border-radius:10px; background:#112c27; padding:9px; }
+.pk-voice-heading { display:flex; justify-content:space-between; gap:6px; font-size:12px; }
+.pk-voice-count { color:#94a3b8; font-size:11px; }
+.pk-voice-actions { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0; }
+.pk-voice-actions button { font-size:11px; padding:5px 7px; min-height:32px; background:#176147; }
+.pk-voice-actions button[hidden] { display:none; }
+.pk-voice-status { display:block; font-size:11px; color:#b8ccca; overflow-wrap:anywhere; }
+.pk-chat-toggle.pk-voice-active { border-color:#10b981; box-shadow:inset 0 0 0 1px #10b981; }
+@media(max-height:400px) { .pk-chat { gap:4px; } .pk-voice { padding:5px; } .pk-voice-actions { margin:3px 0; } .pk-chat-quick button { min-height:28px; } .pk-chat header { font-size:13px; } }

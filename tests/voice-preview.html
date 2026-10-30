@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voice connection test</title></head><body><h1>Voice connection test</h1><p>Synthetic silent audio only. No microphone access.</p><button id="run">Test two voice clients</button><p id="result" role="status">Ready</p><script type="module">
+import { VoiceChat } from '/src/game/VoiceChat.ts';
+if(!crypto.randomUUID)crypto.randomUUID=()=>Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
+const context=new AudioContext();const streams=[];
+Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{async getUserMedia(){const dest=context.createMediaStreamDestination();const osc=context.createOscillator();const gain=context.createGain();gain.gain.value=0;osc.connect(gain);gain.connect(dest);osc.start();streams.push({osc,stream:dest.stream});return dest.stream;}}});
+let a,b;const states={};const report=(id,state)=>{states[id]=state;document.querySelector('#result').textContent=states.a?.connected===1&&states.b?.connected===1?'PASS: two WebRTC audio peers connected with synthetic streams':JSON.stringify(states);};
+a=new VoiceChat('a',async m=>queueMicrotask(()=>void b.receive(m)),()=>['a','b'],s=>report('a',s),[]);
+b=new VoiceChat('b',async m=>queueMicrotask(()=>void a.receive(m)),()=>['a','b'],s=>report('b',s),[]);
+a.setReady(true);b.setReady(true);
+document.querySelector('#run').onclick=async()=>{await context.resume();await Promise.all([a.join(),b.join()]);};
+window.addEventListener('pagehide',()=>{a.destroy();b.destroy();streams.forEach(s=>s.osc.stop());void context.close();});
+</script></body></html>

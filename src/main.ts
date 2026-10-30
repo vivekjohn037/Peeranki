@@ -1,3 +1,4 @@
+import { VoiceChat } from './game/VoiceChat';
 import { ChatInbox, normalizeChatMessage } from './game/chat';
 import { canApplyGameSnapshot } from './game/onlineState';
 import { hasReadyQuorum } from './game/lobby';
@@ -2726,6 +2727,7 @@ class LobbyScene extends Phaser.Scene {
 
 class GameScene extends Phaser.Scene {
   private uiManager = new GameUIManager();
+  private voiceChat?: VoiceChat;
   private chatConnection?: ReturnType<typeof connectRoomChat>;
   private playerObjects: Phaser.GameObjects.Container[] = [];
   private statusText?: Phaser.GameObjects.Text;
@@ -2916,11 +2918,16 @@ private nextStartIndex = -1;
         inbox.accept(message);
         this.uiManager.addChatMessage('You', message.text, true);
       });
+      this.uiManager.mountVoice({join:()=>void this.voiceChat?.join(),mute:()=>this.voiceChat?.toggleMic(),deafen:()=>this.voiceChat?.toggleSpeakers(),leave:()=>this.voiceChat?.leave()});
+      let iceServers: RTCIceServer[] | undefined;
+      try { const configured=JSON.parse(import.meta.env.VITE_VOICE_ICE_SERVERS || 'null'); if(Array.isArray(configured))iceServers=configured; } catch { /* Keep the default STUN server when no valid override exists. */ }
+      this.voiceChat = new VoiceChat(sessionId, value=>this.chatConnection!.send(value), ()=>players.filter(p=>p.connected!==false).map(p=>p.sessionId), state=>this.uiManager.updateVoice(state), iceServers);
       this.chatConnection = connectRoomChat(roomCode, value => {
+        if ((value as any)?.voice === true) { void this.voiceChat?.receive(value); return; }
         const message = inbox.accept(value); if (!message || message.sender === sessionId) return;
         const sender = players.find(p => p.sessionId === message.sender);
         if (sender) this.uiManager.addChatMessage(sender.name, message.text, false);
-      }, ready => this.uiManager.setChatReady(ready));
+      }, ready => { this.uiManager.setChatReady(ready); this.voiceChat?.setReady(ready); });
     }
 
     this.events.on('shutdown', () => {
@@ -5430,6 +5437,7 @@ void this.recordShot();
   this.markShooter();
 }
   shutdown() {
+    this.voiceChat?.destroy(); this.voiceChat = undefined;
     this.chatConnection?.close(); this.chatConnection = undefined;
     this.countingTimer?.remove(false);
     this.countingTimer = undefined;
