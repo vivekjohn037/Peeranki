@@ -237,3 +237,17 @@ test('cancelling voice while TURN credentials load releases the microphone',asyn
   voice.setReady(true);const joining=voice.join();await new Promise(r=>setImmediate(r));voice.leave();finish([{urls:'turn:example.test'}]);await joining;
   assert.equal(f.tracks[0].stopped,true);assert.equal(state.joined,false);assert.equal(f.pcs.length,0);
 });
+
+test('no-card Metered provider preserves membership checks and keeps its API key server-side',async t=>{
+  const calls=[];t.mock.method(globalThis,'fetch',async url=>{calls.push(url);if(url.endsWith('/auth/v1/user'))return Response.json({id:'user-a'});if(url.includes('/rest/v1/'))return Response.json([{game_status:'playing',players:[{auth_uid:'user-a',session_id:'session-a',connected:true}]}]);return Response.json([{urls:'turns:relay.example:443',username:'voice-user',credential:'voice-password'}]);});
+  const env=relayEnv();delete env.TURN_KEY_ID;delete env.TURN_KEY_API_TOKEN;env.TURN_PROVIDER='metered';env.METERED_APP_DOMAIN='peeranki-test.metered.live';env.METERED_TURN_API_KEY='provider-key-not-for-clients';
+  const response=await relayWorker.fetch(relayRequest(),env);assert.equal(response.status,200);
+  const body=await response.text();assert.ok(body.includes('voice-password'));assert.equal(body.includes(env.METERED_TURN_API_KEY),false);assert.equal(body.includes('expiresAt'),false);
+  assert.equal(calls[2],'https://peeranki-test.metered.live/api/v1/turn/credentials?apiKey=provider-key-not-for-clients');
+});
+test('Metered provider rejects untrusted API destinations before making requests',async t=>{
+  let requests=0;t.mock.method(globalThis,'fetch',async()=>{requests++;throw Error('Unexpected fetch');});
+  const env=relayEnv();env.TURN_PROVIDER='metered';env.METERED_TURN_API_KEY='test-key';
+  for(const host of ['attacker.example','peeranki.metered.live.attacker.example','peeranki.metered.live/path','https://peeranki.metered.live']){env.METERED_APP_DOMAIN=host;assert.equal((await relayWorker.fetch(relayRequest(),env)).status,503);}
+  assert.equal(requests,0);
+});
