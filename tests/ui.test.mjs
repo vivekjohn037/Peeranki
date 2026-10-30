@@ -131,3 +131,19 @@ test('Ready toggle saves shared state and disables itself while saving', async (
  const unready=button.onclick();finish();await unready;assert.equal(start.disabled,true);assert.equal(button.textContent,'Not Ready');
  lobby.destroy();delete globalThis.document;
 });
+
+// Match chat rejects malformed payloads, stale duplicates and rapid spam.
+const { ChatInbox, normalizeChatMessage } = await import('../src/game/chat.ts');
+test('chat validates text, length and sender without interpreting HTML', () => {
+  assert.equal(normalizeChatMessage({id:'1',sender:'p',text:'  hi\nthere  '}).text, 'hi there');
+  assert.equal(normalizeChatMessage({id:'1',sender:'p',text:'<img onerror=alert(1)>'}).text, '<img onerror=alert(1)>');
+  for (const text of ['', ' ', 'a'.repeat(161), 42]) assert.equal(normalizeChatMessage({id:'1',sender:'p',text}), null);
+  assert.equal(normalizeChatMessage({id:'1',text:'hello'}), null);
+});
+test('chat deduplicates broadcasts and limits each sender independently', () => {
+  const inbox = new ChatInbox(); const m = {id:'a',sender:'p',text:'hello'};
+  assert.ok(inbox.accept(m, 0)); assert.equal(inbox.accept(m, 2000), null);
+  assert.equal(inbox.accept({...m,id:'b'}, 999), null);
+  assert.ok(inbox.accept({...m,id:'c',sender:'q'}, 999));
+  assert.ok(inbox.accept({...m,id:'b'}, 1000));
+});

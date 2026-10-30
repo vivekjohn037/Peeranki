@@ -1,3 +1,4 @@
+import { ChatInbox, normalizeChatMessage } from './game/chat';
 import { canApplyGameSnapshot } from './game/onlineState';
 import { hasReadyQuorum } from './game/lobby';
 import { LobbyComponent } from './ui/LobbyComponent';
@@ -53,6 +54,7 @@ if (Capacitor.isNativePlatform()) {
 }
 
 import {
+  connectRoomChat,
   saveGameState,
   setLobbyReady,
   requestPlayerAction,
@@ -2724,6 +2726,7 @@ class LobbyScene extends Phaser.Scene {
 
 class GameScene extends Phaser.Scene {
   private uiManager = new GameUIManager();
+  private chatConnection?: ReturnType<typeof connectRoomChat>;
   private playerObjects: Phaser.GameObjects.Container[] = [];
   private statusText?: Phaser.GameObjects.Text;
   private countText?: Phaser.GameObjects.Text;
@@ -2904,6 +2907,22 @@ private nextStartIndex = -1;
       },
     });
 
+    if (!offlineMode && roomCode) {
+      const inbox = new ChatInbox();
+      this.uiManager.mountChat(async text => {
+        const message = normalizeChatMessage({ id: crypto.randomUUID(), sender: sessionId, text });
+        if (!message || !players.some(p => p.sessionId === sessionId)) throw new Error('You are no longer in this room.');
+        await this.chatConnection!.send(message);
+        inbox.accept(message);
+        this.uiManager.addChatMessage('You', message.text, true);
+      });
+      this.chatConnection = connectRoomChat(roomCode, value => {
+        const message = inbox.accept(value); if (!message || message.sender === sessionId) return;
+        const sender = players.find(p => p.sessionId === message.sender);
+        if (sender) this.uiManager.addChatMessage(sender.name, message.text, false);
+      }, ready => this.uiManager.setChatReady(ready));
+    }
+
     this.events.on('shutdown', () => {
       this.shutdown();
     });
@@ -3043,6 +3062,7 @@ if (offlineMode) {
         fontFamily: 'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif', fontSize: '12px', color: '#777777',
       }).setOrigin(0.5, 1);
       this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
+        if (event.target instanceof HTMLElement && (event.target.matches('input, textarea, [contenteditable]') || event.target.closest('.pk-chat'))) return;
         const index = event.key === '0' ? 9 : Number(event.key) - 1;
         if (Number.isInteger(index) && index >= 0 && index < maxPlayers) {
           this.shootPlayer(index);
@@ -5410,6 +5430,7 @@ void this.recordShot();
   this.markShooter();
 }
   shutdown() {
+    this.chatConnection?.close(); this.chatConnection = undefined;
     this.countingTimer?.remove(false);
     this.countingTimer = undefined;
     this.matchTimer?.remove(false);

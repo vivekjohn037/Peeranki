@@ -1,0 +1,14 @@
+<!doctype html><html><head><base href="/"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Match chat preview</title></head><body><div id="game"></div><script type="module">
+import '/src/style.css';
+import { GameUIManager } from '/src/ui/GameUIManager.ts';
+import { connectRoomChat } from '/src/supabase.ts';
+import { ChatInbox } from '/src/game/chat.ts';
+const ui=new GameUIManager(), noop=()=>{};
+ui.mount('#game',{onShootPlayer:noop,onSelectWeapon:noop,onCycleWeapon:noop,onSubmitDuelChoice:noop,onLeaveGame:noop,onPlayAgain:noop,onToggleAudio:()=>false});
+const id=crypto.randomUUID(), inbox=new ChatInbox();
+ui.mountChat(async text=>{const m={id:crypto.randomUUID(),sender:id,text};await connection.send(m);inbox.accept(m);ui.addChatMessage('You',text,true);});
+const connection=connectRoomChat('CHATTEST30',value=>{const m=inbox.accept(value);if(m)ui.addChatMessage('Test player',m.text,false);},ready=>ui.setChatReady(ready));
+ui.updateHUD({matchDurationMinutes:5,elapsedSeconds:0,remainingSeconds:300,matchRound:1,gameStatus:'playing',roundPhase:'shooting',currentShooterIndex:0,isMyTurn:true,countNumber:0,statusMessage:'Choose a target',announcementMessage:'',previousRoundMessage:'',selectedWeapon:'gun',availableWeapons:['gun'],pendingDoubleTargetIndex:-1,isOffline:false,isHost:true,isMuted:true,roomCode:'CHATTEST',latencyMs:45},true);
+ui.updateBoard([1,2,3].map(id=>({id,name:'Player '+id,stage:0,alive:true,connected:true,weapons:['gun'],hasCollectedAllWeapons:false,eliminationPoints:0,shieldDisabledRound:-1})),0,1,true,-1,true);
+window.addEventListener('pagehide',()=>connection.close());
+</script></body></html>

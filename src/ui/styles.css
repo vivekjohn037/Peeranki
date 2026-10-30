@@ -2530,3 +2530,36 @@
  .pk-rank-footer { padding:18px; flex-wrap:wrap; }
  .pk-rank-close { width:100%; }
 }
+
+/* Chat floats within the game viewport; only the message history scrolls. */
+.pk-chat { position:absolute; z-index:90; right:max(12px, env(safe-area-inset-right)); top:76px; bottom:max(12px, env(safe-area-inset-bottom)); width:min(360px, calc(100% - 24px)); max-height:480px; display:flex; flex-direction:column; gap:10px; padding:14px; box-sizing:border-box; background:#141c26; border:1px solid #344254; border-radius:18px; box-shadow:0 18px 60px #0009; }
+.pk-chat[hidden] { display:none; }
+.pk-chat header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.pk-chat header small { display:block; color:#94a3b8; font-size:11px; margin-top:4px; }
+.pk-chat button { cursor:pointer; touch-action:manipulation; color:#f8fafc; background:#253346; border:1px solid #41516a; border-radius:9px; min-height:36px; padding:6px 10px; font:inherit; }
+.pk-chat button:disabled { opacity:.5; cursor:default; }
+.pk-chat button:focus-visible, .pk-chat input:focus-visible { outline:2px solid #fbbf24; outline-offset:2px; }
+.pk-chat-messages { flex:1; min-height:32px; overflow-y:auto; overscroll-behavior:contain; user-select:text; }
+.pk-chat-messages p { margin:0 0 8px; padding:8px 10px; background:#1d2736; border-radius:10px; overflow-wrap:anywhere; font-size:13px; }
+.pk-chat-messages strong { display:block; color:#fbbf24; font-size:11px; margin-bottom:3px; }
+.pk-chat-messages .pk-chat-own { background:#123b32; margin-left:22px; }
+.pk-chat-empty { color:#94a3b8; }
+.pk-chat-quick { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
+.pk-chat-quick button { font-size:11px; padding:5px; }
+.pk-chat form { display:flex; gap:6px; }
+.pk-chat input { min-width:0; width:100%; color:#f8fafc; background:#0b0f15; border:1px solid #41516a; border-radius:9px; padding:10px; font-size:16px; user-select:text; }
+.pk-chat form button { background:#176147; }
+.pk-chat-status { color:#94a3b8; font-size:11px; min-height:14px; }
+.pk-chat-toggle { white-space:nowrap; font-size:16px; }
+@media(max-height:500px) { .pk-chat { top:8px; gap:6px; padding:10px; max-height:none; } .pk-chat header small { display:none; } .pk-chat-quick { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:480px) { .pk-chat-toggle { padding:4px !important; min-width:32px !important; } }
+@media(max-width:480px) {
+  .pk-hud-topbar { gap:4px; }
+  .pk-topbar-logo { width:24px; height:24px; }
+  .pk-topbar-meta { gap:4px; min-width:0; }
+  .pk-net-label { max-width:60px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pk-net-copy-hint { display:none; }
+  .pk-topbar-actions { gap:3px; }
+  .pk-topbar-actions .pk-btn-icon { width:30px; height:32px; min-width:30px; }
+}
+@media(max-width:350px) { .pk-net-label { max-width:42px; } .pk-topbar-actions .pk-btn-icon { width:27px; min-width:27px; } }

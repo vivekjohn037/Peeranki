@@ -1646,3 +1646,32 @@ export async function setLobbyReady(roomCode: string, sessionId: string, ready: 
   }
   throw new Error('The room is updating. Please try again.');
 }
+
+// Ephemeral chat never writes to game_states or participates in round ordering.
+export function connectRoomChat(roomCode: string, receive: (message: unknown) => void, status: (ready: boolean) => void) {
+  const code = roomCode.trim().toUpperCase();
+  let closed = false;
+  let channel: ReturnType<SupabaseClient['channel']> | undefined;
+  let local: BroadcastChannel | undefined;
+  let ready = false;
+  if (!hasAnySupabaseConfiguration) {
+    local = new BroadcastChannel(`peeranki-chat-${code}`);
+    local.onmessage = event => { if (!closed) receive(event.data); };
+    ready = true; status(true);
+  } else {
+    void authenticatedClient().then(client => {
+      if (closed) return;
+      channel = client.channel(`peeranki-chat-${code}`, { config: { broadcast: { self: false, ack: true } } })
+        .on('broadcast', { event: 'message' }, event => { if (!closed) receive(event.payload); })
+        .subscribe(state => { ready = state === 'SUBSCRIBED'; if (!closed) status(ready); });
+    }).catch(() => { if (!closed) status(false); });
+  }
+  return {
+    async send(message: unknown) {
+      if (closed || !ready) throw new Error('Chat is reconnecting. Try again shortly.');
+      if (local) local.postMessage(message);
+      else if (await channel!.send({ type: 'broadcast', event: 'message', payload: message }) !== 'ok') throw new Error('Message was not sent. Try again.');
+    },
+    close() { closed = true; ready = false; local?.close(); if (channel) void configuredClient().removeChannel(channel); },
+  };
+}

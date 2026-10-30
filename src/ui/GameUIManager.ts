@@ -1,3 +1,4 @@
+import { ChatComponent } from './ChatComponent';
 import type {
   UIPlayer,
   HUDState,
@@ -14,6 +15,7 @@ import { DuelLogModalComponent } from './DuelLogModalComponent';
 import './styles.css';
 
 export class GameUIManager {
+  private chat: ChatComponent | null = null;
   private rootEl: HTMLElement | null = null;
   private containerEl: HTMLElement | null = null;
   private hud: HUDComponent | null = null;
@@ -237,7 +239,17 @@ export class GameUIManager {
     this.duelLogModal?.open(tab);
   }
 
+  public mountChat(send: (text: string) => Promise<void>) {
+    if (!this.rootEl) return;
+    this.chat?.destroy(); this.chat = new ChatComponent(send);
+    const leave = this.rootEl.querySelector('.pk-btn-leave');
+    leave?.before(this.chat.getButton()); this.rootEl.append(this.chat.getElement());
+  }
+  public setChatReady(ready: boolean) { this.chat?.setReady(ready); }
+  public addChatMessage(name: string, text: string, own: boolean) { this.chat?.add(name, text, own); }
+
   public unmount() {
+    this.chat?.destroy(); this.chat = null;
     this.hud?.destroy();
     this.duelModal?.destroy();
     if (this.rafId !== null) {
