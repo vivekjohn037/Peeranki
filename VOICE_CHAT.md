@@ -1,11 +1,13 @@
 # Online voice chat
 
+Deployment status (31 October 2026): Metered TURN is enabled on the no-card Free Trial Global 500 MB/month plan. No paid plan, card, automatic billing, or Cloudflare Realtime subscription was activated. At quota exhaustion, relay service stops rather than charging overages. The existing v1.1 APK uses this endpoint without rebuilding.
+
 Open Chat and choose Join voice. Microphone access is requested only after Join.
 Mute mic stops sending audio while remaining connected; Mute speakers silences incoming audio.
 Leave voice, leaving a match, losing signalling, or backgrounding the game releases microphone tracks and closes peer connections.
 Audio uses WebRTC (directly or through a configured TURN relay) and is not recorded or stored by the game. Supabase carries only ephemeral signalling.
 
-The app requests short-lived ICE credentials from https://peeranki.peerankikerala.workers.dev/api/voice/ice when joining. The endpoint supports Metered (no-card free tier) and Cloudflare. It is disabled until provider secrets are configured and TURN_ENABLED is set to 1. When unavailable, the app uses Google's public STUN server and clearly reports direct-only voice. Some restricted networks will not connect without TURN.
+The app requests ICE credentials from https://peeranki.peerankikerala.workers.dev/api/voice/ice when joining. The endpoint supports Metered (no-card free tier) and Cloudflare. Provider settings are encrypted Worker secrets, with TURN_PROVIDER=metered and TURN_ENABLED=1. When unavailable, the app uses Google's public STUN server and clearly reports direct-only voice. Some restricted networks will not connect without TURN.
 
 No-card setup: Metered
 
@@ -37,3 +39,5 @@ VITE_VOICE_RELAY_URL can override the endpoint. An optional VITE_VOICE_ICE_SERVE
 Android declares RECORD_AUDIO and MODIFY_AUDIO_SETTINGS. Capacitor's existing BridgeWebChromeClient requests runtime microphone permission for getUserMedia; no custom permission bypass is used. Installed APKs need a new build.
 
 Verification: automated signalling, negotiation, mute, cancelled-permission and lifecycle tests; browser fixture tests/voice-preview.html connects two real RTCPeerConnection instances with synthetic silent audio and no microphone permission. tests/chat-preview.html previews the real voice/chat UI. Physical Android microphone and cross-network/TURN calls still require device testing.
+
+Live verification: authenticated member of an isolated private match received TURN ICE credentials; authenticated nonmember was rejected with 403; unauthenticated requests returned 401. The private test room was cleaned up. tests/relay-preview.html connected two real WebRTC audio peers using synthetic silent streams, iceTransportPolicy=relay, and selected relay candidate pairs. Temporary ICE configuration was removed after the test.

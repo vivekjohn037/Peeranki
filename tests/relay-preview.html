@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relay-only voice test</title></head><body><h1>Relay-only voice test</h1><p>Synthetic silent audio. No microphone permission or recording.</p><label>Test ICE configuration <input id="ice" type="password" autocomplete="off"></label><button id="run">Test relay-only voice</button><p id="result" role="status">Ready</p><script type="module">
+import { VoiceChat } from '/src/game/VoiceChat.ts';
+if(!crypto.randomUUID)crypto.randomUUID=()=>Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
+const NativePC=window.RTCPeerConnection;const peers=[];
+window.RTCPeerConnection=class extends NativePC {constructor(config){super({...config,iceTransportPolicy:'relay'});peers.push(this);}};
+const context=new AudioContext();const sources=[];
+Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{async getUserMedia(){const dest=context.createMediaStreamDestination();const osc=context.createOscillator(),gain=context.createGain();gain.gain.value=0;osc.connect(gain);gain.connect(dest);osc.start();sources.push(osc);return dest.stream;}}});
+let a,b;const states={};const result=document.querySelector('#result');
+const report=async(id,state)=>{states[id]=state;if(states.a?.connected===1&&states.b?.connected===1){let relayPairs=0;for(const pc of peers){const stats=await pc.getStats();for(const pair of stats.values())if(pair.type==='candidate-pair'&&pair.state==='succeeded'&&pair.nominated&&stats.get(pair.localCandidateId)?.candidateType==='relay')relayPairs++;}result.textContent=relayPairs>=2?'PASS: two relay-only WebRTC audio peers connected through TURN':'Connected; checking selected relay candidate pairs…';}else result.textContent=JSON.stringify(states);};
+document.querySelector('#run').onclick=async()=>{a?.destroy();b?.destroy();const ice=JSON.parse(document.querySelector('#ice').value);document.querySelector('#ice').value='';await context.resume();a=new VoiceChat('a',async m=>queueMicrotask(()=>void b.receive(m)),()=>['a','b'],s=>void report('a',s),ice);b=new VoiceChat('b',async m=>queueMicrotask(()=>void a.receive(m)),()=>['a','b'],s=>void report('b',s),ice);a.setReady(true);b.setReady(true);await Promise.all([a.join(),b.join()]);};
+window.addEventListener('pagehide',()=>{a?.destroy();b?.destroy();sources.forEach(osc=>osc.stop());void context.close();});
+</script></body></html>
