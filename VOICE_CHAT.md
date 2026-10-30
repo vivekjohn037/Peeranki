@@ -3,10 +3,21 @@
 Open Chat and choose Join voice. Microphone access is requested only after Join.
 Mute mic stops sending audio while remaining connected; Mute speakers silences incoming audio.
 Leave voice, leaving a match, losing signalling, or backgrounding the game releases microphone tracks and closes peer connections.
-Audio is sent peer-to-peer with WebRTC and is not recorded or stored by the game. Supabase carries only ephemeral signalling.
+Audio uses WebRTC (directly or through a configured TURN relay) and is not recorded or stored by the game. Supabase carries only ephemeral signalling.
 
-The default ICE configuration uses Google's public STUN server. No TURN relay is configured, so some mobile, corporate, or restrictive NAT networks cannot connect. The UI reports this instead of claiming voice is connected.
-To support these networks, set VITE_VOICE_ICE_SERVERS to a JSON array of RTCIceServer entries supplied by your relay provider and rebuild. Client configuration is public; never include provider API/service secrets. Production TURN credentials should be short-lived and obtained from an authenticated server endpoint when integrating a provider.
+The app requests short-lived ICE credentials from https://peeranki.peerankikerala.workers.dev/api/voice/ice when joining. The endpoint is prepared but disabled until server secrets are configured and TURN_ENABLED is set to 1. When unavailable, the app uses Google's public STUN server and clearly reports direct-only voice. Some restricted networks will not connect without TURN.
+
+Cloudflare setup (Worker peeranki > Settings > Variables and Secrets): add these as encrypted Secrets so subsequent Wrangler deployments preserve them.
+- TURN_KEY_ID and TURN_KEY_API_TOKEN: server-only key from Cloudflare Realtime > TURN. Never add these to VITE variables or the APK.
+- SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY: the existing project URL and public publishable key; never use a service-role key.
+- TURN_ENABLED=1: activate only after usage/billing review. Omit it to keep all credential issuance disabled.
+- Optional VOICE_ALLOWED_ORIGINS: comma-separated extra website origins. Production origin and Capacitor localhost origins are already supported.
+
+The Worker verifies the Supabase access token, checks connected membership in the requested active match, rate-limits requests per authenticated user (5/minute per Cloudflare location), and returns credentials valid for one hour with no-store caching. Rate limiting is approximate and is not a billing cap. Cloudflare's free allowance is not a hard spending limit; do not enable TURN until the account owner has reviewed billing controls. No relay key has been created or billing enabled by this change.
+
+Cloudflare docs: https://developers.cloudflare.com/realtime/turn/generate-credentials/ and https://developers.cloudflare.com/realtime/turn/faq/
+
+VITE_VOICE_RELAY_URL can override the endpoint. An optional VITE_VOICE_ICE_SERVERS JSON array bypasses dynamic credentials for testing; do not embed permanent provider secrets. The default endpoint allows configuring TURN later without rebuilding an installed APK.
 
 Android declares RECORD_AUDIO and MODIFY_AUDIO_SETTINGS. Capacitor's existing BridgeWebChromeClient requests runtime microphone permission for getUserMedia; no custom permission bypass is used. Installed APKs need a new build.
 

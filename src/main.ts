@@ -2921,7 +2921,13 @@ private nextStartIndex = -1;
       this.uiManager.mountVoice({join:()=>void this.voiceChat?.join(),mute:()=>this.voiceChat?.toggleMic(),deafen:()=>this.voiceChat?.toggleSpeakers(),leave:()=>this.voiceChat?.leave()});
       let iceServers: RTCIceServer[] | undefined;
       try { const configured=JSON.parse(import.meta.env.VITE_VOICE_ICE_SERVERS || 'null'); if(Array.isArray(configured))iceServers=configured; } catch { /* Keep the default STUN server when no valid override exists. */ }
-      this.voiceChat = new VoiceChat(sessionId, value=>this.chatConnection!.send(value), ()=>players.filter(p=>p.connected!==false).map(p=>p.sessionId), state=>this.uiManager.updateVoice(state), iceServers);
+      this.voiceChat = new VoiceChat(sessionId, value=>this.chatConnection!.send(value), ()=>players.filter(p=>p.connected!==false).map(p=>p.sessionId), state=>this.uiManager.updateVoice(state), iceServers, iceServers ? undefined : async()=>{
+        const {data}=await supabase.auth.getSession();
+        const token=data?.session?.access_token; if(!token)throw new Error('Sign in required');
+        const response=await fetch(import.meta.env.VITE_VOICE_RELAY_URL || 'https://peeranki.peerankikerala.workers.dev/api/voice/ice',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({roomCode,sessionId}),signal:AbortSignal.timeout(10000)});
+        if(!response.ok)throw new Error('Relay unavailable');
+        const relay=await response.json();if(!Array.isArray(relay.iceServers) || !relay.iceServers.length)throw new Error('Relay unavailable');return relay.iceServers;
+      });
       this.chatConnection = connectRoomChat(roomCode, value => {
         if ((value as any)?.voice === true) { void this.voiceChat?.receive(value); return; }
         const message = inbox.accept(value); if (!message || message.sender === sessionId) return;

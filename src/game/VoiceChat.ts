@@ -26,10 +26,11 @@ export class VoiceChat {
   private members: () => string[];
   private update: (state: VoiceState) => void;
   private iceServers: RTCIceServer[];
+  private loadIceServers?: () => Promise<RTCIceServer[]>;
   private onHidden = () => { if(document.hidden && (this.state.joined || this.state.busy))this.leave('Voice paused while the game is in the background · join again'); };
   private onPageHide = () => this.leave();
-  constructor(id: string, send: (value: unknown) => Promise<void>, members: () => string[], update: (state: VoiceState) => void, iceServers: RTCIceServer[] = [{ urls:'stun:stun.l.google.com:19302' }]) {
-    this.id=id; this.send=send; this.members=members; this.update=update; this.iceServers=iceServers; document.addEventListener('visibilitychange',this.onHidden); window.addEventListener('pagehide',this.onPageHide); this.emit();
+  constructor(id: string, send: (value: unknown) => Promise<void>, members: () => string[], update: (state: VoiceState) => void, iceServers: RTCIceServer[] = [{ urls:'stun:stun.l.google.com:19302' }], loadIceServers?: () => Promise<RTCIceServer[]>) {
+    this.id=id; this.send=send; this.members=members; this.update=update; this.iceServers=iceServers; this.loadIceServers=loadIceServers; document.addEventListener('visibilitychange',this.onHidden); window.addEventListener('pagehide',this.onPageHide); this.emit();
   }
   private emit(message?: string) {
     if (message) this.state.message=message;
@@ -45,9 +46,13 @@ export class VoiceChat {
     try {
       const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
       if (generation!==this.generation || this.destroyed) { stream.getTracks().forEach(t=>t.stop()); return; }
-      this.stream=stream; this.call=crypto.randomUUID(); this.state.joined=true; this.state.busy=false; this.state.muted=false; this.state.deafened=false;
+      this.stream=stream;
+      let relayUnavailable=false;
+      if(this.loadIceServers) { this.emit('Preparing voice connection…'); try { this.iceServers=await this.loadIceServers(); } catch { relayUnavailable=true; } }
+      if(generation!==this.generation || this.destroyed) { stream.getTracks().forEach(t=>t.stop()); return; }
+      this.call=crypto.randomUUID(); this.state.joined=true; this.state.busy=false; this.state.muted=false; this.state.deafened=false;
       stream.getAudioTracks().forEach(t=>t.onended=()=>this.leave('Microphone stopped · join voice again'));
-      this.timer=setInterval(()=>this.heartbeat(),3000); this.emit('Voice joined · waiting for other players');
+      this.timer=setInterval(()=>this.heartbeat(),3000); this.emit(relayUnavailable?'Voice joined · relay unavailable, direct connections only':'Voice joined · waiting for other players');
       await this.publish({type:'hello'});
     } catch (error) {
       if (generation!==this.generation) return;

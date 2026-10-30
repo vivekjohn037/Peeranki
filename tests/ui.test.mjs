@@ -200,3 +200,40 @@ test('voice disconnect and backgrounding immediately release the microphone', as
   voice.setReady(true);await voice.join();voice.setReady(false);assert.equal(f.tracks[0].stopped,true);assert.equal(state.joined,false);
   voice.setReady(true);await voice.join();f.doc.hidden=true;f.doc.dispatchEvent(new Event('visibilitychange'));assert.equal(f.tracks[1].stopped,true);assert.equal(state.joined,false);
 });
+
+const relayWorker = (await import('../src/voice-worker.ts')).default;
+const relayEnv = () => ({TURN_ENABLED:'1',TURN_KEY_ID:'test-key-id',TURN_KEY_API_TOKEN:'server-only-secret',SUPABASE_URL:'https://backend.example',SUPABASE_PUBLISHABLE_KEY:'public-test-key',TURN_RATE_LIMITER:{limit:async()=>({success:true})},ASSETS:{fetch:async()=>new Response('asset')}});
+const relayRequest = (body={roomCode:'ABC123',sessionId:'session-a'},origin='https://game.example')=>new Request('https://game.example/api/voice/ice',{method:'POST',headers:{Origin:origin,Authorization:'Bearer test.jwt.token','Content-Type':'application/json'},body:JSON.stringify(body)});
+test('TURN remains disabled by default and rejects unapproved origins',async()=>{
+  const env=relayEnv();delete env.TURN_ENABLED;
+  assert.equal((await relayWorker.fetch(relayRequest(),env)).status,503);
+  assert.equal((await relayWorker.fetch(relayRequest(undefined,'https://other.example'),relayEnv())).status,403);
+  const preflight=await relayWorker.fetch(new Request('https://game.example/api/voice/ice',{method:'OPTIONS',headers:{Origin:'https://localhost'}}),relayEnv());
+  assert.equal(preflight.status,204);assert.equal(preflight.headers.get('Access-Control-Allow-Origin'),'https://localhost');
+  assert.equal(await(await relayWorker.fetch(new Request('https://game.example/'),relayEnv())).text(),'asset');
+});
+test('TURN issues short-lived credentials only to authenticated active room members',async t=>{
+  const calls=[];t.mock.method(globalThis,'fetch',async(url,options)=>{
+    calls.push({url,options});
+    if(url.endsWith('/auth/v1/user'))return Response.json({id:'user-a'});
+    if(url.includes('/rest/v1/'))return Response.json([{game_status:'playing',players:[{auth_uid:'user-a',session_id:'session-a',connected:true}]}]);
+    return Response.json({iceServers:[{urls:['turns:turn.example:443'],username:'temporary',credential:'temporary-password'}]});
+  });
+  const response=await relayWorker.fetch(relayRequest(),relayEnv());
+  assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');
+  const text=await response.text();assert.equal(text.includes('server-only-secret'),false);assert.ok(text.includes('temporary-password'));
+  assert.equal(JSON.parse(calls[2].options.body).ttl,3600);
+  assert.equal(calls[2].options.headers.Authorization,'Bearer server-only-secret');
+});
+test('TURN denies expired auth, nonmembers and rate-limited callers before issuing credentials',async t=>{
+  const calls=[];let validAuth=true;t.mock.method(globalThis,'fetch',async url=>{calls.push(url);return url.endsWith('/auth/v1/user')?(validAuth?Response.json({id:'user-a'}):new Response('',{status:401})):Response.json([{game_status:'playing',players:[{auth_uid:'another-user',session_id:'session-a'}]}]);});
+  assert.equal((await relayWorker.fetch(relayRequest(),relayEnv())).status,403);assert.equal(calls.length,2);
+  validAuth=false;assert.equal((await relayWorker.fetch(relayRequest(),relayEnv())).status,401);assert.equal(calls.length,3);
+  validAuth=true;const env=relayEnv();env.TURN_RATE_LIMITER.limit=async()=>({success:false});assert.equal((await relayWorker.fetch(relayRequest(),env)).status,429);assert.equal(calls.length,4);
+});
+test('cancelling voice while TURN credentials load releases the microphone',async t=>{
+  const f=voiceFixture(t);let finish;const wait=new Promise(r=>finish=r);let state;
+  const voice=new VoiceChat('a',async()=>{},()=>['a'],s=>state=s,[],()=>wait);t.after(()=>{try{voice.destroy();}finally{f.restore();}});
+  voice.setReady(true);const joining=voice.join();await new Promise(r=>setImmediate(r));voice.leave();finish([{urls:'turn:example.test'}]);await joining;
+  assert.equal(f.tracks[0].stopped,true);assert.equal(state.joined,false);assert.equal(f.pcs.length,0);
+});
