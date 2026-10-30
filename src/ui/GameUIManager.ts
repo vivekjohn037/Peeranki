@@ -243,8 +243,7 @@ export class GameUIManager {
   public mountChat(send: (text: string) => Promise<void>) {
     if (!this.rootEl) return;
     this.chat?.destroy(); this.chat = new ChatComponent(send);
-    const leave = this.rootEl.querySelector('.pk-btn-leave');
-    leave?.before(this.chat.getButton()); this.rootEl.append(this.chat.getElement());
+    this.rootEl.append(this.chat.getButton(), this.chat.getElement());
   }
   public mountVoice(actions: {join:()=>void; mute:()=>void; deafen:()=>void; leave:()=>void}) { this.chat?.mountVoice(actions); }
   public updateVoice(state: VoiceState) { this.chat?.updateVoice(state); }

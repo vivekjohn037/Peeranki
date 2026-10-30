@@ -2532,7 +2532,7 @@
 }
 
 /* Chat floats within the game viewport; only the message history scrolls. */
-.pk-chat { position:absolute; z-index:90; right:max(12px, env(safe-area-inset-right)); top:76px; bottom:max(12px, env(safe-area-inset-bottom)); width:min(360px, calc(100% - 24px)); max-height:480px; display:flex; flex-direction:column; gap:10px; padding:14px; box-sizing:border-box; background:#141c26; border:1px solid #344254; border-radius:18px; box-shadow:0 18px 60px #0009; }
+.pk-chat { position:absolute; z-index:90; left:max(12px, env(safe-area-inset-left)); top:auto; bottom:calc(68px + env(safe-area-inset-bottom, 0px)); width:min(360px, calc(100% - 24px)); height:min(480px, calc(100% - 88px - env(safe-area-inset-bottom, 0px))); display:flex; flex-direction:column; gap:10px; padding:14px; box-sizing:border-box; background:#141c26; border:1px solid #344254; border-radius:18px; box-shadow:0 18px 60px #0009; }
 .pk-chat[hidden] { display:none; }
 .pk-chat header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .pk-chat header small { display:block; color:#94a3b8; font-size:11px; margin-top:4px; }
@@ -2550,8 +2550,8 @@
 .pk-chat input { min-width:0; width:100%; color:#f8fafc; background:#0b0f15; border:1px solid #41516a; border-radius:9px; padding:10px; font-size:16px; user-select:text; }
 .pk-chat form button { background:#176147; }
 .pk-chat-status { color:#94a3b8; font-size:11px; min-height:14px; }
-.pk-chat-toggle { white-space:nowrap; font-size:16px; }
-@media(max-height:500px) { .pk-chat { top:8px; gap:6px; padding:10px; max-height:none; } .pk-chat header small { display:none; } .pk-chat-quick { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+.pk-chat-toggle { position:absolute; z-index:91; left:max(12px, env(safe-area-inset-left)); bottom:calc(12px + env(safe-area-inset-bottom, 0px)); width:48px; height:44px; white-space:nowrap; font-size:16px; }
+@media(max-height:500px) { .pk-chat { top:8px; height:auto; gap:6px; padding:10px; } .pk-chat header small { display:none; } .pk-chat-quick { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media(max-width:480px) { .pk-chat-toggle { padding:4px !important; min-width:32px !important; } }
 @media(max-width:480px) {
   .pk-hud-topbar { gap:4px; }
@@ -2573,3 +2573,5 @@
 .pk-voice-status { display:block; font-size:11px; color:#b8ccca; overflow-wrap:anywhere; }
 .pk-chat-toggle.pk-voice-active { border-color:#10b981; box-shadow:inset 0 0 0 1px #10b981; }
 @media(max-height:400px) { .pk-chat { gap:4px; } .pk-voice { padding:5px; } .pk-voice-actions { margin:3px 0; } .pk-chat-quick button { min-height:28px; } .pk-chat header { font-size:13px; } }
+
+@media(max-height:500px) and (min-aspect-ratio:1/1) { .pk-chat { left:calc(68px + env(safe-area-inset-left, 0px)); bottom:calc(8px + env(safe-area-inset-bottom, 0px)); width:min(360px, calc(100% - 80px - env(safe-area-inset-left, 0px))); } }
